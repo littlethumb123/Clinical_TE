@@ -621,8 +621,3 @@ ablation_configs = [
 
 **Overall Confidence in This Design: 87%** — Good starting point, tune based on your data characteristics.
 
----
-
-The design I proposed is based on converging evidence from recent MoE literature (Switch, Mixtral, ST-MoE) adapted to your healthcare domain's specific characteristics (patient heterogeneity, interpretability needs, no data dropping). The key insight: **healthcare has natural patient archetypes (~8) that benefit from specialized expert modeling at higher abstraction layers (2-5)**.
-
-Would you like me to elaborate on any specific variant or dive deeper into the load balancing mathematics?
