@@ -1,0 +1,23 @@
+# Model files
+*.pkl
+*.pth
+*.h5
+*.model
+**/m_new
+**/m_ortho_new
+**/claimbert_*
+**/m_3i1p1s1i*
+
+# Data files
+*.csv
+*.xlsx
+*.parquet
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
