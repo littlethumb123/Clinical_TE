@@ -627,17 +627,31 @@ I'll create a comprehensive experimental methodology document with detailed conf
 
 [1 tool called]
 
-# Comprehensive Experimental Methodology: 5-Experiment MoE Ablation Study
+# Comprehensive Experimental Methodology: 6-Experiment MoE Ablation Study
 
 ## Executive Summary
 
 This document provides a **complete experimental methodology** for validating MoE integration into your hierarchical clinical transformer. Following DeepSeek's ablation principles, we test one architectural change at a time while maintaining computational equivalence.
 
+## Training Strategy Clarification
+
+**Important**: The original transformer uses a **same-day reconstruction** training strategy:
+- **Prediction Target**: Medical codes on day *t* given all information up to and including day *t*
+- **NOT Next-Day Forecasting**: This is not predicting codes on day *t+1* (that's Experiment 6)
+- **Multi-Label Classification**: Multiple codes can occur on the same day, each treated as a separate target
+- **Causal Masking**: Prevents looking at future days (> *t*) but allows full attention within day *t*
+
+**Experiment Structure**:
+- **Experiments 1-5**: Use same-day reconstruction (replicating original training strategy)
+- **Experiment 6**: Tests best MoE configuration with next-day forecasting (future enhancement)
+
+This ensures fair comparison in Experiments 1-5 while exploring improved prediction in Experiment 6.
+
 ---
 
 ## Master Configuration Table
 
-### Table 1: Complete Architectural Specifications for All 5 Experiments
+### Table 1: Complete Architectural Specifications for All 6 Experiments
 
 | Parameter | Exp 1: Dense Baseline | Exp 2: Standard MoE | Exp 3: Shared Expert | Exp 4: Fine-Grained | Exp 5: Auxiliary-Free |
 |-----------|----------------------|---------------------|---------------------|--------------------|-----------------------|
@@ -732,29 +746,31 @@ This document provides detailed specifications for validating MoE integration in
 | **Exp 3** | Shared Expert MoE | Does isolating shared experts help? | 1 always-active shared expert | +2-3% over Exp 2 |
 | **Exp 4** | Fine-Grained MoE | Does finer granularity improve specialization? | 16 experts (smaller, more activated) | +3-5% over Exp 3 |
 | **Exp 5** | Auxiliary-Free MoE | Is bias-based balancing better than aux loss? | DeepSeek bias correction | Better training stability |
+| **Exp 6** | Best MoE + Next-Day | Does next-day prediction improve performance? | Best config from Exp 2-5 | Test forecasting capability |
 
 ---
 
 ## Table 2: Controlled & Tested Variables Per Experiment
 
-| Variable Category | Exp 1 | Exp 2 | Exp 3 | Exp 4 | Exp 5 |
-|-------------------|-------|-------|-------|-------|-------|
+| Variable Category | Exp 1 | Exp 2 | Exp 3 | Exp 4 | Exp 5 | Exp 6 |
+|-------------------|-------|-------|-------|-------|-------|-------|
 | **CONTROLLED (Constant Across All)** |
-| Daily encoder architecture | ✓ Same | ✓ Same | ✓ Same | ✓ Same | ✓ Same |
-| Temporal encoder layers 0-1 | ✓ Dense | ✓ Dense | ✓ Dense | ✓ Dense | ✓ Dense |
-| Embedding dimensions | ✓ 256 | ✓ 256 | ✓ 256 | ✓ 256 | ✓ 256 |
-| Attention heads (temporal) | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 |
-| Sequence length | ✓ 200 days | ✓ 200 days | ✓ 200 days | ✓ 200 days | ✓ 200 days |
-| Batch size | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 |
-| Learning rate | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 |
-| Training data | ✓ Identical | ✓ Identical | ✓ Identical | ✓ Identical | ✓ Identical |
-| Random seed | ✓ 42 | ✓ 42 | ✓ 42 | ✓ 42 | ✓ 42 |
+| Daily encoder architecture | ✓ Same | ✓ Same | ✓ Same | ✓ Same | ✓ Same | ✓ Same |
+| Temporal encoder layers 0-1 | ✓ Dense | ✓ Dense | ✓ Dense | ✓ Dense | ✓ Dense | ✓ Dense |
+| Embedding dimensions | ✓ 256 | ✓ 256 | ✓ 256 | ✓ 256 | ✓ 256 | ✓ 256 |
+| Attention heads (temporal) | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 |
+| Sequence length | ✓ 200 days | ✓ 200 days | ✓ 200 days | ✓ 200 days | ✓ 200 days | ✓ 200 days |
+| Batch size | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 | ✓ 16 |
+| Learning rate | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 | ✓ 1e-4 |
+| Training data | ✓ Identical | ✓ Identical | ✓ Identical | ✓ Identical | ✓ Identical | ✓ Identical |
+| Random seed | ✓ 42 | ✓ 42 | ✓ 42 | ✓ 42 | ✓ 42 | ✓ 42 |
 | **TESTED (Variables Being Studied)** |
-| Temporal FFN architecture | Dense | **→ MoE** | → MoE | → MoE | → MoE |
-| Number of experts | 0 | 8 routed | **→ 1 shared + 7 routed** | **→ 1 shared + 15 routed** | 1 shared + 7 routed |
-| Expert granularity | N/A | Coarse (512 dim) | Coarse (512 dim) | **→ Fine (128 dim)** | Coarse (512 dim) |
-| Top-K activated | N/A | 2 | 2 | **→ 5** | 2 |
-| Load balancing | N/A | Switch aux loss | Switch aux loss | Switch aux loss | **→ DeepSeek bias** |
+| Temporal FFN architecture | Dense | **→ MoE** | → MoE | → MoE | → MoE | → MoE (best from 2-5) |
+| Number of experts | 0 | 8 routed | **→ 1 shared + 7 routed** | **→ 1 shared + 15 routed** | 1 shared + 7 routed | Best from 2-5 |
+| Expert granularity | N/A | Coarse (512 dim) | Coarse (512 dim) | **→ Fine (128 dim)** | Coarse (512 dim) | Best from 2-5 |
+| Top-K activated | N/A | 2 | 2 | **→ 5** | 2 | Best from 2-5 |
+| Load balancing | N/A | Switch aux loss | Switch aux loss | Switch aux loss | **→ DeepSeek bias** | Best from 2-5 |
+| **Prediction Mode** | Same-day | Same-day | Same-day | Same-day | Same-day | **→ Next-day** |
 
 **Key Insight**: Each experiment changes **exactly one variable** from the previous, enabling causal attribution.
 
@@ -955,6 +971,34 @@ Parameters: IDENTICAL to Exp 3
 - Activated: ~27.40M params
 ```
 
+### Experiment 6: Best MoE + Next-Day Prediction
+
+```
+Architecture: Use BEST MoE configuration from Experiments 2-5
+
+Key Difference from Exp 1-5:
+- Prediction mode: Next-day forecasting (predict day t+1 from day t)
+- All other aspects identical to the best-performing MoE configuration
+
+Rationale:
+- Tests whether MoE benefits transfer to forecasting task
+- More clinically useful (predicting future codes)
+- Potentially harder task (true temporal forecasting)
+
+Training Strategy Modification:
+1. Targets shifted by one day: predict codes on day t+1 from day t
+2. Loss computed on predictions from day t for codes occurring on day t+1
+3. First day has no target (can't predict day 0 from day -1)
+4. Causal masking unchanged (still can't see future)
+
+Expected Outcomes:
+- Lower absolute accuracy than same-day (harder task)
+- But potentially more useful for clinical decision support
+- MoE specialization may help more for forecasting
+
+Note: Configuration determined AFTER running Exp 2-5 to select best MoE
+```
+
 ---
 
 ## Table 4: Training Protocol (Identical for All Experiments)
@@ -985,6 +1029,10 @@ total_loss = NLL_loss(predictions, targets) + 0.01 × aux_loss
 # Exp 5 (Auxiliary-free):
 total_loss = NLL_loss(predictions, targets)
 # (Bias updated separately, not via backprop)
+
+# Exp 6 (Best MoE + Next-day):
+total_loss = NLL_loss(predictions_day_t, targets_day_t+1) + aux_loss (if using Switch)
+# Same loss as best MoE but targets shifted by 1 day
 ```
 
 ---
@@ -1026,9 +1074,11 @@ total_loss = NLL_loss(predictions, targets)
 | **Exp 3 vs Exp 2** | Shared expert helps | Val loss: Exp3 < Exp2 by ≥1.5% | If true: Use shared expert design. |
 | **Exp 4 vs Exp 3** | Fine granularity helps | Val loss: Exp4 < Exp3 by ≥2% | If true: Use fine-grained MoE. |
 | **Exp 5 vs Exp 3** | Bias balancing better | Exp5 loss ≤ Exp3 AND more stable training | If true: Use auxiliary-free for production. |
+| **Exp 6 vs Best(2-5)** | Next-day helps MoE | Val loss reasonable despite harder task | If true: MoE excels at forecasting. |
 
 **Final Selection**:
-- Choose configuration with **lowest validation loss**
+- For same-day reconstruction: Choose configuration with **lowest validation loss** from Exp 1-5
+- For next-day forecasting: Compare Exp 6 performance (adjust for task difficulty)
 - If ties: Choose **simpler** architecture (fewer experts, standard load balancing)
 - If Exp 2-5 all worse than Exp 1: Keep dense model
 
@@ -1038,13 +1088,14 @@ total_loss = NLL_loss(predictions, targets)
 
 ### Pre-Training Verification
 
-- [ ] All 5 models created successfully
+- [ ] All 6 models created successfully (5 base + 1 after selection)
 - [ ] Parameter counts match Table 3 specifications
 - [ ] Activated parameter counts verified via dummy forward pass
 - [ ] FLOPs computed and match computational equivalence claims
 - [ ] Training data identical across all experiments
 - [ ] Validation data identical across all experiments
 - [ ] Random seeds set to 42 for all experiments
+- [ ] Prediction mode (same-day vs next-day) correctly implemented
 
 ### During Training Monitoring
 
@@ -1057,9 +1108,12 @@ total_loss = NLL_loss(predictions, targets)
 
 ### Post-Training Analysis
 
-- [ ] Compare final validation losses across all 5
+- [ ] Compare final validation losses across Exp 1-5 (same-day)
+- [ ] Select best MoE configuration from Exp 2-5
+- [ ] Run Experiment 6 with best MoE + next-day prediction
+- [ ] Compare same-day vs next-day performance for best MoE
 - [ ] Statistical significance test (if multiple runs)
-- [ ] Generate expert specialization heatmaps (Exp 2-5)
+- [ ] Generate expert specialization heatmaps (Exp 2-6)
 - [ ] Evaluate on all secondary metrics
 - [ ] Document training time and resource usage
 - [ ] Select best configuration per decision criteria

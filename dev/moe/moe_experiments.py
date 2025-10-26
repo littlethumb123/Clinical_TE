@@ -2,17 +2,23 @@
 """
 Mixture-of-Experts (MoE) Experimentation Framework for Hierarchical Clinical Transformer
 
-This module implements a comprehensive 5-experiment ablation study to evaluate MoE integration
+This module implements a comprehensive 6-experiment ablation study to evaluate MoE integration
 into the hierarchical clinical transformer architecture (min_transformer.py).
 
 Experiment Overview:
-- Exp 1: Dense Baseline (reference performance)
-- Exp 2: Standard Top-K MoE (8 experts, top-2)
-- Exp 3: Shared Expert MoE (1 shared + 7 routed)
-- Exp 4: Fine-Grained MoE (1 shared + 15 routed, smaller experts)
-- Exp 5: Auxiliary-Free MoE (DeepSeek bias-based load balancing)
+- Exp 1: Dense Baseline with same-day prediction (reference performance)
+- Exp 2: Standard Top-K MoE (8 experts, top-2) with same-day prediction
+- Exp 3: Shared Expert MoE (1 shared + 7 routed) with same-day prediction
+- Exp 4: Fine-Grained MoE (1 shared + 15 routed, smaller experts) with same-day prediction
+- Exp 5: Auxiliary-Free MoE (DeepSeek bias-based load balancing) with same-day prediction
+- Exp 6: Best MoE configuration with next-day prediction (future work)
+
+Training Strategy:
+- Experiments 1-5: Same-day reconstruction (predict codes on day t given history up to day t)
+- Experiment 6: Next-day forecasting (predict codes on day t+1 given history up to day t)
 
 Based on:
+- Original min_transformer.py training strategy
 - DeepSeek-MoE ablation methodology
 - Switch Transformer load balancing
 - BEHRT clinical evaluation metrics
@@ -77,27 +83,30 @@ class MoEConfig:
     z_loss_weight: float = 0.0
 
 
-def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
+def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], str]]:
     """
-    Define all 5 experiment configurations for ablation study.
+    Define all 6 experiment configurations for ablation study.
     
     Returns:
-        Dictionary mapping experiment name to MoEConfig (None for dense baseline)
+        Dictionary mapping experiment name to (MoEConfig, prediction_mode) tuple
+        MoEConfig is None for dense baseline
         
     Experiments:
-        exp1_dense: No MoE, use original TransformerModel from min_transformer.py
-        exp2_standard_moe: 8 experts, top-2, all routed
-        exp3_shared_expert: 1 shared + 7 routed, top-1 routed (2 total active)
-        exp4_fine_grained: 1 shared + 15 routed (238 dim), top-4 routed (5 total active)
-        exp5_auxiliary_free: Same as exp3 but with DeepSeek bias balancing
+        exp1_dense: No MoE, same-day prediction (original min_transformer.py)
+        exp2_standard_moe: 8 experts, top-2, same-day prediction
+        exp3_shared_expert: 1 shared + 7 routed, same-day prediction
+        exp4_fine_grained: 1 shared + 15 routed, same-day prediction
+        exp5_auxiliary_free: Same as exp3 with DeepSeek, same-day prediction
+        exp6_best_moe_nextday: Best MoE from exp 2-5, next-day prediction
     """
     configs = {}
     
-    # Exp 1: Dense Baseline (Min's transformer    )
-    configs['exp1_dense'] = None
+    # Experiments 1-5: Same-day prediction (original training strategy)
+    # Exp 1: Dense Baseline (replicates original min_transformer.py)
+    configs['exp1_dense'] = (None, 'same_day')
     
     # Exp 2: Standard Top-K MoE
-    configs['exp2_standard_moe'] = MoEConfig(
+    configs['exp2_standard_moe'] = (MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -106,10 +115,10 @@ def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
         load_balance_strategy='switch',
         aux_loss_weight=0.01,
         expert_dropout=0.05,
-    )
+    ), 'same_day')
     
     # Exp 3: Shared Expert MoE
-    configs['exp3_shared_expert'] = MoEConfig(
+    configs['exp3_shared_expert'] = (MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -118,14 +127,14 @@ def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
         load_balance_strategy='switch',
         aux_loss_weight=0.01,
         expert_dropout=0.05,
-    )
+    ), 'same_day')
     
     # Exp 4: Fine-Grained MoE
     # Calculate expert dimension to maintain ~2.1M params per layer:
     # Shared: 1 × (256 × 512 × 2) = 262K
     # Routed: 15 × (256 × d_ff × 2) ≈ 1,835K
     # d_ff ≈ 238
-    configs['exp4_fine_grained'] = MoEConfig(
+    configs['exp4_fine_grained'] = (MoEConfig(
         d_model=256,
         d_ff=238,  # Smaller experts for fine-grained specialization
         num_experts=16,
@@ -134,10 +143,10 @@ def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
         load_balance_strategy='switch',
         aux_loss_weight=0.01,
         expert_dropout=0.05,
-    )
+    ), 'same_day')
     
     # Exp 5: Auxiliary-Free MoE (same architecture as Exp 3, different balancing)
-    configs['exp5_auxiliary_free'] = MoEConfig(
+    configs['exp5_auxiliary_free'] = (MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -148,7 +157,21 @@ def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
         bias_momentum=0.9,
         aux_loss_weight=0.0,  # Not used for DeepSeek
         expert_dropout=0.05,
-    )
+    ), 'same_day')
+    
+    # Exp 6: Best MoE with Next-Day Prediction (placeholder - update after exp 2-5)
+    # Note: This will be determined after running experiments 2-5
+    # For now, using exp3 configuration as placeholder
+    configs['exp6_best_moe_nextday'] = (MoEConfig(
+        d_model=256,
+        d_ff=512,
+        num_experts=8,
+        num_shared_experts=1,
+        top_k=2,
+        load_balance_strategy='switch',  # Or 'deepseek' based on exp5 results
+        aux_loss_weight=0.01,
+        expert_dropout=0.05,
+    ), 'next_day')
     
     return configs
 
@@ -1146,6 +1169,7 @@ def train_epoch(
 def run_single_experiment(
     exp_name: str,
     moe_config: Optional[MoEConfig],
+    prediction_mode: str,
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     prepare_tensor_fn,
@@ -1155,11 +1179,12 @@ def run_single_experiment(
     device: torch.device
 ) -> Tuple[nn.Module, Dict[str, float]]:
     """
-    Run a single experiment (one of the 5 configurations).
+    Run a single experiment (one of the 6 configurations).
     
     Args:
         exp_name: Experiment name
         moe_config: MoE configuration (None for dense baseline)
+        prediction_mode: 'same_day' or 'next_day' prediction strategy
         train_data: Training DataFrame
         val_data: Validation DataFrame  
         prepare_tensor_fn: Tensor preparation function
@@ -1174,6 +1199,7 @@ def run_single_experiment(
     """
     print(f"\n{'='*80}")
     print(f"EXPERIMENT: {exp_name}")
+    print(f"Prediction Mode: {prediction_mode.replace('_', '-')}")
     print(f"{'='*80}")
     
     # Create model
@@ -1221,16 +1247,20 @@ def run_single_experiment(
     for epoch in range(training_params['epochs']):
         print(f"\nEpoch {epoch+1}/{training_params['epochs']}")
         
+        # Create wrapped prepare_tensor function with prediction mode
+        def prepare_tensor_with_mode(batch, device):
+            return prepare_tensor_fn(batch, device, prediction_mode)
+        
         # Train
         train_metrics = train_epoch(
-            model, train_data, prepare_tensor_fn, optimizer, criterion,
+            model, train_data, prepare_tensor_with_mode, optimizer, criterion,
             device, training_params['batch_size'], moe_config, epoch+1
         )
         
         # Evaluate
         print("  Evaluating...")
         internal_metrics = compute_comprehensive_internal_metrics(
-            model, val_data, prepare_tensor_fn, criterion, device, 
+            model, val_data, prepare_tensor_with_mode, criterion, device, 
             code_frequencies, training_params['batch_size']
         )
         
@@ -1238,7 +1268,7 @@ def run_single_experiment(
         moe_metrics = None
         if moe_config is not None:
             moe_metrics = compute_moe_specific_metrics(
-                model, val_data, prepare_tensor_fn, device, training_params['batch_size']
+                model, val_data, prepare_tensor_with_mode, device, training_params['batch_size']
             )
         
         # Display key metrics
@@ -1336,12 +1366,17 @@ def run_all_experiments(
     results = {}
     all_metrics = []
     
-    for exp_name, moe_config in configs.items():
+    # First run experiments 1-5 with same-day prediction
+    for exp_name, (moe_config, prediction_mode) in configs.items():
+        if exp_name == 'exp6_best_moe_nextday':
+            continue  # Skip exp 6 for now
+            
         start_time = time.time()
         
         model, metrics = run_single_experiment(
             exp_name=exp_name,
             moe_config=moe_config,
+            prediction_mode=prediction_mode,
             train_data=train_data,
             val_data=val_data,
             prepare_tensor_fn=prepare_tensor_fn,
@@ -1360,7 +1395,7 @@ def run_all_experiments(
     
     # === FINAL COMPARISON ===
     print("\n" + "="*80)
-    print("FINAL COMPARISON: ALL 5 EXPERIMENTS")
+    print("FINAL COMPARISON: EXPERIMENTS 1-5 (SAME-DAY PREDICTION)")
     print("="*80)
     
     comparison_df = pd.DataFrame(all_metrics)
@@ -1385,6 +1420,59 @@ def run_all_experiments(
     print("OVERALL RANKING")
     print("="*80)
     print(comparison_df[['top_10_acc', 'tail_codes_top10', 'val_nll', 'overall_rank']].to_string())
+    
+    # Determine best MoE configuration (excluding dense baseline)
+    moe_experiments = comparison_df[comparison_df.index != 'exp1_dense']
+    best_moe_exp = moe_experiments['overall_rank'].idxmin()
+    print(f"\nBest MoE configuration: {best_moe_exp}")
+    
+    # Run Experiment 6: Best MoE with next-day prediction
+    if 'exp6_best_moe_nextday' in configs:
+        print("\n" + "="*80)
+        print("RUNNING EXPERIMENT 6: BEST MOE WITH NEXT-DAY PREDICTION")
+        print("="*80)
+        
+        # Use the best MoE configuration
+        best_moe_config, _ = configs[best_moe_exp]
+        
+        start_time = time.time()
+        model_exp6, metrics_exp6 = run_single_experiment(
+            exp_name='exp6_best_moe_nextday',
+            moe_config=best_moe_config,
+            prediction_mode='next_day',
+            train_data=train_data,
+            val_data=val_data,
+            prepare_tensor_fn=prepare_tensor_fn,
+            model_params=model_params,
+            training_params=training_params,
+            code_frequencies=code_frequencies,
+            device=device
+        )
+        
+        elapsed = time.time() - start_time
+        metrics_exp6['training_time_seconds'] = elapsed
+        metrics_exp6['experiment'] = 'exp6_best_moe_nextday'
+        
+        results['exp6_best_moe_nextday'] = (model_exp6, metrics_exp6)
+        all_metrics.append(metrics_exp6)
+        
+        # Final comparison including Exp 6
+        print("\n" + "="*80)
+        print("FINAL COMPARISON: ALL 6 EXPERIMENTS")
+        print("="*80)
+        
+        final_df = pd.DataFrame(all_metrics).set_index('experiment')
+        print("\nPrediction Strategy Comparison:")
+        print(final_df[['top_10_acc', 'val_nll', 'mrr']].to_string())
+        
+        # Compare same-day vs next-day for best MoE
+        same_day_metrics = results[best_moe_exp][1]
+        next_day_metrics = metrics_exp6
+        
+        print(f"\n{best_moe_exp} Performance:")
+        print(f"  Same-day Top-10 Acc: {same_day_metrics['top_10_acc']:.3f}")
+        print(f"  Next-day Top-10 Acc: {next_day_metrics['top_10_acc']:.3f}")
+        print(f"  Difference: {next_day_metrics['top_10_acc'] - same_day_metrics['top_10_acc']:.3f}")
     
     return results
 
@@ -1446,42 +1534,65 @@ def conv_age_gender(ipt: str, len_dy: int = 200, max_age: int = 1439) -> List[in
     return ipt
 
 
-def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int) -> Tuple[List[int], List[int]]:
+def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction_mode: str = 'same_day') -> Tuple[List[int], List[int]]:
     """
     Extract target codes AND their corresponding day indices.
     
     The model predicts at each day timestep. When multiple codes occur on the same day,
     we need to know which day each code came from so we can extract the correct prediction.
     
+    This function supports both same-day and next-day prediction modes for experiments.
+    
     Args:
         cd_list: [len_dy, len_cd] list of code integers
         dt_cnt: Number of actual (non-padded) days in sequence
+        prediction_mode: 'same_day' (default, Exp 1-5) or 'next_day' (Exp 6)
         
     Returns:
         targets: List of target code indices for loss computation
         day_indices: List of day indices corresponding to each target
         
-    Example:
+    Example (same_day mode):
         Day 0: codes [1, 2, 3]
         Day 1: codes [4, 5]
         Returns: targets=[1,2,3,4,5], day_indices=[0,0,0,1,1]
+        
+    Example (next_day mode):
+        Day 0: codes [1, 2, 3] -> predict these from day -1
+        Day 1: codes [4, 5] -> predict these from day 0
+        Returns: targets=[4,5,...], day_indices=[0,1,...] (shifted by 1)
     """
     targets = []
     day_indices = []
     
-    for day_idx in range(dt_cnt):
-        day_codes = cd_list[day_idx]
-        # Extract non-zero codes (actual medical codes)
-        non_zero_codes = [code for code in day_codes if code != 0]
-        
-        # Add each code with its day index
-        targets.extend(non_zero_codes)
-        day_indices.extend([day_idx] * len(non_zero_codes))
+    if prediction_mode == 'same_day':
+        # Original training strategy: predict codes on day t given history up to day t
+        for day_idx in range(dt_cnt):
+            day_codes = cd_list[day_idx]
+            # Extract non-zero codes (actual medical codes)
+            non_zero_codes = [code for code in day_codes if code != 0]
+            
+            # Add each code with its day index
+            targets.extend(non_zero_codes)
+            day_indices.extend([day_idx] * len(non_zero_codes))
+            
+    elif prediction_mode == 'next_day':
+        # Future experiment: predict codes on day t+1 given history up to day t
+        for day_idx in range(1, dt_cnt):  # Start from day 1
+            day_codes = cd_list[day_idx]  # Codes on day t+1
+            # Extract non-zero codes
+            non_zero_codes = [code for code in day_codes if code != 0]
+            
+            # Add each code with the PREVIOUS day index (predicting from day t)
+            targets.extend(non_zero_codes)
+            day_indices.extend([day_idx - 1] * len(non_zero_codes))
+    else:
+        raise ValueError(f"Unknown prediction_mode: {prediction_mode}. Use 'same_day' or 'next_day'.")
     
     return targets, day_indices
 
 
-def prepare_tensor(batch: pd.DataFrame, device: torch.device) -> Tuple[List[int], torch.Tensor, List[List[int]], List[List[int]]]:
+def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: str = 'same_day') -> Tuple[List[int], torch.Tensor, List[List[int]], List[List[int]]]:
     """
     Prepare tensors from DataFrame batch for model input.
     
@@ -1539,7 +1650,7 @@ def prepare_tensor(batch: pd.DataFrame, device: torch.device) -> Tuple[List[int]
     y = []
     day_indices_list = []
     for i in range(batch_size):
-        targets, day_idxs = extract_targets_from_codes(cd_raw[i], dt_cnt[i])
+        targets, day_idxs = extract_targets_from_codes(cd_raw[i], dt_cnt[i], prediction_mode)
         y.append(targets)
         day_indices_list.append(day_idxs)
     
@@ -1720,12 +1831,17 @@ configs = get_experiment_configs()
 results = {}
 all_metrics = []
 
-for exp_name, moe_config in configs.items():
+# Run experiments 1-5 first (same-day prediction)
+for exp_name, (moe_config, prediction_mode) in configs.items():
+    if exp_name == 'exp6_best_moe_nextday':
+        continue  # Will run after determining best MoE
+        
     start_time = time.time()
 
     model, metrics = run_single_experiment(
         exp_name=exp_name,
         moe_config=moe_config,
+        prediction_mode=prediction_mode,
         train_data=df_train,
         val_data=df_val,
         prepare_tensor_fn=prepare_tensor,
