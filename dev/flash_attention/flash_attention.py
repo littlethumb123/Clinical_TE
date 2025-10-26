@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[ ]:
+
+
 """
 Flash Attention Baseline Implementation for Clinical Transformer
 ================================================================
@@ -27,6 +33,12 @@ References:
 - RoPE: Su et al. 2021 (https://arxiv.org/abs/2104.09864)
 - SwiGLU: Shazeer 2020 (https://arxiv.org/abs/2002.05202)
 """
+
+
+# ### Flash attention implementation
+
+# In[1]:
+
 
 import math
 import time
@@ -177,8 +189,8 @@ class RotaryPositionEmbedding(nn.Module):
         emb = torch.cat([freqs, freqs], dim=-1)
         
         # Precompute cos and sin
-        # Shape: [1, 1, max_seq_len, dim]
-        # Dimensions: [batch, nhead, seq_len, head_dim]
+        # Shape: [1, max_seq_len, 1, dim]
+        # Dimensions: [batch, seq_len, nhead, head_dim]
         cos_cached = emb.cos()[None, None, :, :]
         sin_cached = emb.sin()[None, None, :, :]
         
@@ -224,7 +236,7 @@ class RotaryPositionEmbedding(nn.Module):
         seq_len = q.shape[2]
         
         # Get cached cos/sin values for this sequence length
-        # Shape: [1, 1, seq_len, head_dim] broadcasts with [batch, nhead, seq_len, head_dim]
+        # [:, :seq_len, :, :] handles variable length sequences
         cos = self.cos_cached[:, :, :seq_len, :]
         sin = self.sin_cached[:, :, :seq_len, :]
         
@@ -315,6 +327,10 @@ class SwiGLU(nn.Module):
         output = self.dropout(output)
         
         return output
+
+
+
+# In[2]:
 
 
 # ============================================================================
@@ -693,6 +709,9 @@ class FlashClinicalTransformer(nn.Module):
         return predictions
 
 
+# In[3]:
+
+
 # ============================================================================
 # SECTION 6: TRAINING UTILITIES
 # ============================================================================
@@ -777,8 +796,6 @@ class MixedPrecisionTrainer:
             optimizer.step()
         
         return loss.item()
-
-
 # ============================================================================
 # SECTION 7: BENCHMARKING & VALIDATION
 # ============================================================================
@@ -819,18 +836,20 @@ class FlashAttentionBenchmark:
             - memory_allocated: Peak GPU memory (MB)
         """
         model.eval()
-        
         # Create properly bounded dummy input
-        dummy_input = torch.zeros((batch_size, model.config.len_dy, 82), device=self.device, dtype=torch.long)
-        
+        batch_size = 2
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Create empty tensor
+        dummy_input = torch.zeros((batch_size, config.len_dy, 82), device=device, dtype=torch.long)
+
         # Fill each feature with appropriate ranges
-        dummy_input[:, :, 0] = torch.randint(0, model.config.age_vocab, (batch_size, model.config.len_dy), device=self.device)  # Age: 0-1439
-        dummy_input[:, :, 1] = torch.randint(0, model.config.gender_vocab, (batch_size, model.config.len_dy), device=self.device)  # Gender: 0-3
-        dummy_input[:, :, 2:] = torch.randint(0, model.config.cd_cnt, (batch_size, model.config.len_dy, 80), device=self.device)  # Codes: 0-84009
-        
+        dummy_input[:, :, 0] = torch.randint(0, config.age_vocab, (batch_size, config.len_dy), device=device)  # Age: 0-1439
+        dummy_input[:, :, 1] = torch.randint(0, config.gender_vocab, (batch_size, config.len_dy), device=device)  # Gender: 0-3
+        dummy_input[:, :, 2:] = torch.randint(0, config.cd_cnt, (batch_size, config.len_dy, 80), device=device)  # Codes: 0-84009
+
         # Convert to float for model input
         dummy_input = dummy_input.float()
-        
         # Warmup
         for _ in range(warmup_iterations):
             with torch.no_grad():
@@ -942,14 +961,17 @@ class FlashAttentionBenchmark:
         model_flash.load_state_dict(model_standard.state_dict())
         
         # Create properly bounded dummy input
-        torch.manual_seed(42)
-        dummy_input = torch.zeros((batch_size, config.len_dy, 82), device=self.device, dtype=torch.long)
-        
+        batch_size = 2
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Create empty tensor
+        dummy_input = torch.zeros((batch_size, config.len_dy, 82), device=device, dtype=torch.long)
+
         # Fill each feature with appropriate ranges
-        dummy_input[:, :, 0] = torch.randint(0, config.age_vocab, (batch_size, config.len_dy), device=self.device)  # Age: 0-1439
-        dummy_input[:, :, 1] = torch.randint(0, config.gender_vocab, (batch_size, config.len_dy), device=self.device)  # Gender: 0-3
-        dummy_input[:, :, 2:] = torch.randint(0, config.cd_cnt, (batch_size, config.len_dy, 80), device=self.device)  # Codes: 0-84009
-        
+        dummy_input[:, :, 0] = torch.randint(0, config.age_vocab, (batch_size, config.len_dy), device=device)  # Age: 0-1439
+        dummy_input[:, :, 1] = torch.randint(0, config.gender_vocab, (batch_size, config.len_dy), device=device)  # Gender: 0-3
+        dummy_input[:, :, 2:] = torch.randint(0, config.cd_cnt, (batch_size, config.len_dy, 80), device=device)  # Codes: 0-84009
+
         # Convert to float for model input
         dummy_input = dummy_input.float()
         
@@ -972,157 +994,769 @@ class FlashAttentionBenchmark:
         return passed
 
 
-# ============================================================================
-# SECTION 8: MAIN EXECUTION & TESTING
-# ============================================================================
+# ### Validation and test flash attention with dummy dataset
 
-def verify_environment():
+# In[6]:
+
+
+# Requirements:
+# - PyTorch >= 2.0
+# - CUDA compute capability >= 7.5 (Volta, Turing, Ampere, Hopper)
+# - CUDA available
+print(f"\nCUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    # Compute capability
+    major, minor = torch.cuda.get_device_capability(0)
+    compute_capability = major + minor / 10
+    print(f"Compute capability: {compute_capability:.1f}")
+    flash_ok = compute_capability >= 7.5
+    print(f"  Flash Attention supported: {'✓' if flash_ok else '✗'}")
+
+    # Check for Flash Attention function
+    has_sdpa = hasattr(F, 'scaled_dot_product_attention')
+    print(f"  scaled_dot_product_attention available: {'✓' if has_sdpa else '✗'}")
+# BF16 support
+if torch.cuda.is_available():
+    bf16_ok = torch.cuda.is_bf16_supported()
+    print(f"\nBF16 supported: {'✓' if bf16_ok else '✗'}")
+
+print("="*60)
+
+
+# In[5]:
+
+
+config = FlashAttentionConfig(
+    use_flash=True,
+    use_rope=True,
+    use_swiglu=True,
+    use_prenorm=True
+)
+
+model = FlashClinicalTransformer(config)
+
+
+# In[6]:
+
+
+# Count parameters
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"Model created successfully")
+print(f"Total parameters: {total_params:,}")
+print(f"Trainable parameters: {trainable_params:,}")
+print(f"Model size: {total_params * 4 / (1024**2):.1f} MB (FP32)")
+
+
+# In[7]:
+
+
+# Test forward pass
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
+# Create properly bounded dummy input
+batch_size = 2
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Create empty tensor
+dummy_input = torch.zeros((batch_size, config.len_dy, 82), device=device, dtype=torch.long)
+
+# Fill each feature with appropriate ranges
+dummy_input[:, :, 0] = torch.randint(0, config.age_vocab, (batch_size, config.len_dy), device=device)  # Age: 0-1439
+dummy_input[:, :, 1] = torch.randint(0, config.gender_vocab, (batch_size, config.len_dy), device=device)  # Gender: 0-3
+dummy_input[:, :, 2:] = torch.randint(0, config.cd_cnt, (batch_size, config.len_dy, 80), device=device)  # Codes: 0-84009
+
+# Convert to float for model input
+dummy_input = dummy_input.float()
+
+print(f"\nTesting forward pass...")
+print(f"Input shape: {dummy_input.shape}")
+
+with torch.no_grad():
+    output = model(dummy_input)
+
+print(f"Output shape: {output.shape}")
+print(f"Expected shape: [{batch_size}, {config.len_dy}, {config.target_cd_cnt}]")
+print(f"Forward pass: ✓")
+
+print("="*60)
+
+
+# ### Run comparison with dummy variables
+
+# In[27]:
+
+
+# Test standard attention
+config = FlashAttentionConfig(
+    use_flash=True,
+    use_rope=True,
+    use_swiglu=True,
+    use_prenorm=True
+)
+batch_size = 128
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+config_standard = FlashAttentionConfig(**vars(config))
+config_standard.use_flash = False
+model_standard = FlashClinicalTransformer(config_standard).to(device)
+config_flash = FlashAttentionConfig(**vars(config))
+config_flash.use_flash = True
+model_flash = FlashClinicalTransformer(config_flash).to(device)
+
+
+# In[28]:
+
+
+fa_benchmark = FlashAttentionBenchmark(device)
+standard_benchmark_througput = fa_benchmark.benchmark_throughput(model_standard, batch_size)
+flash_benchmark_througput = fa_benchmark.benchmark_throughput(model_flash, batch_size)
+
+
+# In[29]:
+
+
+standard_benchmark_througput
+
+
+# In[30]:
+
+
+flash_benchmark_througput
+
+
+# ### Real dataset
+
+# In[4]:
+
+
+import google.auth
+from google.auth import impersonated_credentials
+from google.cloud import bigquery
+client = bigquery.Client()
+credentials, project= google.auth.default()
+print('credentials:', credentials, ', project:', project)
+
+
+# In[5]:
+
+
+"""
+Training Script for Flash Attention Baseline with Real Data
+
+Integrates Flash Attention model with actual clinical claims data.
+Handles data preparation, training loop, and validation.
+
+"""
+
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+from torch import optim
+import time
+from typing import Tuple, List
+import warnings
+warnings.filterwarnings("ignore")
+
+# Import Flash Attention baseline
+# from fa_baseline import (
+#     FlashClinicalTransformer,
+#     FlashAttentionConfig,
+#     FlashAttentionBenchmark,
+#     verify_environment
+# )
+
+
+# =============================================================================
+# DATA PREPARATION FOR CLINICAL CLAIMS
+# =============================================================================
+
+class ClinicalDataPreparator:
     """
-    Verify that the environment supports Flash Attention.
-    
-    Requirements:
-    - PyTorch >= 2.0
-    - CUDA compute capability >= 7.5 (Volta, Turing, Ampere, Hopper)
-    - CUDA available
+    Prepares clinical claims data for Flash Attention model.
     """
-    print("="*60)
-    print("ENVIRONMENT VERIFICATION")
-    print("="*60)
     
-    # PyTorch version
-    print(f"PyTorch version: {torch.__version__}")
-    pytorch_ok = tuple(map(int, torch.__version__.split('.')[:2])) >= (2, 0)
-    print(f"  PyTorch 2.0+: {'✓' if pytorch_ok else '✗'}")
-    
-    # CUDA
-    print(f"\nCUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"CUDA version: {torch.version.cuda}")
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    def __init__(self, len_dy: int = 200, len_cd: int = 80, target_cd_cnt: int = 2767):
+        self.len_dy = len_dy
+        self.len_cd = len_cd
+        self.target_cd_cnt = target_cd_cnt
         
-        # Compute capability
-        major, minor = torch.cuda.get_device_capability(0)
-        compute_capability = major + minor / 10
-        print(f"Compute capability: {compute_capability:.1f}")
-        flash_ok = compute_capability >= 7.5
-        print(f"  Flash Attention supported: {'✓' if flash_ok else '✗'}")
+        # Code mapping will be built from data
+        self.code_to_target = None
+    
+    def build_code_mapping(self, data: pd.DataFrame):
+        """
+        Build mapping from raw medical codes to target indices.
         
-        # Check for Flash Attention function
-        has_sdpa = hasattr(F, 'scaled_dot_product_attention')
-        print(f"  scaled_dot_product_attention available: {'✓' if has_sdpa else '✗'}")
+        Strategy: Use top N most frequent codes as targets.
+        All other codes map to index 0 (unknown/other).
+        
+        Args:
+            data: Training DataFrame with 'cd' column
+        """
+        from collections import Counter
+        
+        print(f"Building code mapping for top {self.target_cd_cnt} codes...")
+        
+        # Collect all codes from training data
+        all_codes = []
+        for cd_str in data['cd']:
+            if pd.notna(cd_str) and cd_str != '':
+                # Parse all codes (handle both formats)
+                codes = cd_str.replace('*', ',').split(',')
+                codes = [int(c) for c in codes if c.strip() != '']
+                all_codes.extend(codes)
+        
+        # Count frequencies
+        code_counts = Counter(all_codes)
+        
+        # Get top N most frequent codes
+        most_common = code_counts.most_common(self.target_cd_cnt)
+        
+        # Create mapping: raw_code -> target_index
+        self.code_to_target = {}
+        for target_idx, (code, count) in enumerate(most_common):
+            self.code_to_target[code] = target_idx
+        
+        print(f"✓ Mapped {len(self.code_to_target)} codes to target indices")
+        print(f"  Most common code: {most_common[0][0]} (count: {most_common[0][1]})")
+        print(f"  Least common in targets: {most_common[-1][0]} (count: {most_common[-1][1]})")
+        
+        # Coverage statistics
+        total_codes = len(all_codes)
+        mapped_codes = sum(1 for c in all_codes if c in self.code_to_target)
+        coverage = mapped_codes / total_codes * 100
+        print(f"  Coverage: {coverage:.2f}% of training codes in target vocabulary")
     
-    # BF16 support
-    if torch.cuda.is_available():
-        bf16_ok = torch.cuda.is_bf16_supported()
-        print(f"\nBF16 supported: {'✓' if bf16_ok else '✗'}")
+    def map_code_to_target(self, code: int) -> int:
+        """
+        Map raw medical code to target index.
+        
+        Args:
+            code: Raw medical code (0-84009)
+        
+        Returns:
+            Target index (0-2766), or 0 if code not in target vocabulary
+        """
+        if self.code_to_target is None:
+            raise ValueError("Code mapping not built. Call build_code_mapping() first!")
+        
+        return self.code_to_target.get(code, 0)  # Unknown codes map to 0
     
-    print("="*60)
+    def parse_codes(self, cd_str: str) -> List[List[int]]:
+        """Parse medical codes from string format."""
+        if pd.isna(cd_str) or cd_str == '':
+            return [[0] * self.len_cd for _ in range(self.len_dy)]
+        
+        # Split by asterisk for multi-day sequences
+        days = cd_str.split('*')
+        days = days[:self.len_dy]
+        
+        # Parse each day's codes
+        parsed_days = []
+        for day_str in days:
+            codes = day_str.split(',')
+            codes = [int(c) if c.strip() != '' else 0 for c in codes]
+            codes = (codes + [0] * self.len_cd)[:self.len_cd]
+            parsed_days.append(codes)
+        
+        # Pad to len_dy days
+        while len(parsed_days) < self.len_dy:
+            parsed_days.append([0] * self.len_cd)
+        
+        return parsed_days
     
-    return pytorch_ok and torch.cuda.is_available()
+    def parse_age_gender(self, value, num_days: int = None) -> List[int]:
+        """Parse age or gender values."""
+        if num_days is None:
+            num_days = self.len_dy
+        
+        if isinstance(value, str):
+            values = value.split('*')
+            values = [int(v) if v.strip() != '' else 0 for v in values]
+        else:
+            values = [int(value)] * num_days
+        
+        values = values[:self.len_dy]
+        while len(values) < self.len_dy:
+            values.append(values[-1] if values else 0)
+        
+        return values
+    
+    def prepare_batch(
+        self, 
+        batch_df: pd.DataFrame,
+        device: torch.device
+    ) -> Tuple[List[int], torch.Tensor, List[List[int]]]:
+        """
+        Prepare batch for Flash Attention model..
+        """
+        batch_size = len(batch_df)
+        
+        age_batch = []
+        gender_batch = []
+        codes_batch = []
+        dt_cnt = []
+        targets = []
+        
+        for idx, row in batch_df.iterrows():
+            day_count = int(row.get('dt_cnt', 1))
+            dt_cnt.append(day_count)
+            
+            age_seq = self.parse_age_gender(row['age_in_months'], day_count)
+            age_batch.append(age_seq)
+            
+            gender_seq = self.parse_age_gender(row['gender_cd'], day_count)
+            gender_batch.append(gender_seq)
+            
+            codes_seq = self.parse_codes(row['cd'])
+            codes_batch.append(codes_seq)
+            
+            # **FIX**: Map codes to target indices
+            day_targets = []
+            for day_idx in range(day_count):
+                # Get non-zero codes for this day
+                day_codes = [c for c in codes_seq[day_idx] if c != 0]
+                if day_codes:
+                    # Map first code to target index
+                    raw_code = day_codes[0]
+                    target_idx = self.map_code_to_target(raw_code)
+                    day_targets.append(target_idx)
+                else:
+                    day_targets.append(0)
+            
+            targets.append(day_targets)
+        
+        # Convert to tensors
+        age_tensor = torch.tensor(age_batch, dtype=torch.long, device=device)
+        gender_tensor = torch.tensor(gender_batch, dtype=torch.long, device=device)
+        codes_tensor = torch.tensor(codes_batch, dtype=torch.long, device=device)
+        
+        age_tensor = age_tensor.unsqueeze(-1)
+        gender_tensor = gender_tensor.unsqueeze(-1)
+        
+        x = torch.cat([age_tensor, gender_tensor, codes_tensor], dim=-1)
+        x = x.float()
+        
+        return dt_cnt, x, targets
 
 
-def test_model_creation():
-    """Test model creation with all optimization flags."""
-    print("\n" + "="*60)
-    print("MODEL CREATION TEST")
-    print("="*60)
+# =============================================================================
+# TRAINING LOOP
+# =============================================================================
+
+def train_epoch(
+    model: FlashClinicalTransformer,
+    data: pd.DataFrame,
+    optimizer: optim.Optimizer,
+    criterion: nn.Module,
+    preparator: ClinicalDataPreparator,
+    batch_size: int,
+    device: torch.device,
+    config: FlashAttentionConfig,
+    epoch: int = 0
+) -> dict:
+    """
+    Train for one epoch with Flash Attention model.
     
-    config = FlashAttentionConfig(
-        use_flash=True,
-        use_rope=True,
-        use_swiglu=True,
-        use_prenorm=True
-    )
+    Args:
+        model: Flash Attention model
+        data: Training DataFrame
+        optimizer: Optimizer
+        criterion: Loss function (NLLLoss)
+        preparator: Data preparator
+        batch_size: Batch size
+        device: Device
+        config: Model configuration
+        epoch: Current epoch number
     
-    model = FlashClinicalTransformer(config)
+    Returns:
+        Dictionary with training statistics
+    """
+    model.train()
     
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    num_batches = len(data) // batch_size
+    total_loss = 0.0
     
-    print(f"Model created successfully")
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-    print(f"Model size: {total_params * 4 / (1024**2):.1f} MB (FP32)")
+    # Gradient scaler for mixed precision
+    scaler = torch.cuda.amp.GradScaler()
     
-    # Test forward pass
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
+    start_time = time.time()
     
-    # Create properly bounded dummy input
-    batch_size = 2
-    dummy_input = torch.zeros((batch_size, config.len_dy, 82), device=device, dtype=torch.long)
+    for i in range(num_batches):
+        if i % 100 == 0:
+            print(f'Epoch {epoch}, Batch {i}/{num_batches}, Time: {time.time()-start_time:.2f}s')
+        
+        # Get batch
+        batch_df = data.iloc[i*batch_size:(i+1)*batch_size]
+        
+        # Prepare tensors
+        dt_cnt, x, y = preparator.prepare_batch(batch_df, device)
+        
+        # Zero gradients
+        optimizer.zero_grad()
+        
+        # Forward pass with mixed precision
+        with torch.cuda.amp.autocast(dtype=config.dtype):
+            output = model(x)  # [batch, 200, target_cd_cnt]
+            
+            # Reshape for loss computation
+            output = output.reshape(batch_size * config.len_dy, config.target_cd_cnt)
+            
+            # Flatten targets
+            y_flat = [item for sublist in y for item in sublist]
+            
+            # Select only valid days
+            valid_outputs = []
+            for j in range(batch_size):
+                start_idx = config.len_dy * j
+                end_idx = start_idx + dt_cnt[j]
+                valid_outputs.append(output[start_idx:end_idx])
+            
+            output = torch.cat(valid_outputs, dim=0)
+            y_tensor = torch.tensor(y_flat, device=device, dtype=torch.long)
+            
+            # Ensure same length
+            min_len = min(len(output), len(y_tensor))
+            output = output[:min_len]
+            y_tensor = y_tensor[:min_len]
+            
+            # Compute loss
+            loss = criterion(output, y_tensor)
+        
+        # Backward with gradient scaling
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        scaler.step(optimizer)
+        scaler.update()
+        
+        total_loss += loss.item()
+        
+        # Memory cleanup
+        del x, output, loss
+        if i % 100 == 0:
+            torch.cuda.empty_cache()
     
-    # Fill each feature with appropriate ranges
-    dummy_input[:, :, 0] = torch.randint(0, config.age_vocab, (batch_size, config.len_dy), device=device)  # Age: 0-1439
-    dummy_input[:, :, 1] = torch.randint(0, config.gender_vocab, (batch_size, config.len_dy), device=device)  # Gender: 0-3
-    dummy_input[:, :, 2:] = torch.randint(0, config.cd_cnt, (batch_size, config.len_dy, 80), device=device)  # Codes: 0-84009
+    avg_loss = total_loss / num_batches
+    epoch_time = time.time() - start_time
     
-    # Convert to float for model input
-    dummy_input = dummy_input.float()
+    print(f"\nEpoch {epoch} completed: Avg Loss = {avg_loss:.4f}, Time = {epoch_time:.2f}s")
     
-    print(f"\nTesting forward pass...")
-    print(f"Input shape: {dummy_input.shape}")
+    return {
+        'avg_loss': avg_loss,
+        'epoch_time': epoch_time,
+        'num_batches': num_batches
+    }
+
+
+def validate(
+    model: FlashClinicalTransformer,
+    data: pd.DataFrame,
+    criterion: nn.Module,
+    preparator: ClinicalDataPreparator,
+    batch_size: int,
+    device: torch.device,
+    config: FlashAttentionConfig
+) -> dict:
+    """Validation loop."""
+    model.eval()
+    
+    num_batches = len(data) // batch_size
+    total_loss = 0.0
     
     with torch.no_grad():
-        output = model(dummy_input)
+        for i in range(num_batches):
+            batch_df = data.iloc[i*batch_size:(i+1)*batch_size]
+            dt_cnt, x, y = preparator.prepare_batch(batch_df, device)
+            
+            output = model(x)
+            output = output.reshape(batch_size * config.len_dy, config.target_cd_cnt)
+            
+            y_flat = [item for sublist in y for item in sublist]
+            
+            valid_outputs = []
+            for j in range(batch_size):
+                start_idx = config.len_dy * j
+                end_idx = start_idx + dt_cnt[j]
+                valid_outputs.append(output[start_idx:end_idx])
+            
+            output = torch.cat(valid_outputs, dim=0)
+            y_tensor = torch.tensor(y_flat, device=device, dtype=torch.long)
+            
+            min_len = min(len(output), len(y_tensor))
+            output = output[:min_len]
+            y_tensor = y_tensor[:min_len]
+            
+            loss = criterion(output, y_tensor)
+            total_loss += loss.item()
     
-    print(f"Output shape: {output.shape}")
-    print(f"Expected shape: [{batch_size}, {config.len_dy}, {config.target_cd_cnt}]")
-    print(f"Forward pass: ✓")
+    avg_loss = total_loss / num_batches
+    print(f"Validation Loss: {avg_loss:.4f}")
     
-    print("="*60)
+    return {'val_loss': avg_loss}
 
 
-def run_full_benchmark():
-    """Run complete benchmarking suite."""
-    if not torch.cuda.is_available():
-        print("CUDA not available. Skipping benchmark.")
-        return
-    
-    print("\n" + "="*60)
-    print("COMPREHENSIVE BENCHMARK")
-    print("="*60)
-    
-    config = FlashAttentionConfig()
-    benchmark = FlashAttentionBenchmark()
-    
-    # Compare standard vs Flash
-    results = benchmark.compare_standard_vs_flash(config, batch_size=16)
-    
-    # Validate numerical accuracy
-    print("\n")
-    is_accurate = benchmark.validate_numerical_accuracy(config, batch_size=4)
-    
-    return results, is_accurate
+# #### Load data
+
+# In[8]:
 
 
-if __name__ == "__main__":
+import logging
+
+# Setup logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+
+# In[6]:
+
+
+# Load data
+input_sql = """
+select * from
+anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_OOT_o3_score_ending
+limit 2000
+"""
+input_data = client.query(input_sql).to_dataframe() 
+
+
+# In[7]:
+
+
+input_data.head()
+
+
+# In[11]:
+
+
+import torch
+import gc
+
+def cleanup_gpu_memory():
     """
-    Main execution: Environment verification, model testing, and benchmarking.
+    Comprehensive GPU memory cleanup before training.
+    
+    Clears:
+    - Python garbage collector
+    - PyTorch CUDA cache
+    - All cached allocations
+    - Resets memory statistics
     """
+    # Collect Python garbage
+    gc.collect()
     
-    # Step 1: Verify environment
-    env_ok = verify_environment()
-    
-    if not env_ok:
-        print("\n⚠️ Environment requirements not met!")
-        print("Please install PyTorch 2.0+ with CUDA support.")
-        exit(1)
-    
-    # Step 2: Test model creation
-    test_model_creation()
-    
-    # Step 3: Run benchmark (if CUDA available)
     if torch.cuda.is_available():
-        results, is_accurate = run_full_benchmark()
+        # Clear CUDA cache
+        torch.cuda.empty_cache()
         
-        if is_accurate:
-            print("\n✅ Flash Attention baseline validated successfully!")
-            print("Ready for MoE experimentation.")
-        else:
-            print("\n⚠️ Numerical validation failed. Review configuration.")
-    else:
-        print("\n⚠️ CUDA not available. Cannot run full benchmark.")
-        print("Model created successfully. Deploy to GPU for benchmarking.")
+        # Synchronize all CUDA operations
+        torch.cuda.synchronize()
+        
+        # Reset peak memory stats (optional, useful for profiling)
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.reset_accumulated_memory_stats()
+        
+        # Print current memory status
+        current_memory = torch.cuda.memory_allocated() / 1024**3  # GB
+        reserved_memory = torch.cuda.memory_reserved() / 1024**3  # GB
+        print(f"GPU Memory - Allocated: {current_memory:.2f} GB, Reserved: {reserved_memory:.2f} GB")
+
+
+# Add this at the very beginning of your training script (before model creation):
+
+
+
+# In[12]:
+
+
+# =============================================================================
+# MAIN TRAINING SCRIPT
+# =============================================================================
+
+print("="*70)
+print("Cleaning up GPU memory from previous runs...")
+print("="*70)
+cleanup_gpu_memory()
+
+train_data = input_data.iloc[:1500]
+val_data = input_data.iloc[1501:2000]
+
+config = FlashAttentionConfig(
+    use_flash=True,
+    use_rope=True,
+    use_swiglu=True,
+    use_prenorm=True,
+    dtype=torch.bfloat16
+)
+    
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+
+print("\nStep 1: Creating Flash Attention model...")
+model = FlashClinicalTransformer(config).to(device)
+
+print("\nStep 2: Setting up training...")
+batch_size = 32
+
+optimizer = optim.AdamW(
+    model.parameters(),
+    lr=1e-4,
+    weight_decay=0.01,
+    betas=(0.9, 0.95)
+)
+
+criterion = nn.NLLLoss()
+preparator = ClinicalDataPreparator(len_dy=200, len_cd=80)
+preparator.build_code_mapping(train_data)
+
+
+# Step 6: Train
+print("\nStep 3: Training...")
+print("="*70)
+
+num_epochs = 5
+
+for epoch in range(num_epochs):
+    print(f"\n{'='*70}")
+    print(f"Epoch {epoch+1}/{num_epochs}")
+    print(f"{'='*70}")
+
+    # Train
+    train_stats = train_epoch(
+        model, train_data, optimizer, criterion,
+        preparator, batch_size, device, config, epoch
+    )
+
+    # Validate
+    val_stats = validate(
+        model, val_data, criterion,
+        preparator, batch_size, device, config
+    )
+    
+    # Log epoch metrics
+    logger.info(f"Epoch {epoch+1}/{num_epochs} completed")
+    logger.info(f"  Train Loss: {train_stats['avg_loss']:.4f}")
+    logger.info(f"  Val Loss: {val_stats['val_loss']:.4f}")
+    logger.info(f"  Epoch Time: {train_stats['epoch_time']:.2f}s")
+    logger.info(f"  Throughput: {train_stats.get('num_batches', 0) / train_stats['epoch_time']:.2f} batches/sec")
+
+    # # Save checkpoint
+    # if epoch % 2 == 0:
+    #     checkpoint = {
+    #         'epoch': epoch,
+    #         'model_state_dict': model.state_dict(),
+    #         'optimizer_state_dict': optimizer.state_dict(),
+    #         'train_loss': train_stats['avg_loss'],
+    #         'val_loss': val_stats['val_loss'],
+    #         'config': config,
+    #         'code_to_target': preparator.code_to_target  # Save mapping!
+    #     }
+    #     torch.save(checkpoint, f'flash_checkpoint_epoch{epoch}.pt')
+    #     print(f"✓ Checkpoint saved: flash_checkpoint_epoch{epoch}.pt")
+
+print("\n" + "="*70)
+print("TRAINING COMPLETED!")
+print("="*70)
+
+
+# OUTPUT
+# ======================================================================
+# Cleaning up GPU memory from previous runs...
+# ======================================================================
+# GPU Memory - Allocated: 0.70 GB, Reserved: 1.83 GB
+# Using device: cuda
+
+# Step 1: Creating Flash Attention model...
+
+# Step 2: Setting up training...
+# Building code mapping for top 2767 codes...
+# ✓ Mapped 1779 codes to target indices
+#   Most common code: 1 (count: 1499)
+#   Least common in targets: 5001 (count: 1)
+#   Coverage: 100.00% of training codes in target vocabulary
+
+# Step 3: Training...
+# ======================================================================
+
+# ======================================================================
+# Epoch 1/5
+# ======================================================================
+# Epoch 0, Batch 0/46, Time: 0.00s
+
+# Epoch 0 completed: Avg Loss = 6.7877, Time = 56.73s
+# 2025-10-26 06:26:48 - INFO - Epoch 1/5 completed
+# 2025-10-26 06:26:48 - INFO -   Train Loss: 6.7877
+# 2025-10-26 06:26:48 - INFO -   Val Loss: 5.9962
+# 2025-10-26 06:26:48 - INFO -   Epoch Time: 56.73s
+# 2025-10-26 06:26:48 - INFO -   Throughput: 0.81 batches/sec
+# Validation Loss: 5.9962
+
+# ======================================================================
+# Epoch 2/5
+# ======================================================================
+# Epoch 1, Batch 0/46, Time: 0.00s
+
+# Epoch 1 completed: Avg Loss = 5.9135, Time = 58.28s
+# 2025-10-26 06:27:51 - INFO - Epoch 2/5 completed
+# 2025-10-26 06:27:51 - INFO -   Train Loss: 5.9135
+# 2025-10-26 06:27:51 - INFO -   Val Loss: 5.6089
+# 2025-10-26 06:27:51 - INFO -   Epoch Time: 58.28s
+# 2025-10-26 06:27:51 - INFO -   Throughput: 0.79 batches/sec
+# Validation Loss: 5.6089
+
+# ======================================================================
+# Epoch 3/5
+# ======================================================================
+# Epoch 2, Batch 0/46, Time: 0.00s
+
+# Epoch 2 completed: Avg Loss = 5.5273, Time = 58.20s
+# 2025-10-26 06:28:54 - INFO - Epoch 3/5 completed
+# 2025-10-26 06:28:54 - INFO -   Train Loss: 5.5273
+# 2025-10-26 06:28:54 - INFO -   Val Loss: 5.4233
+# 2025-10-26 06:28:54 - INFO -   Epoch Time: 58.20s
+# 2025-10-26 06:28:54 - INFO -   Throughput: 0.79 batches/sec
+# Validation Loss: 5.4233
+
+# ======================================================================
+# Epoch 4/5
+# ======================================================================
+# Epoch 3, Batch 0/46, Time: 0.00s
+
+# Epoch 3 completed: Avg Loss = 5.3262, Time = 58.26s
+# 2025-10-26 06:29:58 - INFO - Epoch 4/5 completed
+# 2025-10-26 06:29:58 - INFO -   Train Loss: 5.3262
+# 2025-10-26 06:29:58 - INFO -   Val Loss: 5.3796
+# 2025-10-26 06:29:58 - INFO -   Epoch Time: 58.26s
+# 2025-10-26 06:29:58 - INFO -   Throughput: 0.79 batches/sec
+# Validation Loss: 5.3796
+
+# ======================================================================
+# Epoch 5/5
+# ======================================================================
+# Epoch 4, Batch 0/46, Time: 0.00s
+
+# Epoch 4 completed: Avg Loss = 5.2410, Time = 58.22s
+# 2025-10-26 06:31:01 - INFO - Epoch 5/5 completed
+# 2025-10-26 06:31:01 - INFO -   Train Loss: 5.2410
+# 2025-10-26 06:31:01 - INFO -   Val Loss: 5.4012
+# 2025-10-26 06:31:01 - INFO -   Epoch Time: 58.22s
+# 2025-10-26 06:31:01 - INFO -   Throughput: 0.79 batches/sec
+# Validation Loss: 5.4012
+
+# ======================================================================
+# TRAINING COMPLETED!
+# ======================================================================
+
+# In[ ]:
+
+
+
 
