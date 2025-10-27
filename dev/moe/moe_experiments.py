@@ -1003,7 +1003,7 @@ def compute_moe_specific_metrics(
         
         for i in range(nbatch):
             batch = val_data.iloc[i*batch_size:(i+1)*batch_size]
-            dt_cnt, x, y = prepare_tensor_fn(batch, device)
+            dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)
             
             # Forward pass
             _, moe_losses = model(x, return_moe_losses=True)
@@ -1247,9 +1247,9 @@ def run_single_experiment(
     for epoch in range(training_params['epochs']):
         print(f"\nEpoch {epoch+1}/{training_params['epochs']}")
         
-        # Create wrapped prepare_tensor function with prediction mode
+        # Create wrapped prepare_tensor function with prediction mode and target_cd_cnt
         def prepare_tensor_with_mode(batch, device):
-            return prepare_tensor_fn(batch, device, prediction_mode)
+            return prepare_tensor_fn(batch, device, prediction_mode, model_params['target_cd_cnt'])
         
         # Train
         train_metrics = train_epoch(
@@ -1349,7 +1349,7 @@ def run_all_experiments(
     
     for i in range(min(nbatch, 1000)):  # Sample for efficiency
         batch = train_data.iloc[i*training_params['batch_size']:(i+1)*training_params['batch_size']]
-        _, _, y = prepare_tensor_fn(batch, device)
+        _, _, y, _ = prepare_tensor_fn(batch, device, 'same_day', model_params['target_cd_cnt'])
         y_flat = [item for sublist in y for item in sublist]
         train_code_counts.update(y_flat)
     
@@ -1357,7 +1357,7 @@ def run_all_experiments(
         if code_idx < len(code_frequencies):
             code_frequencies[code_idx] = count
     
-    print(f"Computed frequencies for {len(train_code_counts)} codes")
+    print(f"Computed frequencies for {len(train_code_counts)} unique codes")
     
     # Get experiment configurations
     configs = get_experiment_configs()
@@ -1534,22 +1534,27 @@ def conv_age_gender(ipt: str, len_dy: int = 200, max_age: int = 1439) -> List[in
     return ipt
 
 
-def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction_mode: str = 'same_day') -> Tuple[List[int], List[int]]:
+def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction_mode: str = 'same_day', 
+                               target_cd_cnt: int = 2767) -> Tuple[List[int], List[int]]:
     """
-    Extract target codes AND their corresponding day indices.
+    Extract target codes AND their corresponding day indices with validation.
     
     The model predicts at each day timestep. When multiple codes occur on the same day,
     we need to know which day each code came from so we can extract the correct prediction.
     
     This function supports both same-day and next-day prediction modes for experiments.
     
+    IMPORTANT: This function validates that all codes are in range [0, target_cd_cnt).
+    Codes outside this range will be filtered out with a warning.
+    
     Args:
         cd_list: [len_dy, len_cd] list of code integers
         dt_cnt: Number of actual (non-padded) days in sequence
         prediction_mode: 'same_day' (default, Exp 1-5) or 'next_day' (Exp 6)
+        target_cd_cnt: Number of target classes (default 2767)
         
     Returns:
-        targets: List of target code indices for loss computation
+        targets: List of target code indices for loss computation (validated to be in range)
         day_indices: List of day indices corresponding to each target
         
     Example (same_day mode):
@@ -1564,6 +1569,7 @@ def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction
     """
     targets = []
     day_indices = []
+    invalid_codes_found = []
     
     if prediction_mode == 'same_day':
         # Original training strategy: predict codes on day t given history up to day t
@@ -1572,9 +1578,14 @@ def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction
             # Extract non-zero codes (actual medical codes)
             non_zero_codes = [code for code in day_codes if code != 0]
             
-            # Add each code with its day index
-            targets.extend(non_zero_codes)
-            day_indices.extend([day_idx] * len(non_zero_codes))
+            # Validate and filter codes
+            for code in non_zero_codes:
+                if 0 <= code < target_cd_cnt:
+                    targets.append(code)
+                    day_indices.append(day_idx)
+                else:
+                    if code not in invalid_codes_found:
+                        invalid_codes_found.append(code)
             
     elif prediction_mode == 'next_day':
         # Future experiment: predict codes on day t+1 given history up to day t
@@ -1583,16 +1594,31 @@ def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction
             # Extract non-zero codes
             non_zero_codes = [code for code in day_codes if code != 0]
             
-            # Add each code with the PREVIOUS day index (predicting from day t)
-            targets.extend(non_zero_codes)
-            day_indices.extend([day_idx - 1] * len(non_zero_codes))
+            # Validate and filter codes
+            for code in non_zero_codes:
+                if 0 <= code < target_cd_cnt:
+                    targets.append(code)
+                    day_indices.append(day_idx - 1)  # Previous day
+                else:
+                    if code not in invalid_codes_found:
+                        invalid_codes_found.append(code)
     else:
         raise ValueError(f"Unknown prediction_mode: {prediction_mode}. Use 'same_day' or 'next_day'.")
+    
+    # Warn about invalid codes (only once per unique code)
+    if invalid_codes_found:
+        print(f"⚠️  WARNING: Found {len(invalid_codes_found)} unique codes outside target range [0, {target_cd_cnt}).")
+        print(f"    Sample invalid codes: {invalid_codes_found[:10]}")
+        print(f"    These codes have been FILTERED OUT. You may need to:")
+        print(f"    1. Use a code mapping dictionary to map input codes -> target codes")
+        print(f"    2. Update target_cd_cnt to match your actual vocabulary")
+        print(f"    3. Preprocess your data to use only codes in range [0, {target_cd_cnt})")
     
     return targets, day_indices
 
 
-def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: str = 'same_day') -> Tuple[List[int], torch.Tensor, List[List[int]], List[List[int]]]:
+def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: str = 'same_day',
+                  target_cd_cnt: int = 2767) -> Tuple[List[int], torch.Tensor, List[List[int]], List[List[int]]]:
     """
     Prepare tensors from DataFrame batch for model input.
     
@@ -1608,6 +1634,8 @@ def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: s
     Args:
         batch: DataFrame with batch_size rows
         device: PyTorch device (cuda or cpu)
+        prediction_mode: 'same_day' or 'next_day'
+        target_cd_cnt: Number of target classes (for validation)
         
     Returns:
         dt_cnt: List of actual day counts per sample in batch
@@ -1646,11 +1674,11 @@ def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: s
     # Extract actual day counts
     dt_cnt = batch['dt_cnt'].tolist()
     
-    # Extract target codes AND day indices for training
+    # Extract target codes AND day indices for training (with validation)
     y = []
     day_indices_list = []
     for i in range(batch_size):
-        targets, day_idxs = extract_targets_from_codes(cd_raw[i], dt_cnt[i], prediction_mode)
+        targets, day_idxs = extract_targets_from_codes(cd_raw[i], dt_cnt[i], prediction_mode, target_cd_cnt)
         y.append(targets)
         day_indices_list.append(day_idxs)
     
@@ -1816,12 +1844,14 @@ train_code_counts = Counter()
 
 for i in range(min(nbatch, 1000)):  # Sample for efficiency
     batch = df_train.iloc[i*training_params['batch_size']:(i+1)*training_params['batch_size']]
-    _, _, y = prepare_tensor(batch, device)
+    _, _, y, _ = prepare_tensor(batch, device, 'same_day', model_params['target_cd_cnt'])
     y_flat = [item for sublist in y for item in sublist]
     train_code_counts.update(y_flat)
 for code_idx, count in train_code_counts.items():
     if code_idx < len(code_frequencies):
         code_frequencies[code_idx] = count
+
+print(f"Computed frequencies for {len(train_code_counts)} unique codes")
 
 # %%
 # Get experiment configurations
