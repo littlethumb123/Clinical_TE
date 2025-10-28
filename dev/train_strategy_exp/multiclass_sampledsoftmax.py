@@ -524,7 +524,7 @@ class SampledSoftmaxTransformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.norm = nn.LayerNorm(embedding_size)
         
-        self.len_dy = 70  # Store for reshaping
+        self.len_dy = 200  # Store for reshaping
     
     def _generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
@@ -631,8 +631,11 @@ def train_epoch_sampled(model, data, optimizer, device, use_amp=True):
     for i in range(nbatch):
         batch = data.iloc[i*batch_size:(i+1)*batch_size]
         dt_cnt, x, y = prepare_tensor_multilabel(batch, device, batch_size, len_dy, len_cd)
-        
-        # CHANGE: Flatten targets for next-day prediction
+
+        # don't pad to len_dy, only pad within the batch
+        max_days_in_batch = max(len(y[patient_idx]) for patient_idx in range(batch_size))
+
+        #  Flatten targets for next-day prediction
         # y structure: [batch][day_0_to_dt_cnt-2][codes]
         # We need flat list matching predictions from days [0, dt_cnt-2]
         targets_flat = []
@@ -640,23 +643,27 @@ def train_epoch_sampled(model, data, optimizer, device, use_amp=True):
             for day_idx in range(len(y[patient_idx])):  # y already has dt_cnt-1 entries
                 targets_flat.append(y[patient_idx][day_idx])
             # Pad remaining days with [0]
-            for day_idx in range(len(y[patient_idx]), len_dy):
+            for day_idx in range(len(y[patient_idx]), max_days_in_batch):
                 targets_flat.append([0])
         
         optimizer.zero_grad()
         
         with autocast(enabled=use_amp):
-            loss = model(x, targets_flat)
+            # ALSO: Only pass the relevant portion of x and ignore the rest padding
+            x_trimmed = x[:, :max_days_in_batch, :]
+            loss = model(x_trimmed, targets_flat)
         
-        if use_amp:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
-        
-        total_loss += loss.item()
+        # Handle zero loss gracefully
+        if loss.item() > 0:
+            if use_amp:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
+            
+            total_loss += loss.item()
     
     epoch_time = time.time() - epoch_start
     avg_loss = total_loss / nbatch
