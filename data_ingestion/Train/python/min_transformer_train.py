@@ -1,36 +1,3 @@
-Skip to content
- Enterprise
-Search or jump to…
-Pull requests
-Issues
-Explore
- 
-@2578620 
-On October 1, 2025, the Create Repo feature will be turned off and all new repos must be created in GitHub EMU.
-
-Repositories created in 2025 that have not yet been migrated to GitHub EMU will be assigned a bulk migration date in October 2025 or you can act now and self-service their repo migration by September 30, 2025.
-
-Learn more on the GitHub EMU Migration App.
-
-1914536
-/
-CP_IP_transformer
-Public
-Code
-Issues
-Pull requests
-Projects
-Security
-Insights
-CP_IP_transformer/TransformerV9/step4_train_emb/a_direct
-@1914536
-1914536 embedding
-Latest commit 1e8bbbc on Nov 10, 2023
- History
- 1 contributor
-366 lines (310 sloc)  13.2 KB
- 
-
 import random
 random.seed(1234)
 import pandas as pd
@@ -393,3 +360,7 @@ except:
     
 target = 'ip_3m'
 run_epochs(10,val_firstid=9,val_lastid=9)
+    
+    
+    
+ 
