@@ -35,9 +35,51 @@ References:
 """
 
 
+# In[44]:
+
+
+get_ipython().system('pip install xformers')
+
+
+# In[23]:
+
+
+# Test with T4-compatible settings
+import torch
+from xformers.ops import memory_efficient_attention, LowerTriangularMask
+
+device = torch.device('cuda')
+
+# FP16 + head_dim=32
+q = torch.randn(2, 200, 8, 32, device=device, dtype=torch.float32)
+k = torch.randn(2, 200, 8, 32, device=device, dtype=torch.float32)
+v = torch.randn(2, 200, 8, 32, device=device, dtype=torch.float32)
+
+try:
+    output = memory_efficient_attention(q, k, v, attn_bias=LowerTriangularMask())
+    print(f"✓ xFormers working on T4")
+    print(f"  Config: FP32, nhead=8, head_dim=32")
+    print(f"  Output shape: {output.shape}")
+except Exception as e:
+    print(f"✗ Failed: {e}")
+
+
+# * Consider using FP16 or FP32? 
+#     - T4 GPU Specifications:
+#     - FP32 performance: 8.1 TFLOPS
+#     - FP16 Tensor Core performance: 65 TFLOPS (8× faster!)
+#     - BF16: Not well supported on T4
+# * Why using xformers instead of pytorch built-in or flash attention 
+
+# In[ ]:
+
+
+
+
+
 # ### Flash attention implementation
 
-# In[16]:
+# In[2]:
 
 
 import math
@@ -89,7 +131,7 @@ class FlashAttentionConfig:
     """
     # Model architecture (from min_transformer.py)
     embedding_size: int = 256
-    nhead: int = 16
+    nhead: int = 8 # Enable head_dim = 32
     nlayers: int = 6
     nhid: int = 512
     dropout: float = 0.1
@@ -111,7 +153,7 @@ class FlashAttentionConfig:
     use_flash: bool = True
     
     # Training
-    dtype: torch.dtype = torch.bfloat16
+    dtype: torch.dtype = torch.float16
 
 
 # ============================================================================
@@ -330,7 +372,7 @@ class SwiGLU(nn.Module):
 
 
 
-# In[17]:
+# In[22]:
 
 
 # ============================================================================
@@ -374,7 +416,11 @@ class FlashAttentionEncoderLayer(nn.Module):
         self.d_model = config.embedding_size
         self.nhead = config.nhead
         self.head_dim = self.d_model // self.nhead
-        
+        # Validate for xFormers
+        if config.use_flash:
+            if config.dtype == torch.bfloat16:
+                print("⚠️  Warning: BF16 not supported on T4 with xFormers. Switching to FP16.")
+                config.dtype = torch.float16        
         assert self.d_model % self.nhead == 0, "d_model must be divisible by nhead"
         
         # Query, Key, Value projections
@@ -415,8 +461,24 @@ class FlashAttentionEncoderLayer(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(config.dropout)
         
+        # Check xFormers availability
+        self.xformers_available = False
+        if config.use_flash:
+            try:
+                from xformers.ops import memory_efficient_attention
+                self.xformers_attention = memory_efficient_attention
+                self.xformers_available = True
+                if not hasattr(FlashAttentionEncoderLayer, '_xformers_logged'):
+                    print(f"✓ xFormers available (using FP16, head_dim={self.head_dim})")
+                    FlashAttentionEncoderLayer._xformers_logged = True
+            except ImportError:
+                if not hasattr(FlashAttentionEncoderLayer, '_xformers_warned'):
+                    print("⚠️  xFormers not available - using PyTorch SDPA fallback")
+                    FlashAttentionEncoderLayer._xformers_warned = True
+        
         # Initialize weights
         self._init_weights()
+    
     
     def _init_weights(self):
         """
@@ -474,6 +536,13 @@ class FlashAttentionEncoderLayer(nn.Module):
         k = self.k_proj(x_norm)
         v = self.v_proj(x_norm)
         
+        # Ensure consistent dtype immediately after projection
+        if self.config.use_flash:
+            target_dtype = self.config.dtype
+            q = q.to(dtype=target_dtype)
+            k = k.to(dtype=target_dtype)
+            v = v.to(dtype=target_dtype)    
+        
         # Reshape for multi-head attention
         # [seq_len, batch, d_model] -> [batch, nhead, seq_len, head_dim]
         q = q.view(seq_len, batch_size, self.nhead, self.head_dim)
@@ -489,38 +558,22 @@ class FlashAttentionEncoderLayer(nn.Module):
         if self.config.use_rope:
             q, k = self.rope(q, k)
         
-        # Flash Attention (PyTorch 2.0+)
-        # This automatically uses Flash Attention when:
-        # - CUDA capability >= 7.5 (Volta, Turing, Ampere, Hopper)
-        # - head_dim is divisible by 8
-        # - Using FP16 or BF16
-        # - No custom attention mask (or only causal)
-        if self.config.use_flash and hasattr(F, 'scaled_dot_product_attention'):
+        # Flash Attention using Xform
+        if self.config.use_flash and self.xformers_available:
+            # Use xFormers memory-efficient attention (compatible with T4)
+            attn_output = self._xformers_attention(q, k, v, is_causal)
+            
+        elif self.config.use_flash and hasattr(F, 'scaled_dot_product_attention'):
+            # Use PyTorch SDPA (auto-selects best backend)
             attn_output = F.scaled_dot_product_attention(
                 q, k, v,
-                attn_mask=src_mask,  # Can be None
+                attn_mask=None if is_causal else src_mask,
                 dropout_p=self.dropout.p if self.training else 0.0,
-                is_causal=is_causal  # Optimized causal mask
+                is_causal=is_causal
             )
         else:
-            # Fallback to standard attention if Flash not available
-            scale = 1.0 / math.sqrt(self.head_dim)
-            attn = torch.matmul(q, k.transpose(-2, -1)) * scale
-            
-            if is_causal:
-                # Create causal mask
-                causal_mask = torch.triu(
-                    torch.ones(seq_len, seq_len, device=q.device),
-                    diagonal=1
-                ).bool()
-                attn.masked_fill_(causal_mask, float('-inf'))
-            
-            if src_mask is not None:
-                attn += src_mask
-            
-            attn = F.softmax(attn, dim=-1)
-            attn = F.dropout(attn, p=self.dropout.p, training=self.training)
-            attn_output = torch.matmul(attn, v)
+            # Fallback to standard attention
+            attn_output = self._manual_attention(q, k, v, src_mask, is_causal, seq_len)
         
         # Reshape back to [seq_len, batch, d_model]
         attn_output = attn_output.permute(2, 0, 1, 3)  # [seq_len, batch, nhead, head_dim]
@@ -540,7 +593,97 @@ class FlashAttentionEncoderLayer(nn.Module):
         
         return src
 
-
+    def _xformers_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        is_causal: bool
+    ) -> torch.Tensor:
+        """
+        Apply xFormers memory-efficient attention.
+        
+        Args:
+            q, k, v: [batch, nhead, seq_len, head_dim]
+            is_causal: Whether to use causal masking
+        
+        Returns:
+            output: [batch, nhead, seq_len, head_dim]
+        """
+        batch_size, nhead, seq_len, head_dim = q.shape
+        
+        # Ensure all tensors have same dtype
+        target_dtype = self.config.dtype
+        q = q.to(dtype=target_dtype)
+        k = k.to(dtype=target_dtype)
+        v = v.to(dtype=target_dtype)  
+        
+        # xFormers expects [batch, seq_len, nhead, head_dim]
+        q = q.transpose(1, 2).contiguous()  # [batch, seq_len, nhead, head_dim]
+        k = k.transpose(1, 2).contiguous()
+        v = v.transpose(1, 2).contiguous()
+        
+        # Create attention bias for causal masking
+        attn_bias = None
+        if is_causal:
+            from xformers.ops import LowerTriangularMask
+            attn_bias = LowerTriangularMask()
+        
+        # Apply memory-efficient attention
+        attn_output = self.xformers_attention(
+            q, k, v,
+            attn_bias=attn_bias,
+            p=self.dropout.p if self.training else 0.0,
+            scale=1.0 / math.sqrt(head_dim)
+        )
+        
+        # Reshape back to [batch, nhead, seq_len, head_dim]
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        
+        return attn_output
+    
+    def _manual_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        src_mask: Optional[torch.Tensor],
+        is_causal: bool,
+        seq_len: int
+    ) -> torch.Tensor:
+        """
+        Fallback manual attention implementation.
+        
+        Args:
+            q, k, v: [batch, nhead, seq_len, head_dim]
+            src_mask: Optional mask
+            is_causal: Whether to use causal masking
+            seq_len: Sequence length
+        
+        Returns:
+            output: [batch, nhead, seq_len, head_dim]
+        """
+        scale = 1.0 / math.sqrt(self.head_dim)
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale
+        
+        if is_causal:
+            # Create causal mask
+            causal_mask = torch.triu(
+                torch.ones(seq_len, seq_len, device=q.device),
+                diagonal=1
+            ).bool()
+            attn.masked_fill_(causal_mask, float('-inf'))
+        
+        if src_mask is not None:
+            attn += src_mask
+        
+        attn = F.softmax(attn, dim=-1)
+        attn = F.dropout(attn, p=self.dropout.p, training=self.training)
+        attn_output = torch.matmul(attn, v)
+        
+        return attn_output
+    
+    
 # ============================================================================
 # SECTION 5: FLASH ATTENTION TRANSFORMER MODEL
 # ============================================================================
@@ -706,7 +849,7 @@ class FlashClinicalTransformer(nn.Module):
         return predictions
 
 
-# In[18]:
+# In[19]:
 
 
 # ============================================================================
@@ -730,14 +873,14 @@ class MixedPrecisionTrainer:
     Args:
         model: FlashClinicalTransformer instance
         device: torch.device for training
-        dtype: torch.bfloat16 or torch.float16
+        dtype: torch.float16 or torch.float16
     """
     
     def __init__(
         self, 
         model: FlashClinicalTransformer,
         device: torch.device,
-        dtype: torch.dtype = torch.bfloat16
+        dtype: torch.dtype = torch.float16
     ):
         self.model = model.to(device).to(dtype)
         self.device = device
@@ -991,39 +1134,9 @@ class FlashAttentionBenchmark:
         return passed
 
 
-# ### Validation and test flash attention with dummy dataset
+# ### Validation and test flash attention (with Xformers) with dummy dataset
 
-# In[19]:
-
-
-# Requirements:
-# - PyTorch >= 2.0
-# - CUDA compute capability >= 7.5 (Volta, Turing, Ampere, Hopper)
-# - CUDA available
-print(f"\nCUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"CUDA version: {torch.version.cuda}")
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-
-    # Compute capability
-    major, minor = torch.cuda.get_device_capability(0)
-    compute_capability = major + minor / 10
-    print(f"Compute capability: {compute_capability:.1f}")
-    flash_ok = compute_capability >= 7.5
-    print(f"  Flash Attention supported: {'✓' if flash_ok else '✗'}")
-
-    # Check for Flash Attention function
-    has_sdpa = hasattr(F, 'scaled_dot_product_attention')
-    print(f"  scaled_dot_product_attention available: {'✓' if has_sdpa else '✗'}")
-# BF16 support
-if torch.cuda.is_available():
-    bf16_ok = torch.cuda.is_bf16_supported()
-    print(f"\nBF16 supported: {'✓' if bf16_ok else '✗'}")
-
-print("="*60)
-
-
-# In[20]:
+# In[5]:
 
 
 config = FlashAttentionConfig(
@@ -1036,7 +1149,7 @@ config = FlashAttentionConfig(
 model = FlashClinicalTransformer(config)
 
 
-# In[21]:
+# In[6]:
 
 
 # Count parameters
@@ -1138,7 +1251,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[22]:
+# In[8]:
 
 
 """
@@ -1468,7 +1581,7 @@ def validate_epoch(
 
 # #### Load data
 
-# In[28]:
+# In[9]:
 
 
 import logging
@@ -1500,7 +1613,7 @@ input_data = client.query(input_sql).to_dataframe()
 input_data.head()
 
 
-# In[23]:
+# In[10]:
 
 
 import pandas as pd
@@ -1508,13 +1621,13 @@ df_train = pd.read_feather("sample_data/mdcd_train_8000.feather")
 df_val = pd.read_feather("sample_data/mdcd_val_2000.feather")
 
 
-# In[24]:
+# In[12]:
 
 
-df_train.head(20)
+df_train.head()
 
 
-# In[25]:
+# In[13]:
 
 
 import torch
@@ -1554,13 +1667,263 @@ def cleanup_gpu_memory():
 
 
 
-# In[26]:
+# In[14]:
 
 
 cleanup_gpu_memory()
 
 
+# ### Test availability of flash attention implementations
+
+# In[7]:
+
+
+# Pytorch built-in flash attention is not available for T4 for pytorch 028
+# Then turn to xformers
+
+
+import torch
+import torch.nn.functional as F
+
+print("="*70)
+print("FLASH ATTENTION COMPATIBILITY DIAGNOSTIC")
+print("="*70)
+
+# 1. PyTorch Version
+print(f"\n1. PyTorch Version: {torch.__version__}")
+pytorch_ok = torch.__version__ >= "2.0.0"
+print(f"   Required: >= 2.0.0")
+print(f"   Status: {'✓ PASS' if pytorch_ok else '✗ FAIL'}")
+
+# 2. CUDA Availability
+cuda_available = torch.cuda.is_available()
+print(f"\n2. CUDA Available: {cuda_available}")
+print(f"   Status: {'✓ PASS' if cuda_available else '✗ FAIL'}")
+
+if cuda_available:
+    # 3. CUDA Version
+    print(f"\n3. CUDA Version: {torch.version.cuda}")
+    
+    # 4. GPU Model
+    gpu_name = torch.cuda.get_device_name(0)
+    print(f"\n4. GPU: {gpu_name}")
+    
+    # 5. Compute Capability
+    major, minor = torch.cuda.get_device_capability(0)
+    compute_cap = major + minor / 10
+    print(f"\n5. CUDA Compute Capability: {compute_cap:.1f}")
+    print(f"   Required: >= 7.5 (Volta/Turing/Ampere/Hopper)")
+    compute_ok = compute_cap >= 7.5
+    print(f"   Status: {'✓ PASS' if compute_ok else '✗ FAIL - TOO OLD!'}")
+    
+    # 6. Check if Flash Attention is compiled
+    print(f"\n6. Checking PyTorch Flash Attention support...")
+    print(f"   torch.backends.cuda.flash_sdp_enabled(): {torch.backends.cuda.flash_sdp_enabled()}")
+    
+    # 7. Test all backends
+    print(f"\n7. Testing SDPA backends:")
+    from torch.backends.cuda import sdp_kernel
+    
+    dummy_q = torch.randn(1, 8, 128, 64, device='cuda', dtype=torch.float16)
+    dummy_k = torch.randn(1, 8, 128, 64, device='cuda', dtype=torch.float16)
+    dummy_v = torch.randn(1, 8, 128, 64, device='cuda', dtype=torch.float16)
+    
+    backends = {
+        'Flash Attention': (True, False, False),
+        'Memory Efficient': (False, False, True),
+        'Math (fallback)': (False, True, False),
+    }
+    
+    for name, (flash, math, mem_eff) in backends.items():
+        try:
+            with sdp_kernel(enable_flash=flash, enable_math=math, enable_mem_efficient=mem_eff):
+                output = F.scaled_dot_product_attention(
+                    dummy_q, dummy_k, dummy_v,
+                    attn_mask=None,
+                    is_causal=True
+                )
+            print(f"   {name}: ✓ AVAILABLE")
+        except Exception as e:
+            print(f"   {name}: ✗ UNAVAILABLE ({str(e)[:50]})")
+    
+    # 8. Test different head dimensions
+    print(f"\n8. Testing head dimensions for Flash Attention:")
+    for head_dim in [8, 16, 32, 64, 128, 256]:
+        try:
+            test_q = torch.randn(1, 8, 128, head_dim, device='cuda', dtype=torch.float16)
+            test_k = torch.randn(1, 8, 128, head_dim, device='cuda', dtype=torch.float16)
+            test_v = torch.randn(1, 8, 128, head_dim, device='cuda', dtype=torch.float16)
+            
+            with sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+                output = F.scaled_dot_product_attention(test_q, test_k, test_v, is_causal=True)
+            print(f"   head_dim={head_dim}: ✓ WORKS")
+        except Exception as e:
+            print(f"   head_dim={head_dim}: ✗ FAILS")
+    
+    # 9. Check your actual dimensions
+    print(f"\n9. Your Model Configuration:")
+    embedding_size = 256
+    nhead = 8
+    head_dim = embedding_size // nhead
+    print(f"   embedding_size: {embedding_size}")
+    print(f"   nhead: {nhead}")
+    print(f"   head_dim: {head_dim}")
+    print(f"   Status: {'✓ VALID (divisible by 8)' if head_dim % 8 == 0 else '✗ INVALID'}")
+    
+    # 10. Test with your exact dimensions
+    print(f"\n10. Testing with YOUR exact model dimensions:")
+    print(f"    [batch=1, nhead=16, seq=200, head_dim=16]")
+    try:
+        your_q = torch.randn(1, 16, 200, 16, device='cuda', dtype=torch.float16)
+        your_k = torch.randn(1, 16, 200, 16, device='cuda', dtype=torch.float16)
+        your_v = torch.randn(1, 16, 200, 16, device='cuda', dtype=torch.float16)
+        
+        with sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+            output = F.scaled_dot_product_attention(your_q, your_k, your_v, is_causal=True)
+        print(f"    ✓ SUCCESS - Flash Attention works with your dimensions!")
+    except Exception as e:
+        print(f"    ✗ FAILED: {e}")
+        print(f"\n    Trying with default backends (auto-select):")
+        try:
+            output = F.scaled_dot_product_attention(your_q, your_k, your_v, is_causal=True)
+            print(f"    ✓ Works with auto-backend selection")
+        except Exception as e2:
+            print(f"    ✗ Still fails: {e2}")
+
+else:
+    print("\n✗ CUDA not available. Flash Attention requires CUDA.")
+
+print("\n" + "="*70)
+print("SUMMARY")
+print("="*70)
+
+if not cuda_available:
+    print("⚠️  CRITICAL: No CUDA available. You're running on CPU.")
+    print("   Flash Attention requires CUDA GPU.")
+elif not compute_ok:
+    print("⚠️  CRITICAL: GPU compute capability too low.")
+    print(f"   Your GPU: {gpu_name} (compute {compute_cap:.1f})")
+    print("   Required: Compute capability >= 7.5")
+    print("   Compatible GPUs: V100, T4, A100, A10, RTX 2060+, RTX 3000+, RTX 4000+")
+else:
+    print("ℹ️  Hardware requirements met, but Flash Attention still unavailable.")
+    print("   This likely means PyTorch wasn't compiled with Flash Attention support.")
+
+
+# In[11]:
+
+
+# Verify use of xforms
+def verify_xformers():
+    """Verify xFormers is properly installed and working."""
+    print("\n" + "="*70)
+    print("VERIFYING XFORMERS INSTALLATION")
+    print("="*70)
+    
+    try:
+        import xformers
+        print(f"✓ xFormers version: {xformers.__version__}")
+        
+        # Test memory-efficient attention
+        from xformers.ops import memory_efficient_attention, LowerTriangularMask
+        
+        # Create test tensors
+        batch, seq_len, nhead, head_dim = 2, 200, 16, 16
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        q = torch.randn(batch, seq_len, nhead, head_dim, device=device, dtype=torch.float16)
+        k = torch.randn(batch, seq_len, nhead, head_dim, device=device, dtype=torch.float16)
+        v = torch.randn(batch, seq_len, nhead, head_dim, device=device, dtype=torch.float16)
+        
+        # Test causal attention
+        output = memory_efficient_attention(
+            q, k, v,
+            attn_bias=LowerTriangularMask(),
+            p=0.0
+        )
+        
+        print(f"✓ Memory-efficient attention working")
+        print(f"  Input shape: {q.shape}")
+        print(f"  Output shape: {output.shape}")
+        print(f"  Device: {device}")
+        
+        # Quick benchmark
+        import time
+        warmup = 5
+        iterations = 20
+        
+        for _ in range(warmup):
+            _ = memory_efficient_attention(q, k, v, attn_bias=LowerTriangularMask())
+        
+        torch.cuda.synchronize()
+        start = time.time()
+        for _ in range(iterations):
+            _ = memory_efficient_attention(q, k, v, attn_bias=LowerTriangularMask())
+        torch.cuda.synchronize()
+        elapsed = time.time() - start
+        
+        throughput = (batch * seq_len * iterations) / elapsed
+        print(f"✓ Throughput: {throughput:.0f} tokens/sec")
+        
+        print("\n✓ xFormers is ready to use!")
+        return True
+        
+    except ImportError as e:
+        print(f"✗ xFormers not installed: {e}")
+        print("  Install with: pip install xformers")
+        return False
+    except Exception as e:
+        print(f"✗ xFormers test failed: {e}")
+        return False
+
+# Run verification
+xformers_ok = verify_xformers()
+
+
+# In[9]:
+
+
+# 2. Import and verify
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple
+import math
+
+# 3. Verify installation
+try:
+    import xformers
+    from xformers.ops import memory_efficient_attention, LowerTriangularMask
+    print(f"✓ xFormers {xformers.__version__} installed successfully")
+    XFORMERS_AVAILABLE = True
+except ImportError:
+    print("✗ xFormers not available - will use fallback")
+    XFORMERS_AVAILABLE = False
+
+device = torch.device('cuda')
+
+# Use FP16 (float16) instead of BF16
+q = torch.randn(2, 200, 8, 32, device=device, dtype=torch.float16)  # Changed to float16, head_dim=32
+k = torch.randn(2, 200, 8, 32, device=device, dtype=torch.float16)
+v = torch.randn(2, 200, 8, 32, device=device, dtype=torch.float16)
+
+try:
+    output = memory_efficient_attention(q, k, v, attn_bias=LowerTriangularMask())
+    print(f"✓ xFormers working with FP16 on {torch.cuda.get_device_name(0)}")
+    print(f"  Output shape: {output.shape}")
+except Exception as e:
+    print(f"✗ Still failed: {e}")
+
+
+# In[ ]:
+
+
+
+
+
 # ### Training
+
+# #### Test single epoch
 
 # In[29]:
 
@@ -1579,7 +1942,7 @@ config = FlashAttentionConfig(
     use_rope=True,
     use_swiglu=True,
     use_prenorm=True,
-    dtype=torch.bfloat16,
+    dtype=torch.float16,
     target_cd_cnt=8849 # Only for test, this is different when for formal retraining
 )
     
@@ -1605,7 +1968,7 @@ preparator = ClinicalDataPreparator(len_dy=200, len_cd=80, target_cd_cnt=config.
 
 
 
-# In[ ]:
+# In[32]:
 
 
 # Train
@@ -1655,6 +2018,555 @@ for epoch in range(num_epochs):
 print("\n" + "="*70)
 print("TRAINING COMPLETED!")
 print("="*70)
+
+
+# ### Benchmark
+
+# In[25]:
+
+
+# =============================================================================
+# PERFORMANCE COMPARISON: DENSE vs FLASH ATTENTION
+# =============================================================================
+
+"""
+Comprehensive Benchmark: Standard Attention vs Flash Attention
+
+Metrics Tracked:
+1. Training time per epoch
+2. Validation time
+3. GPU memory usage (peak and average)
+4. Training loss
+5. Validation loss
+6. Throughput (samples/sec, tokens/sec)
+7. Estimated GPU cost (based on A100 pricing)
+"""
+
+import torch
+import gc
+import time
+import pandas as pd
+from dataclasses import dataclass
+from typing import Dict, List
+
+
+@dataclass
+class BenchmarkMetrics:
+    """Store metrics for model comparison."""
+    model_name: str
+    train_time: float
+    val_time: float
+    train_loss: float
+    val_loss: float
+    peak_memory_mb: float
+    avg_memory_mb: float
+    samples_per_sec: float
+    tokens_per_sec: float
+    total_time: float
+    
+    def to_dict(self):
+        return {
+            'Model': self.model_name,
+            'Train Time (s)': f"{self.train_time:.2f}",
+            'Val Time (s)': f"{self.val_time:.2f}",
+            'Total Time (s)': f"{self.total_time:.2f}",
+            'Train Loss': f"{self.train_loss:.4f}",
+            'Val Loss': f"{self.val_loss:.4f}",
+            'Peak Memory (GB)': f"{self.peak_memory_mb/1024:.2f}",
+            'Avg Memory (GB)': f"{self.avg_memory_mb/1024:.2f}",
+            'Samples/sec': f"{self.samples_per_sec:.2f}",
+            'Tokens/sec': f"{self.tokens_per_sec:.0f}"
+        }
+
+
+class ModelBenchmark:
+    """Benchmark framework for comparing models."""
+    
+    def __init__(self, device: torch.device):
+        self.device = device
+        self.results: List[BenchmarkMetrics] = []
+    
+    def benchmark_model(
+        self,
+        model_name: str,
+        model: nn.Module,
+        train_data: pd.DataFrame,
+        val_data: pd.DataFrame,
+        config: FlashAttentionConfig,
+        preparator: ClinicalDataPreparator,
+        criterion: nn.Module,
+        batch_size: int = 16,
+        num_epochs: int = 1
+    ) -> BenchmarkMetrics:
+        """
+        Benchmark a single model.
+        
+        Args:
+            model_name: Name for display
+            model: The model to benchmark
+            train_data: Training DataFrame
+            val_data: Validation DataFrame
+            config: Model configuration
+            preparator: Data preparator
+            criterion: Loss function
+            batch_size: Batch size for training
+            num_epochs: Number of epochs to train
+        
+        Returns:
+            BenchmarkMetrics with all tracked metrics
+        """
+        print(f"\n{'='*70}")
+        print(f"BENCHMARKING: {model_name}")
+        print(f"{'='*70}")
+        
+        # Reset GPU stats
+        cleanup_gpu_memory()
+        torch.cuda.reset_peak_memory_stats()
+        
+        # Create optimizer
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=1e-4,
+            weight_decay=0.01,
+            betas=(0.9, 0.95)
+        )
+        
+        # Track metrics
+        memory_samples = []
+        train_time_total = 0.0
+        val_time_total = 0.0
+        final_train_loss = 0.0
+        final_val_loss = 0.0
+        total_samples = 0
+        
+        # Training loop
+        for epoch in range(num_epochs):
+            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            
+            # Train
+            train_start = time.time()
+            train_stats = self._train_epoch(
+                model, train_data, optimizer, criterion,
+                preparator, batch_size, config, epoch
+            )
+            train_time = time.time() - train_start
+            train_time_total += train_time
+            final_train_loss = train_stats['avg_loss']
+            total_samples += len(train_data)
+            
+            # Track memory during training
+            if torch.cuda.is_available():
+                memory_mb = torch.cuda.memory_allocated() / (1024 ** 2)
+                memory_samples.append(memory_mb)
+            
+            # Validation
+            val_start = time.time()
+            val_stats = self._validate(
+                model, val_data, criterion,
+                preparator, batch_size, config
+            )
+            val_time = time.time() - val_start
+            val_time_total += val_time
+            final_val_loss = val_stats['val_loss']
+            
+            print(f"  Train Loss: {final_train_loss:.4f}, Val Loss: {final_val_loss:.4f}")
+            print(f"  Train Time: {train_time:.2f}s, Val Time: {val_time:.2f}s")
+        
+        # Get memory stats
+        if torch.cuda.is_available():
+            peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            avg_memory_mb = sum(memory_samples) / len(memory_samples) if memory_samples else 0
+        else:
+            peak_memory_mb = 0
+            avg_memory_mb = 0
+        
+        # Calculate throughput
+        total_time = train_time_total + val_time_total
+        samples_per_sec = total_samples / train_time_total if train_time_total > 0 else 0
+        # Assume avg sequence length = 100 days (conservative estimate)
+        avg_seq_len = 100
+        tokens_per_sec = samples_per_sec * avg_seq_len
+        
+        metrics = BenchmarkMetrics(
+            model_name=model_name,
+            train_time=train_time_total,
+            val_time=val_time_total,
+            train_loss=final_train_loss,
+            val_loss=final_val_loss,
+            peak_memory_mb=peak_memory_mb,
+            avg_memory_mb=avg_memory_mb,
+            samples_per_sec=samples_per_sec,
+            tokens_per_sec=tokens_per_sec,
+            total_time=total_time
+        )
+        
+        self.results.append(metrics)
+        return metrics
+    
+    def _train_epoch(
+        self,
+        model: nn.Module,
+        data: pd.DataFrame,
+        optimizer: optim.Optimizer,
+        criterion: nn.Module,
+        preparator: ClinicalDataPreparator,
+        batch_size: int,
+        config: FlashAttentionConfig,
+        epoch: int
+    ) -> Dict:
+        """Single training epoch."""
+        model.train()
+        num_batches = len(data) // batch_size
+        total_loss = 0.0
+        
+        scaler = torch.cuda.amp.GradScaler() if config.dtype == torch.float16 else None
+        
+        for i in range(num_batches):
+            batch_df = data.iloc[i*batch_size:(i+1)*batch_size]
+            dt_cnt, x, y = preparator.prepare_batch(batch_df, self.device)
+            
+            optimizer.zero_grad()
+            
+            with torch.cuda.amp.autocast(dtype=config.dtype):
+                output = model(x)
+                output = output.reshape(batch_size * config.len_dy, config.target_cd_cnt)
+                
+                y_flat = [item for sublist in y for item in sublist]
+                
+                valid_outputs = []
+                for j in range(batch_size):
+                    start_idx = config.len_dy * j
+                    end_idx = start_idx + dt_cnt[j]
+                    valid_outputs.append(output[start_idx:end_idx])
+                
+                output = torch.cat(valid_outputs, dim=0)
+                
+                y_cd = torch.zeros(len(output), config.target_cd_cnt, device=self.device)
+                for j in range(len(output)):
+                    for k in y_flat[j]:
+                        if k != 0 and k < config.target_cd_cnt:
+                            y_cd[j, k] = 1
+                
+                loss = criterion(output, y_cd)
+            
+            if scaler is not None:
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+            
+            total_loss += loss.item()
+            
+            del x, output, loss, y_cd
+            if i % 50 == 0:
+                torch.cuda.empty_cache()
+        
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0
+        return {'avg_loss': avg_loss}
+    
+    def _validate(
+        self,
+        model: nn.Module,
+        data: pd.DataFrame,
+        criterion: nn.Module,
+        preparator: ClinicalDataPreparator,
+        batch_size: int,
+        config: FlashAttentionConfig
+    ) -> Dict:
+        """Validation loop."""
+        model.eval()
+        num_batches = len(data) // batch_size
+        total_loss = 0.0
+        
+        with torch.no_grad():
+            for i in range(num_batches):
+                batch_df = data.iloc[i*batch_size:(i+1)*batch_size]
+                dt_cnt, x, y = preparator.prepare_batch(batch_df, self.device)
+                with torch.cuda.amp.autocast(dtype=config.dtype):
+                    output = model(x)
+                    output = output.reshape(batch_size * config.len_dy, config.target_cd_cnt)
+
+                    y_flat = [item for sublist in y for item in sublist]
+
+                    valid_outputs = []
+                    for j in range(batch_size):
+                        start_idx = config.len_dy * j
+                        end_idx = start_idx + dt_cnt[j]
+                        valid_outputs.append(output[start_idx:end_idx])
+
+                    output = torch.cat(valid_outputs, dim=0)
+
+                    y_cd = torch.zeros(len(output), config.target_cd_cnt, device=self.device)
+                    for j in range(len(output)):
+                        for k in y_flat[j]:
+                            if k != 0 and k < config.target_cd_cnt:
+                                y_cd[j, k] = 1
+
+                    loss = criterion(output, y_cd)
+                total_loss += loss.item()
+        
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0
+        return {'val_loss': avg_loss}
+    
+    def compare_models(self) -> pd.DataFrame:
+        """Generate comparison table."""
+        if len(self.results) < 2:
+            print("Need at least 2 models to compare")
+            return None
+        
+        # Create comparison DataFrame
+        df = pd.DataFrame([m.to_dict() for m in self.results])
+        
+        # Calculate improvements
+        baseline = self.results[0]  # First model is baseline
+        flash = self.results[1]     # Second model is Flash Attention
+        
+        speedup = baseline.total_time / flash.total_time if flash.total_time > 0 else 0
+        memory_reduction = (1 - flash.peak_memory_mb / baseline.peak_memory_mb) * 100
+        train_loss_diff = ((flash.train_loss - baseline.train_loss) / baseline.train_loss) * 100
+        val_loss_diff = ((flash.val_loss - baseline.val_loss) / baseline.val_loss) * 100
+        
+        print(f"\n{'='*70}")
+        print(f"PERFORMANCE COMPARISON SUMMARY")
+        print(f"{'='*70}")
+        print(df.to_string(index=False))
+        
+        print(f"\n{'='*70}")
+        print(f"IMPROVEMENT ANALYSIS")
+        print(f"{'='*70}")
+        print(f"Speedup: {speedup:.2f}x")
+        print(f"Memory Reduction: {memory_reduction:.1f}%")
+        print(f"Train Loss Difference: {train_loss_diff:+.2f}%")
+        print(f"Val Loss Difference: {val_loss_diff:+.2f}%")
+        
+        return df
+    
+    def estimate_cost(
+        self,
+        gpu_type: str = "T4",
+        hours_per_epoch: float = None
+    ):
+        """
+        Estimate training cost based on GPU pricing.
+        
+        GPU Hourly Rates (approximate, 2025):
+        - A100-40GB: $3.57/hour
+        - A100-80GB: $4.60/hour
+        - V100-32GB: $2.58/hour
+        - T4: $0.4025/hour
+        """
+        gpu_prices = {
+            'A100': 3.57,      # AWS p4d.24xlarge / GCP a2-highgpu-1g
+            'V100': 2.852,      # AWS p3.2xlarge / GCP n1-standard-8
+            'T4': 0.4025,       # AWS g4dn.xlarge
+        }
+        
+        hourly_rate = gpu_prices.get(gpu_type, 2.50)
+        
+        print(f"\n{'='*70}")
+        print(f"COST ESTIMATION ({gpu_type} @ ${hourly_rate}/hour)")
+        print(f"{'='*70}")
+        
+        for metrics in self.results:
+            # Calculate cost for measured time
+            hours = metrics.total_time / 3600
+            cost = hours * hourly_rate
+            
+            print(f"\n{metrics.model_name}:")
+            print(f"  Measured Time: {metrics.total_time:.2f}s ({hours:.4f} hours)")
+            print(f"  Cost for Benchmark: ${cost:.4f}")
+            
+            # Estimate full training cost (if provided)
+            if hours_per_epoch is not None:
+                full_cost_per_epoch = hours_per_epoch * hourly_rate
+                print(f"  Estimated Cost per Full Epoch: ${full_cost_per_epoch:.2f}")
+                
+                # Common training scenarios
+                for epochs in [10, 50, 100]:
+                    total_cost = full_cost_per_epoch * epochs
+                    print(f"    {epochs} epochs: ${total_cost:.2f}")
+        
+        # Calculate savings
+        if len(self.results) >= 2:
+            baseline_hours = self.results[0].total_time / 3600
+            flash_hours = self.results[1].total_time / 3600
+            time_saved = baseline_hours - flash_hours
+            cost_saved = time_saved * hourly_rate
+            
+            print(f"\n{'='*70}")
+            print(f"COST SAVINGS (Flash Attention vs Baseline)")
+            print(f"{'='*70}")
+            print(f"Time Saved per Run: {time_saved * 3600:.2f}s ({time_saved:.4f} hours)")
+            print(f"Cost Saved per Run: ${cost_saved:.4f}")
+            
+            if hours_per_epoch is not None:
+                # Extrapolate to full training
+                speedup = self.results[0].total_time / self.results[1].total_time
+                flash_hours_full = hours_per_epoch / speedup
+                time_saved_full = hours_per_epoch - flash_hours_full
+                cost_saved_per_epoch = time_saved_full * hourly_rate
+                
+                print(f"\nEstimated Savings per Full Epoch:")
+                print(f"  Time Saved: {time_saved_full:.2f} hours")
+                print(f"  Cost Saved: ${cost_saved_per_epoch:.2f}")
+                
+                for epochs in [10, 50, 100]:
+                    total_saved = cost_saved_per_epoch * epochs
+                    print(f"    {epochs} epochs: ${total_saved:.2f}")
+
+
+# =============================================================================
+# RUN COMPARISON
+# =============================================================================
+
+def run_comparison_benchmark(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    batch_size: int = 16,
+    num_epochs: int = 1,
+    use_subset: bool = False,
+    subset_size: int = 2000
+):
+    """
+    Run comprehensive comparison between Dense and Flash Attention models.
+    
+    Args:
+        train_data: Training DataFrame
+        val_data: Validation DataFrame
+        batch_size: Batch size for training
+        num_epochs: Number of epochs to train
+        use_subset: Whether to use a subset for faster comparison
+        subset_size: Size of subset if use_subset=True
+    """
+    
+    # Use subset for faster benchmarking
+    if use_subset:
+        train_subset = train_data.head(subset_size)
+        val_subset = val_data.head(subset_size // 4)
+        print(f"\nUsing subset: {len(train_subset)} train, {len(val_subset)} val samples")
+    else:
+        train_subset = train_data
+        val_subset = val_data
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    benchmark = ModelBenchmark(device)
+    
+    # Configuration
+    config_base = FlashAttentionConfig(
+        use_flash=False,  # Standard attention
+        use_rope=True,
+        use_swiglu=True,
+        use_prenorm=True,
+        dtype=torch.float16,
+        target_cd_cnt=8849
+    )
+    
+    config_flash = FlashAttentionConfig(
+        use_flash=True,   # Flash attention
+        use_rope=True,
+        use_swiglu=True,
+        use_prenorm=True,
+        dtype=torch.float16,
+        target_cd_cnt=8849
+    )
+    
+    criterion = nn.BCEWithLogitsLoss()
+    preparator = ClinicalDataPreparator(len_dy=200, len_cd=80, target_cd_cnt=8849)
+    
+    # Benchmark 1: Standard Dense Attention
+    print("\n" + "="*70)
+    print("CREATING BASELINE MODEL (Standard Attention)")
+    print("="*70)
+    model_dense = FlashClinicalTransformer(config_base).to(device).to(config_base.dtype)
+    
+    metrics_dense = benchmark.benchmark_model(
+        model_name="Standard Attention",
+        model=model_dense,
+        train_data=train_subset,
+        val_data=val_subset,
+        config=config_base,
+        preparator=preparator,
+        criterion=criterion,
+        batch_size=batch_size,
+        num_epochs=num_epochs
+    )
+    
+    # Clean up
+    del model_dense
+    cleanup_gpu_memory()
+    
+    # Benchmark 2: Flash Attention
+    print("\n" + "="*70)
+    print("CREATING FLASH ATTENTION MODEL")
+    print("="*70)
+    model_flash = FlashClinicalTransformer(config_flash).to(device)
+    
+    metrics_flash = benchmark.benchmark_model(
+        model_name="Flash Attention",
+        model=model_flash,
+        train_data=train_subset,
+        val_data=val_subset,
+        config=config_flash,
+        preparator=preparator,
+        criterion=criterion,
+        batch_size=batch_size,
+        num_epochs=num_epochs
+    )
+    
+    # Generate comparison
+    df_comparison = benchmark.compare_models()
+    
+    # Estimate costs
+    benchmark.estimate_cost(
+        gpu_type="T4",
+        hours_per_epoch=None  # Set to actual hours if known
+    )
+    
+    return df_comparison, benchmark.results
+
+
+    
+
+
+# In[26]:
+
+
+# Option 1: Quick comparison on subset (recommended for testing)
+print("\n" + "="*70)
+print("RUNNING QUICK COMPARISON (Subset)")
+print("="*70)
+cleanup_gpu_memory()
+# df_comparison, results = run_comparison_benchmark(
+#     train_data=df_train,
+#     val_data=df_val,
+#     batch_size=16,
+#     num_epochs=1,
+#     use_subset=False,
+#     subset_size=2000  # Use 2000 samples for quick test
+# )
+    
+# Option 2: Full comparison (takes longer)
+# print("\n" + "="*70)
+# print("RUNNING FULL COMPARISON")
+# print("="*70)
+# 
+df_comparison, results = run_comparison_benchmark(
+    train_data=df_train,
+    val_data=df_val,
+    batch_size=16,
+    num_epochs=1,
+    use_subset=False
+)
+
+# Save results
+if df_comparison is not None:
+    df_comparison.to_csv('flash_attention_comparison.csv', index=False)
+    print("\n✓ Results saved to 'flash_attention_comparison.csv'")
 
 
 # In[ ]:

@@ -1,33 +1,25 @@
-# %%
 """
 Mixture-of-Experts (MoE) Experimentation Framework for Hierarchical Clinical Transformer
 
-This module implements a comprehensive 6-experiment ablation study to evaluate MoE integration
+This module implements a comprehensive 5-experiment ablation study to evaluate MoE integration
 into the hierarchical clinical transformer architecture (min_transformer.py).
 
 Experiment Overview:
-- Exp 1: Dense Baseline with same-day prediction (reference performance)
-- Exp 2: Standard Top-K MoE (8 experts, top-2) with same-day prediction
-- Exp 3: Shared Expert MoE (1 shared + 7 routed) with same-day prediction
-- Exp 4: Fine-Grained MoE (1 shared + 15 routed, smaller experts) with same-day prediction
-- Exp 5: Auxiliary-Free MoE (DeepSeek bias-based load balancing) with same-day prediction
-- Exp 6: Best MoE configuration with next-day prediction (future work)
-
-Training Strategy:
-- Experiments 1-5: Same-day reconstruction (predict codes on day t given history up to day t)
-- Experiment 6: Next-day forecasting (predict codes on day t+1 given history up to day t)
+- Exp 1: Dense Baseline (reference performance)
+- Exp 2: Standard Top-K MoE (8 experts, top-2)
+- Exp 3: Shared Expert MoE (1 shared + 7 routed)
+- Exp 4: Fine-Grained MoE (1 shared + 15 routed, smaller experts)
+- Exp 5: Auxiliary-Free MoE (DeepSeek bias-based load balancing)
 
 Based on:
-- Original min_transformer.py training strategy
 - DeepSeek-MoE ablation methodology
 - Switch Transformer load balancing
 - BEHRT clinical evaluation metrics
 
-Author: Daniel Xing
+Author: Clinical TE Project
 Date: 2025-10-24
 """
 
-# %%
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -40,7 +32,7 @@ from typing import Dict, Optional, Tuple, List
 from collections import Counter
 import time
 
-# %%
+
 # ============================================================================
 # SECTION 1: CONFIGURATION
 # ============================================================================
@@ -83,30 +75,27 @@ class MoEConfig:
     z_loss_weight: float = 0.0
 
 
-def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], str]]:
+def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
     """
-    Define all 6 experiment configurations for ablation study.
+    Define all 5 experiment configurations for ablation study.
     
     Returns:
-        Dictionary mapping experiment name to (MoEConfig, prediction_mode) tuple
-        MoEConfig is None for dense baseline
+        Dictionary mapping experiment name to MoEConfig (None for dense baseline)
         
     Experiments:
-        exp1_dense: No MoE, same-day prediction (original min_transformer.py)
-        exp2_standard_moe: 8 experts, top-2, same-day prediction
-        exp3_shared_expert: 1 shared + 7 routed, same-day prediction
-        exp4_fine_grained: 1 shared + 15 routed, same-day prediction
-        exp5_auxiliary_free: Same as exp3 with DeepSeek, same-day prediction
-        exp6_best_moe_nextday: Best MoE from exp 2-5, next-day prediction
+        exp1_dense: No MoE, use original TransformerModel from min_transformer.py
+        exp2_standard_moe: 8 experts, top-2, all routed
+        exp3_shared_expert: 1 shared + 7 routed, top-1 routed (2 total active)
+        exp4_fine_grained: 1 shared + 15 routed (238 dim), top-4 routed (5 total active)
+        exp5_auxiliary_free: Same as exp3 but with DeepSeek bias balancing
     """
     configs = {}
     
-    # Experiments 1-5: Same-day prediction (original training strategy)
-    # Exp 1: Dense Baseline (replicates original min_transformer.py)
-    configs['exp1_dense'] = (None, 'same_day')
+    # Exp 1: Dense Baseline (no MoE)
+    configs['exp1_dense'] = None
     
     # Exp 2: Standard Top-K MoE
-    configs['exp2_standard_moe'] = (MoEConfig(
+    configs['exp2_standard_moe'] = MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -115,10 +104,10 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], str]]:
         load_balance_strategy='switch',
         aux_loss_weight=0.01,
         expert_dropout=0.05,
-    ), 'same_day')
+    )
     
     # Exp 3: Shared Expert MoE
-    configs['exp3_shared_expert'] = (MoEConfig(
+    configs['exp3_shared_expert'] = MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -127,14 +116,14 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], str]]:
         load_balance_strategy='switch',
         aux_loss_weight=0.01,
         expert_dropout=0.05,
-    ), 'same_day')
+    )
     
     # Exp 4: Fine-Grained MoE
     # Calculate expert dimension to maintain ~2.1M params per layer:
     # Shared: 1 × (256 × 512 × 2) = 262K
     # Routed: 15 × (256 × d_ff × 2) ≈ 1,835K
     # d_ff ≈ 238
-    configs['exp4_fine_grained'] = (MoEConfig(
+    configs['exp4_fine_grained'] = MoEConfig(
         d_model=256,
         d_ff=238,  # Smaller experts for fine-grained specialization
         num_experts=16,
@@ -143,10 +132,10 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], str]]:
         load_balance_strategy='switch',
         aux_loss_weight=0.01,
         expert_dropout=0.05,
-    ), 'same_day')
+    )
     
     # Exp 5: Auxiliary-Free MoE (same architecture as Exp 3, different balancing)
-    configs['exp5_auxiliary_free'] = (MoEConfig(
+    configs['exp5_auxiliary_free'] = MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -157,21 +146,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], str]]:
         bias_momentum=0.9,
         aux_loss_weight=0.0,  # Not used for DeepSeek
         expert_dropout=0.05,
-    ), 'same_day')
-    
-    # Exp 6: Best MoE with Next-Day Prediction (placeholder - update after exp 2-5)
-    # Note: This will be determined after running experiments 2-5
-    # For now, using exp3 configuration as placeholder
-    configs['exp6_best_moe_nextday'] = (MoEConfig(
-        d_model=256,
-        d_ff=512,
-        num_experts=8,
-        num_shared_experts=1,
-        top_k=2,
-        load_balance_strategy='switch',  # Or 'deepseek' based on exp5 results
-        aux_loss_weight=0.01,
-        expert_dropout=0.05,
-    ), 'next_day')
+    )
     
     return configs
 
@@ -341,7 +316,6 @@ class DeepSeekBiasCorrection(nn.Module):
             self.expert_bias -= self.bias_lr * bias_gradient
 
 
-# %%
 # ============================================================================
 # SECTION 3: MOE CORE COMPONENTS
 # ============================================================================
@@ -630,7 +604,7 @@ class MoETransformerEncoderLayer(nn.Module):
         
         return src, moe_losses
 
-# %%
+
 # ============================================================================
 # SECTION 4: HIERARCHICAL MOE TRANSFORMER (FULL MODEL)
 # ============================================================================
@@ -829,7 +803,6 @@ class HierarchicalMoETransformer(nn.Module):
         return cd, {}
 
 
-# %%
 # ============================================================================
 # SECTION 5: EVALUATION METRICS
 # ============================================================================
@@ -885,7 +858,7 @@ def compute_comprehensive_internal_metrics(
         
         for i in range(nbatch):
             batch = val_data.iloc[i*batch_size:(i+1)*batch_size]
-            dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)
+            dt_cnt, x, y = prepare_tensor_fn(batch, device)
             
             # Forward pass
             if isinstance(model, HierarchicalMoETransformer):
@@ -968,7 +941,7 @@ def compute_comprehensive_internal_metrics(
     
     return metrics
 
-# %%
+
 def compute_moe_specific_metrics(
     model: HierarchicalMoETransformer,
     val_data: pd.DataFrame,
@@ -1003,7 +976,7 @@ def compute_moe_specific_metrics(
         
         for i in range(nbatch):
             batch = val_data.iloc[i*batch_size:(i+1)*batch_size]
-            dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)
+            dt_cnt, x, y = prepare_tensor_fn(batch, device)
             
             # Forward pass
             _, moe_losses = model(x, return_moe_losses=True)
@@ -1027,7 +1000,7 @@ def compute_moe_specific_metrics(
     
     return metrics
 
-# %%
+
 # ============================================================================
 # SECTION 6: TRAINING LOOP
 # ============================================================================
@@ -1077,7 +1050,7 @@ def train_epoch(
         
         # Prepare batch
         batch = train_data.iloc[i*batch_size:(i+1)*batch_size]
-        dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)  # ← NOW RETURNS day_indices
+        dt_cnt, x, y = prepare_tensor_fn(batch, device)
         
         # Forward pass
         is_moe = isinstance(model, HierarchicalMoETransformer)
@@ -1087,40 +1060,14 @@ def train_epoch(
             opt = model(x)
             moe_losses = {'aux_loss': torch.tensor(0.0, device=device)}
         
-        # Reshape model output: [batch_size, 200, target_cd_cnt] → [batch_size * 200, target_cd_cnt]
+        # Reshape for loss computation
         opt = opt.reshape(batch_size * 200, -1)
+        y_list = [item for sublist in y for item in sublist]
+        opt = torch.cat([opt[200*j:200*j+dt_cnt[j], :] for j in range(batch_size)], dim=0)
+        y_tensor = torch.tensor(y_list, dtype=torch.long).to(device)
         
-        # Extract predictions corresponding to each target code
-        # For each target, get the prediction from its corresponding day
-        opt_selected = []
-        y_flat = []
-        
-        for j in range(batch_size):
-            # Get day indices and targets for this sample
-            sample_day_indices = day_indices[j]
-            sample_targets = y[j]
-            
-            if len(sample_targets) == 0:
-                continue  # Skip if no targets
-            
-            # For each target code, extract prediction from its day
-            for day_idx, target_code in zip(sample_day_indices, sample_targets):
-                # Get prediction for this day from this sample
-                # Sample j's days start at index j*200
-                prediction_idx = j * 200 + day_idx
-                opt_selected.append(opt[prediction_idx])
-                y_flat.append(target_code)
-        
-        if len(y_flat) == 0:
-            print(f"  Warning: Batch {i} has no targets, skipping...")
-            continue
-        
-        # Stack predictions and targets
-        opt_selected = torch.stack(opt_selected)  # [num_targets, target_cd_cnt]
-        y_tensor = torch.tensor(y_flat, dtype=torch.long).to(device)  # [num_targets]
-        
-        # Now shapes match!
-        pred_loss = criterion(opt_selected, y_tensor)
+        # Prediction loss
+        pred_loss = criterion(opt, y_tensor)
         
         # MoE auxiliary loss
         aux_loss = moe_losses['aux_loss']
@@ -1165,11 +1112,14 @@ def train_epoch(
         'train_loss': total_loss_sum / nbatch if nbatch > 0 else 0.0
     }
 
-# %%
+
+# ============================================================================
+# SECTION 7: MAIN EXPERIMENT RUNNER
+# ============================================================================
+
 def run_single_experiment(
     exp_name: str,
     moe_config: Optional[MoEConfig],
-    prediction_mode: str,
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     prepare_tensor_fn,
@@ -1179,12 +1129,11 @@ def run_single_experiment(
     device: torch.device
 ) -> Tuple[nn.Module, Dict[str, float]]:
     """
-    Run a single experiment (one of the 6 configurations).
+    Run a single experiment (one of the 5 configurations).
     
     Args:
         exp_name: Experiment name
         moe_config: MoE configuration (None for dense baseline)
-        prediction_mode: 'same_day' or 'next_day' prediction strategy
         train_data: Training DataFrame
         val_data: Validation DataFrame  
         prepare_tensor_fn: Tensor preparation function
@@ -1199,7 +1148,6 @@ def run_single_experiment(
     """
     print(f"\n{'='*80}")
     print(f"EXPERIMENT: {exp_name}")
-    print(f"Prediction Mode: {prediction_mode.replace('_', '-')}")
     print(f"{'='*80}")
     
     # Create model
@@ -1247,20 +1195,16 @@ def run_single_experiment(
     for epoch in range(training_params['epochs']):
         print(f"\nEpoch {epoch+1}/{training_params['epochs']}")
         
-        # Create wrapped prepare_tensor function with prediction mode and target_cd_cnt
-        def prepare_tensor_with_mode(batch, device):
-            return prepare_tensor_fn(batch, device, prediction_mode, model_params['target_cd_cnt'])
-        
         # Train
         train_metrics = train_epoch(
-            model, train_data, prepare_tensor_with_mode, optimizer, criterion,
+            model, train_data, prepare_tensor_fn, optimizer, criterion,
             device, training_params['batch_size'], moe_config, epoch+1
         )
         
         # Evaluate
         print("  Evaluating...")
         internal_metrics = compute_comprehensive_internal_metrics(
-            model, val_data, prepare_tensor_with_mode, criterion, device, 
+            model, val_data, prepare_tensor_fn, criterion, device, 
             code_frequencies, training_params['batch_size']
         )
         
@@ -1268,7 +1212,7 @@ def run_single_experiment(
         moe_metrics = None
         if moe_config is not None:
             moe_metrics = compute_moe_specific_metrics(
-                model, val_data, prepare_tensor_with_mode, device, training_params['batch_size']
+                model, val_data, prepare_tensor_fn, device, training_params['batch_size']
             )
         
         # Display key metrics
@@ -1349,7 +1293,7 @@ def run_all_experiments(
     
     for i in range(min(nbatch, 1000)):  # Sample for efficiency
         batch = train_data.iloc[i*training_params['batch_size']:(i+1)*training_params['batch_size']]
-        _, _, y, _ = prepare_tensor_fn(batch, device, 'same_day', model_params['target_cd_cnt'])
+        _, _, y = prepare_tensor_fn(batch, device)
         y_flat = [item for sublist in y for item in sublist]
         train_code_counts.update(y_flat)
     
@@ -1357,7 +1301,7 @@ def run_all_experiments(
         if code_idx < len(code_frequencies):
             code_frequencies[code_idx] = count
     
-    print(f"Computed frequencies for {len(train_code_counts)} unique codes")
+    print(f"Computed frequencies for {len(train_code_counts)} codes")
     
     # Get experiment configurations
     configs = get_experiment_configs()
@@ -1366,17 +1310,12 @@ def run_all_experiments(
     results = {}
     all_metrics = []
     
-    # First run experiments 1-5 with same-day prediction
-    for exp_name, (moe_config, prediction_mode) in configs.items():
-        if exp_name == 'exp6_best_moe_nextday':
-            continue  # Skip exp 6 for now
-            
+    for exp_name, moe_config in configs.items():
         start_time = time.time()
         
         model, metrics = run_single_experiment(
             exp_name=exp_name,
             moe_config=moe_config,
-            prediction_mode=prediction_mode,
             train_data=train_data,
             val_data=val_data,
             prepare_tensor_fn=prepare_tensor_fn,
@@ -1395,7 +1334,7 @@ def run_all_experiments(
     
     # === FINAL COMPARISON ===
     print("\n" + "="*80)
-    print("FINAL COMPARISON: EXPERIMENTS 1-5 (SAME-DAY PREDICTION)")
+    print("FINAL COMPARISON: ALL 5 EXPERIMENTS")
     print("="*80)
     
     comparison_df = pd.DataFrame(all_metrics)
@@ -1421,474 +1360,97 @@ def run_all_experiments(
     print("="*80)
     print(comparison_df[['top_10_acc', 'tail_codes_top10', 'val_nll', 'overall_rank']].to_string())
     
-    # Determine best MoE configuration (excluding dense baseline)
-    moe_experiments = comparison_df[comparison_df.index != 'exp1_dense']
-    best_moe_exp = moe_experiments['overall_rank'].idxmin()
-    print(f"\nBest MoE configuration: {best_moe_exp}")
-    
-    # Run Experiment 6: Best MoE with next-day prediction
-    if 'exp6_best_moe_nextday' in configs:
-        print("\n" + "="*80)
-        print("RUNNING EXPERIMENT 6: BEST MOE WITH NEXT-DAY PREDICTION")
-        print("="*80)
-        
-        # Use the best MoE configuration
-        best_moe_config, _ = configs[best_moe_exp]
-        
-        start_time = time.time()
-        model_exp6, metrics_exp6 = run_single_experiment(
-            exp_name='exp6_best_moe_nextday',
-            moe_config=best_moe_config,
-            prediction_mode='next_day',
-            train_data=train_data,
-            val_data=val_data,
-            prepare_tensor_fn=prepare_tensor_fn,
-            model_params=model_params,
-            training_params=training_params,
-            code_frequencies=code_frequencies,
-            device=device
-        )
-        
-        elapsed = time.time() - start_time
-        metrics_exp6['training_time_seconds'] = elapsed
-        metrics_exp6['experiment'] = 'exp6_best_moe_nextday'
-        
-        results['exp6_best_moe_nextday'] = (model_exp6, metrics_exp6)
-        all_metrics.append(metrics_exp6)
-        
-        # Final comparison including Exp 6
-        print("\n" + "="*80)
-        print("FINAL COMPARISON: ALL 6 EXPERIMENTS")
-        print("="*80)
-        
-        final_df = pd.DataFrame(all_metrics).set_index('experiment')
-        print("\nPrediction Strategy Comparison:")
-        print(final_df[['top_10_acc', 'val_nll', 'mrr']].to_string())
-        
-        # Compare same-day vs next-day for best MoE
-        same_day_metrics = results[best_moe_exp][1]
-        next_day_metrics = metrics_exp6
-        
-        print(f"\n{best_moe_exp} Performance:")
-        print(f"  Same-day Top-10 Acc: {same_day_metrics['top_10_acc']:.3f}")
-        print(f"  Next-day Top-10 Acc: {next_day_metrics['top_10_acc']:.3f}")
-        print(f"  Difference: {next_day_metrics['top_10_acc'] - same_day_metrics['top_10_acc']:.3f}")
+    best_experiment = comparison_df.index[0]
+    print(f"\n🏆 RECOMMENDED MODEL: {best_experiment}")
+    print(f"   Top-10 Accuracy:  {comparison_df.loc[best_experiment, 'top_10_acc']:.3f}")
+    print(f"   Tail Code Top-10: {comparison_df.loc[best_experiment, 'tail_codes_top10']:.3f}")
+    print(f"   Validation NLL:   {comparison_df.loc[best_experiment, 'val_nll']:.4f}")
     
     return results
 
-# %%
-# Add these helper functions after the imports in moe_experiments.py
-# (around line 34, after "import time")
 
 # ============================================================================
-# DATA PREPARATION FUNCTIONS
+# SECTION 8: EXAMPLE USAGE
 # ============================================================================
 
-def conv_cd(ipt: str, len_dy: int = 200, len_cd: int = 80) -> List[List[int]]:
+def example_usage():
     """
-    Convert code string to 2D list of integers.
+    Example of how to use the MoE experimentation framework.
     
-    Format: "code1,code2*code3,code4*..." where * separates days, , separates codes within day
-    
-    Args:
-        ipt: Input string with format "day1codes*day2codes*..."
-        len_dy: Maximum number of days (200)
-        len_cd: Maximum codes per day (80)
-        
-    Returns:
-        List of lists: [[day1_codes], [day2_codes], ...] padded to [len_dy, len_cd]
-        
-    Example:
-        "1,2,3*4,5*6" -> [[1,2,3,0,...], [4,5,0,...], [6,0,...], [0,0,...], ...]
+    This demonstrates the complete workflow:
+        1. Prepare data
+        2. Define model and training parameters
+        3. Run all 5 experiments
+        4. Compare results and select best model
     """
-    ipt = ipt.split('*')
-    ipt = ipt[:len_dy]  # Truncate to max days
-    ipt = ipt + (len_dy - len(ipt)) * ['']  # Pad to len_dy days
-    ipt = [dy.split(',') for dy in ipt]
-    ipt = [[int(cd) if cd != '' else 0 for cd in dy] for dy in ipt]
-    ipt = [dy + (len_cd - len(dy)) * [0] for dy in ipt]  # Pad each day to len_cd codes
-    return ipt
+    
+    # Device setup
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # === DATA PREPARATION ===
+    # NOTE: Replace with your actual data loading and prepare_tensor function
+    # from min_transformer.py
+    
+    def prepare_tensor(batch, device):
+        """
+        Prepare tensors from DataFrame batch.
+        Should match the prepare_tensor function from min_transformer.py.
+        
+        Returns:
+            dt_cnt: List of sequence lengths per sample
+            x: [batch, 200, 82] tensor (age, gender, 80 codes)
+            y: List of lists of target codes
+        """
+        # Placeholder - implement based on your data format
+        raise NotImplementedError("Implement prepare_tensor for your data")
+    
+    # Load data
+    # train_data = pd.read_csv('path/to/train.csv')
+    # val_data = pd.read_csv('path/to/val.csv')
+    
+    # === MODEL PARAMETERS ===
+    model_params = {
+        'cd_cnt': 84010,           # Medical code vocabulary size
+        'target_cd_cnt': 2767,     # Target prediction classes
+        'embedding_size': 256,
+    }
+    
+    # === TRAINING PARAMETERS ===
+    training_params = {
+        'batch_size': 16,
+        'epochs': 3,               # Increase for real training
+        'lr': 1e-4,
+        'weight_decay': 0.01,
+    }
+    
+    # === RUN ALL EXPERIMENTS ===
+    # results = run_all_experiments(
+    #     train_data=train_data,
+    #     val_data=val_data,
+    #     prepare_tensor_fn=prepare_tensor,
+    #     model_params=model_params,
+    #     training_params=training_params,
+    #     device=device
+    # )
+    
+    # === ACCESS RESULTS ===
+    # best_model, best_metrics = results['exp3_shared_expert']
+    # Save model: torch.save(best_model.state_dict(), 'best_model.pt')
+    
+    print("\n" + "="*80)
+    print("Example usage code ready. Implement data loading and run experiments.")
+    print("="*80)
 
 
-def conv_age_gender(ipt: str, len_dy: int = 200, max_age: int = 1439) -> List[int]:
+if __name__ == "__main__":
     """
-    Convert age/gender string to list of integers.
+    Main entry point for MoE experimentation.
     
-    Format: "value1*value2*..." where each value is age in months or gender code
-    
-    Args:
-        ipt: Input string with format "val1*val2*..."
-        len_dy: Maximum number of days (200)
-        max_age: Maximum age value (1439 for 120 years in months)
-        
-    Returns:
-        List of integers padded to len_dy
-        
-    Example:
-        "360*361*362" -> [360, 361, 362, 0, 0, ...] (up to 200 values)
+    To use:
+        1. Implement your data loading and prepare_tensor function
+        2. Adjust model_params and training_params for your dataset
+        3. Run: python moe_experiments.py
     """
-    ipt = ipt.split('*')
-    ipt = ipt[:len_dy]  # Truncate to max days
-    ipt = [min(int(cd), max_age) for cd in ipt]  # Cap at max_age
-    ipt = ipt + (len_dy - len(ipt)) * [0]  # Pad to len_dy
-    return ipt
-
-
-def extract_targets_from_codes(cd_list: List[List[int]], dt_cnt: int, prediction_mode: str = 'same_day', 
-                               target_cd_cnt: int = 2767) -> Tuple[List[int], List[int]]:
-    """
-    Extract target codes AND their corresponding day indices with validation.
-    
-    The model predicts at each day timestep. When multiple codes occur on the same day,
-    we need to know which day each code came from so we can extract the correct prediction.
-    
-    This function supports both same-day and next-day prediction modes for experiments.
-    
-    IMPORTANT: This function validates that all codes are in range [0, target_cd_cnt).
-    Codes outside this range will be filtered out with a warning.
-    
-    Args:
-        cd_list: [len_dy, len_cd] list of code integers
-        dt_cnt: Number of actual (non-padded) days in sequence
-        prediction_mode: 'same_day' (default, Exp 1-5) or 'next_day' (Exp 6)
-        target_cd_cnt: Number of target classes (default 2767)
-        
-    Returns:
-        targets: List of target code indices for loss computation (validated to be in range)
-        day_indices: List of day indices corresponding to each target
-        
-    Example (same_day mode):
-        Day 0: codes [1, 2, 3]
-        Day 1: codes [4, 5]
-        Returns: targets=[1,2,3,4,5], day_indices=[0,0,0,1,1]
-        
-    Example (next_day mode):
-        Day 0: codes [1, 2, 3] -> predict these from day -1
-        Day 1: codes [4, 5] -> predict these from day 0
-        Returns: targets=[4,5,...], day_indices=[0,1,...] (shifted by 1)
-    """
-    targets = []
-    day_indices = []
-    invalid_codes_found = []
-    
-    if prediction_mode == 'same_day':
-        # Original training strategy: predict codes on day t given history up to day t
-        for day_idx in range(dt_cnt):
-            day_codes = cd_list[day_idx]
-            # Extract non-zero codes (actual medical codes)
-            non_zero_codes = [code for code in day_codes if code != 0]
-            
-            # Validate and filter codes
-            for code in non_zero_codes:
-                if 0 <= code < target_cd_cnt:
-                    targets.append(code)
-                    day_indices.append(day_idx)
-                else:
-                    if code not in invalid_codes_found:
-                        invalid_codes_found.append(code)
-            
-    elif prediction_mode == 'next_day':
-        # Future experiment: predict codes on day t+1 given history up to day t
-        for day_idx in range(1, dt_cnt):  # Start from day 1
-            day_codes = cd_list[day_idx]  # Codes on day t+1
-            # Extract non-zero codes
-            non_zero_codes = [code for code in day_codes if code != 0]
-            
-            # Validate and filter codes
-            for code in non_zero_codes:
-                if 0 <= code < target_cd_cnt:
-                    targets.append(code)
-                    day_indices.append(day_idx - 1)  # Previous day
-                else:
-                    if code not in invalid_codes_found:
-                        invalid_codes_found.append(code)
-    else:
-        raise ValueError(f"Unknown prediction_mode: {prediction_mode}. Use 'same_day' or 'next_day'.")
-    
-    # Warn about invalid codes (only once per unique code)
-    if invalid_codes_found:
-        print(f"⚠️  WARNING: Found {len(invalid_codes_found)} unique codes outside target range [0, {target_cd_cnt}).")
-        print(f"    Sample invalid codes: {invalid_codes_found[:10]}")
-        print(f"    These codes have been FILTERED OUT. You may need to:")
-        print(f"    1. Use a code mapping dictionary to map input codes -> target codes")
-        print(f"    2. Update target_cd_cnt to match your actual vocabulary")
-        print(f"    3. Preprocess your data to use only codes in range [0, {target_cd_cnt})")
-    
-    return targets, day_indices
-
-
-def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: str = 'same_day',
-                  target_cd_cnt: int = 2767) -> Tuple[List[int], torch.Tensor, List[List[int]], List[List[int]]]:
-    """
-    Prepare tensors from DataFrame batch for model input.
-    
-    This function converts raw data (stored as strings) into PyTorch tensors.
-    Compatible with both training (returns targets) and inference (can ignore targets).
-    
-    Expected DataFrame columns:
-        - age_in_months: String format "age1*age2*..." (age in months per day)
-        - gender_cd: String format "gender1*gender2*..." (gender code per day)
-        - cd: String format "code1,code2*code3,code4*..." (medical codes)
-        - dt_cnt: Integer, number of actual days in sequence (rest is padding)
-        
-    Args:
-        batch: DataFrame with batch_size rows
-        device: PyTorch device (cuda or cpu)
-        prediction_mode: 'same_day' or 'next_day'
-        target_cd_cnt: Number of target classes (for validation)
-        
-    Returns:
-        dt_cnt: List of actual day counts per sample in batch
-        x: Tensor [batch_size, 200, 82] where 82 = [age, gender, 80 codes]
-        y: List of lists, target codes for each sample (for loss computation)
-        day_indices: List of lists, day index for each target code
-        
-    Example shape:
-        batch_size=16, len_dy=200, len_cd=80
-        x shape: [16, 200, 82]
-        dt_cnt: [150, 180, 200, ...] (16 values)
-        y: [[code1, code2, ...], [code3, code4, ...], ...] (16 lists)
-        day_indices: [[0,0,1,1,2,...], [0,0,0,1,...], ...] (16 lists)
-    """
-    batch_size = len(batch)
-    len_dy = 200  # Sequence length in days
-    len_cd = 80   # Max codes per day
-    
-    # Extract and convert age_in_months
-    age_in_months = [conv_age_gender(ipt, len_dy) for ipt in batch['age_in_months'].tolist()]
-    age_in_months = torch.tensor(age_in_months, dtype=torch.long).to(device)
-    age_in_months = age_in_months.reshape(batch_size, len_dy, 1)
-    
-    # Extract and convert gender_cd
-    gender_cd = [conv_age_gender(ipt, len_dy) for ipt in batch['gender_cd'].tolist()]
-    gender_cd = torch.tensor(gender_cd, dtype=torch.long).to(device)
-    gender_cd = gender_cd.reshape(batch_size, len_dy, 1)
-    
-    # Extract and convert medical codes
-    cd_raw = [conv_cd(ipt, len_dy, len_cd) for ipt in batch['cd'].tolist()]
-    cd = torch.tensor(cd_raw, dtype=torch.long).to(device)
-    
-    # Concatenate: [age, gender, 80 codes] = 82 features
-    x = torch.cat([age_in_months, gender_cd, cd], dim=-1)
-    
-    # Extract actual day counts
-    dt_cnt = batch['dt_cnt'].tolist()
-    
-    # Extract target codes AND day indices for training (with validation)
-    y = []
-    day_indices_list = []
-    for i in range(batch_size):
-        targets, day_idxs = extract_targets_from_codes(cd_raw[i], dt_cnt[i], prediction_mode, target_cd_cnt)
-        y.append(targets)
-        day_indices_list.append(day_idxs)
-    
-    return dt_cnt, x, y, day_indices_list
-
-
-# ============================================================================
-# BENCHMARKING UTILITY (OPTIONAL)
-# ============================================================================
-
-def benchmark_throughput(
-    model: nn.Module,
-    device: torch.device,
-    batch_size: int = 32,
-    num_iters: int = 100,
-    warmup_iters: int = 10
-) -> float:
-    """
-    Benchmark model throughput (samples per second).
-    
-    Useful for estimating training time and costs.
-    
-    Args:
-        model: Model to benchmark
-        device: Device to run on
-        batch_size: Batch size
-        num_iters: Number of iterations to measure
-        warmup_iters: Warmup iterations (excluded from timing)
-        
-    Returns:
-        samples_per_second: Throughput in samples/sec
-        
-    Example usage:
-        model = HierarchicalMoETransformer(...)
-        throughput = benchmark_throughput(model, device)
-        print(f"Throughput: {throughput:.2f} samples/sec")
-    """
-    model.eval()
-    
-    print("Generating dummy data...")
-    x = torch.zeros((batch_size, 200, 82), dtype=torch.long).to(device)
-    
-    # Age: random values in [0, 1439]
-    x[:, :, 0] = torch.randint(0, 1440, (batch_size, 200), dtype=torch.long).to(device)
-    
-    # Gender: random values in [0, 3] (4 categories)
-    x[:, :, 1] = torch.randint(0, 4, (batch_size, 200), dtype=torch.long).to(device)
-    
-    # Medical codes: random values in [0, min(10000, cd_cnt))
-    # Use smaller range for efficiency, but ensure within vocab
-    max_code = 10000  # Most codes will be in lower range anyway
-    x[:, :, 2:] = torch.randint(0, max_code, (batch_size, 200, 80), dtype=torch.long).to(device)
-    
-    # Warmup
-    print(f"Warming up ({warmup_iters} iterations)...")
-    with torch.no_grad():
-        for _ in range(warmup_iters):
-            if isinstance(model, HierarchicalMoETransformer):
-                _ = model(x, return_moe_losses=False)
-            else:
-                _ = model(x)
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-    
-    # Benchmark
-    print(f"Benchmarking ({num_iters} iterations)...")
-    start = time.time()
-    with torch.no_grad():
-        for _ in range(num_iters):
-            if isinstance(model, HierarchicalMoETransformer):
-                _ = model(x, return_moe_losses=False)
-            else:
-                _ = model(x)
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-    elapsed = time.time() - start
-    
-    samples_per_second = (num_iters * batch_size) / elapsed
-    
-    print(f"\n{'='*60}")
-    print(f"BENCHMARK RESULTS")
-    print(f"{'='*60}")
-    print(f"Total time: {elapsed:.2f} seconds")
-    print(f"Time per batch: {elapsed/num_iters*1000:.2f} ms")
-    print(f"Throughput: {samples_per_second:.2f} samples/sec")
-    print(f"{'='*60}\n")
-    
-    return samples_per_second
-
-# %% [markdown]
-# ### Training
-
-# %%
-import google.auth
-from google.auth import impersonated_credentials
-from google.cloud import bigquery
-client = bigquery.Client()
-credentials, project= google.auth.default()
-print('credentials:', credentials, ', project:', project)
-
-# %%
-# === MODEL PARAMETERS ===
-model_params = {
-    'cd_cnt': 84010,           # Medical code vocabulary size, expected to change
-    'target_cd_cnt': 2767,     # Target prediction classes
-    'embedding_size': 256,
-}
-
-# === TRAINING PARAMETERS ===
-training_params = {
-    'batch_size': 16,
-    'epochs': 1,               # Increase for real training
-    'lr': 1e-4,
-    'weight_decay': 0.01,
-}
-
-# %%
-# Load data
-input_sql = """
-select * from
-anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_OOT_o3_score_ending
-limit 20000
-"""
-input_data = client.query(input_sql).to_dataframe() 
-
-# %%
-df_train = input_data.iloc[:10000]
-df_val = input_data.iloc[10001:12000]
-
-# %%
-# Device setup
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-
-# %%
-base_model = HierarchicalMoETransformer(
-    cd_cnt=model_params['cd_cnt'],
-    target_cd_cnt=model_params['target_cd_cnt'],
-    embedding_size=model_params['embedding_size'],
-    moe_config=None,
-    use_moe_from_layer=999,  # Never use MoE
-    nlayers=6,
-    nhead=16,
-    dropout=0.1
-).to(device)
-
-# %% [markdown]
-# #### Time estimate
-
-# %%
-total_params = sum(p.numel() for p in base_model.parameters())
-print(f"Total parameters: {total_params:,}")
-
-# %%
-throughput = benchmark_throughput(base_model, device, batch_size=16)
-
-# %%
-# Prepare code frequencies for stratified evaluation
-print("\nPreparing code frequencies...")
-code_frequencies = np.zeros(model_params['target_cd_cnt'])
-nbatch = len(df_train) // training_params['batch_size']
-train_code_counts = Counter()
-
-for i in range(min(nbatch, 1000)):  # Sample for efficiency
-    batch = df_train.iloc[i*training_params['batch_size']:(i+1)*training_params['batch_size']]
-    _, _, y, _ = prepare_tensor(batch, device, 'same_day', model_params['target_cd_cnt'])
-    y_flat = [item for sublist in y for item in sublist]
-    train_code_counts.update(y_flat)
-for code_idx, count in train_code_counts.items():
-    if code_idx < len(code_frequencies):
-        code_frequencies[code_idx] = count
-
-print(f"Computed frequencies for {len(train_code_counts)} unique codes")
-
-# %%
-# Get experiment configurations
-configs = get_experiment_configs()
-
-# Run all experiments
-results = {}
-all_metrics = []
-
-# Run experiments 1-5 first (same-day prediction)
-for exp_name, (moe_config, prediction_mode) in configs.items():
-    if exp_name == 'exp6_best_moe_nextday':
-        continue  # Will run after determining best MoE
-        
-    start_time = time.time()
-
-    model, metrics = run_single_experiment(
-        exp_name=exp_name,
-        moe_config=moe_config,
-        prediction_mode=prediction_mode,
-        train_data=df_train,
-        val_data=df_val,
-        prepare_tensor_fn=prepare_tensor,
-        model_params=model_params,
-        training_params=training_params,
-        code_frequencies=code_frequencies,
-        device=device
-    )
-
-    elapsed = time.time() - start_time
-    metrics['training_time_seconds'] = elapsed
-    metrics['experiment'] = exp_name
-
-    results[exp_name] = (model, metrics)
-    all_metrics.append(metrics)
-
-# %%
-
-
+    example_usage()
 
