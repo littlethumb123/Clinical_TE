@@ -37,7 +37,7 @@ References:
 
 # ### Flash attention implementation
 
-# In[1]:
+# In[16]:
 
 
 import math
@@ -70,7 +70,7 @@ class FlashAttentionConfig:
         
         # Vocabulary sizes
         cd_cnt: Number of medical codes (84,010)
-        target_cd_cnt: Number of prediction targets (2,767)
+        target_cd_cnt: Number of prediction targets (8849 test_max_value, not formal retraining target size)
         gender_vocab: Gender categories (4)
         age_vocab: Age in months vocabulary (1,440)
         
@@ -96,7 +96,7 @@ class FlashAttentionConfig:
     
     # Vocabulary sizes
     cd_cnt: int = 84010
-    target_cd_cnt: int = 2767
+    target_cd_cnt: int = 8849 # test_max_value, not formal retraining target size
     gender_vocab: int = 4
     age_vocab: int = 1440
     
@@ -189,8 +189,8 @@ class RotaryPositionEmbedding(nn.Module):
         emb = torch.cat([freqs, freqs], dim=-1)
         
         # Precompute cos and sin
-        # Shape: [1, max_seq_len, 1, dim]
-        # Dimensions: [batch, seq_len, nhead, head_dim]
+        # Shape: [1, 1, max_seq_len, dim]
+        # Dimensions: [batch=1, nhead=1, seq_len, head_dim]
         cos_cached = emb.cos()[None, None, :, :]
         sin_cached = emb.sin()[None, None, :, :]
         
@@ -330,7 +330,7 @@ class SwiGLU(nn.Module):
 
 
 
-# In[2]:
+# In[17]:
 
 
 # ============================================================================
@@ -703,13 +703,10 @@ class FlashClinicalTransformer(nn.Module):
         # Project to target vocabulary
         predictions = self.decoder_cd(temporal_output)  # [batch, 200, target_cd_cnt]
         
-        # Log softmax for NLLLoss
-        predictions = F.log_softmax(predictions, dim=-1)
-        
         return predictions
 
 
-# In[3]:
+# In[18]:
 
 
 # ============================================================================
@@ -996,7 +993,7 @@ class FlashAttentionBenchmark:
 
 # ### Validation and test flash attention with dummy dataset
 
-# In[6]:
+# In[19]:
 
 
 # Requirements:
@@ -1026,7 +1023,7 @@ if torch.cuda.is_available():
 print("="*60)
 
 
-# In[5]:
+# In[20]:
 
 
 config = FlashAttentionConfig(
@@ -1039,7 +1036,7 @@ config = FlashAttentionConfig(
 model = FlashClinicalTransformer(config)
 
 
-# In[6]:
+# In[21]:
 
 
 # Count parameters
@@ -1135,12 +1132,13 @@ flash_benchmark_througput
 import google.auth
 from google.auth import impersonated_credentials
 from google.cloud import bigquery
+import pandas as pd
 client = bigquery.Client()
 credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[5]:
+# In[22]:
 
 
 """
@@ -1179,72 +1177,10 @@ class ClinicalDataPreparator:
     Prepares clinical claims data for Flash Attention model.
     """
     
-    def __init__(self, len_dy: int = 200, len_cd: int = 80, target_cd_cnt: int = 2767):
+    def __init__(self, len_dy: int = 200, len_cd: int = 80, target_cd_cnt: int = 8849):
         self.len_dy = len_dy
         self.len_cd = len_cd
         self.target_cd_cnt = target_cd_cnt
-        
-        # Code mapping will be built from data
-        self.code_to_target = None
-    
-    def build_code_mapping(self, data: pd.DataFrame):
-        """
-        Build mapping from raw medical codes to target indices.
-        
-        Strategy: Use top N most frequent codes as targets.
-        All other codes map to index 0 (unknown/other).
-        
-        Args:
-            data: Training DataFrame with 'cd' column
-        """
-        from collections import Counter
-        
-        print(f"Building code mapping for top {self.target_cd_cnt} codes...")
-        
-        # Collect all codes from training data
-        all_codes = []
-        for cd_str in data['cd']:
-            if pd.notna(cd_str) and cd_str != '':
-                # Parse all codes (handle both formats)
-                codes = cd_str.replace('*', ',').split(',')
-                codes = [int(c) for c in codes if c.strip() != '']
-                all_codes.extend(codes)
-        
-        # Count frequencies
-        code_counts = Counter(all_codes)
-        
-        # Get top N most frequent codes
-        most_common = code_counts.most_common(self.target_cd_cnt)
-        
-        # Create mapping: raw_code -> target_index
-        self.code_to_target = {}
-        for target_idx, (code, count) in enumerate(most_common):
-            self.code_to_target[code] = target_idx
-        
-        print(f"✓ Mapped {len(self.code_to_target)} codes to target indices")
-        print(f"  Most common code: {most_common[0][0]} (count: {most_common[0][1]})")
-        print(f"  Least common in targets: {most_common[-1][0]} (count: {most_common[-1][1]})")
-        
-        # Coverage statistics
-        total_codes = len(all_codes)
-        mapped_codes = sum(1 for c in all_codes if c in self.code_to_target)
-        coverage = mapped_codes / total_codes * 100
-        print(f"  Coverage: {coverage:.2f}% of training codes in target vocabulary")
-    
-    def map_code_to_target(self, code: int) -> int:
-        """
-        Map raw medical code to target index.
-        
-        Args:
-            code: Raw medical code (0-84009)
-        
-        Returns:
-            Target index (0-2766), or 0 if code not in target vocabulary
-        """
-        if self.code_to_target is None:
-            raise ValueError("Code mapping not built. Call build_code_mapping() first!")
-        
-        return self.code_to_target.get(code, 0)  # Unknown codes map to 0
     
     def parse_codes(self, cd_str: str) -> List[List[int]]:
         """Parse medical codes from string format."""
@@ -1276,15 +1212,42 @@ class ClinicalDataPreparator:
         
         if isinstance(value, str):
             values = value.split('*')
-            values = [int(v) if v.strip() != '' else 0 for v in values]
+            # Clip to max age (1439)
+            values = [min(int(v), 1439) if v.strip() != '' else 0 for v in values]
         else:
-            values = [int(value)] * num_days
+            values = [min(int(value), 1439)] * num_days
         
         values = values[:self.len_dy]
         while len(values) < self.len_dy:
             values.append(values[-1] if values else 0)
         
         return values
+
+    def parse_target(self, target_str: str) -> List[List[int]]:
+        """
+        Parse target string to nested list of codes (multi-label).
+        Matches conv_target() from min_transformer_finetune.py lines 141-147.
+        """
+        if pd.isna(target_str) or target_str == '':
+            return [[0] for _ in range(self.len_dy)]
+
+        # Split by asterisk for multi-day sequences
+        days = target_str.split('*')
+        days = days[:self.len_dy]
+
+        # Parse each day's target codes
+        parsed_days = []
+        for day_str in days:
+            codes = day_str.split(',')
+            codes = [min(int(c), self.target_cd_cnt-1) if c.strip() != '' else 0 for c in codes]
+            parsed_days.append(codes)  # ✅ Keep ALL codes per day
+
+        # Pad to len_dy days
+        while len(parsed_days) < self.len_dy:
+            parsed_days.append([0])
+
+        return parsed_days  # Returns [[15,42,7258], [156], ...]
+    
     
     def prepare_batch(
         self, 
@@ -1295,53 +1258,42 @@ class ClinicalDataPreparator:
         Prepare batch for Flash Attention model..
         """
         batch_size = len(batch_df)
-        
+
         age_batch = []
         gender_batch = []
         codes_batch = []
         dt_cnt = []
         targets = []
-        
+
         for idx, row in batch_df.iterrows():
             day_count = int(row.get('dt_cnt', 1))
             dt_cnt.append(day_count)
-            
+
             age_seq = self.parse_age_gender(row['age_in_months'], day_count)
             age_batch.append(age_seq)
-            
+
             gender_seq = self.parse_age_gender(row['gender_cd'], day_count)
             gender_batch.append(gender_seq)
-            
+
             codes_seq = self.parse_codes(row['cd'])
             codes_batch.append(codes_seq)
-            
-            # **FIX**: Map codes to target indices
-            day_targets = []
-            for day_idx in range(day_count):
-                # Get non-zero codes for this day
-                day_codes = [c for c in codes_seq[day_idx] if c != 0]
-                if day_codes:
-                    # Map first code to target index
-                    raw_code = day_codes[0]
-                    target_idx = self.map_code_to_target(raw_code)
-                    day_targets.append(target_idx)
-                else:
-                    day_targets.append(0)
-            
-            targets.append(day_targets)
-        
+
+            # ✅ Parse target_cd column directly (multi-label)
+            target_seq = self.parse_target(row['target_cd'])
+            targets.append(target_seq)  # ✅ Returns [[15,42,7258], [156], ...]
+
         # Convert to tensors
         age_tensor = torch.tensor(age_batch, dtype=torch.long, device=device)
         gender_tensor = torch.tensor(gender_batch, dtype=torch.long, device=device)
         codes_tensor = torch.tensor(codes_batch, dtype=torch.long, device=device)
-        
+
         age_tensor = age_tensor.unsqueeze(-1)
         gender_tensor = gender_tensor.unsqueeze(-1)
-        
+
         x = torch.cat([age_tensor, gender_tensor, codes_tensor], dim=-1)
         x = x.float()
-        
-        return dt_cnt, x, targets
+
+        return dt_cnt, x, targets  # ✅ targets is List[List[List[int]]]
 
 
 # =============================================================================
@@ -1366,7 +1318,7 @@ def train_epoch(
         model: Flash Attention model
         data: Training DataFrame
         optimizer: Optimizer
-        criterion: Loss function (NLLLoss)
+        criterion: Loss function (BCEWithLogitsLoss)
         preparator: Data preparator
         batch_size: Batch size
         device: Device
@@ -1382,7 +1334,7 @@ def train_epoch(
     total_loss = 0.0
     
     # Gradient scaler for mixed precision
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.cuda.amp.GradScaler() if config.dtype == torch.float16 else None
     
     start_time = time.time()
     
@@ -1395,49 +1347,60 @@ def train_epoch(
         
         # Prepare tensors
         dt_cnt, x, y = preparator.prepare_batch(batch_df, device)
+        # y is now List[List[List[int]]], e.g., [[[15,42], [156], ...], [[22,15], ...]]
         
-        # Zero gradients
         optimizer.zero_grad()
-        
-        # Forward pass with mixed precision
+
         with torch.cuda.amp.autocast(dtype=config.dtype):
             output = model(x)  # [batch, 200, target_cd_cnt]
-            
+
             # Reshape for loss computation
             output = output.reshape(batch_size * config.len_dy, config.target_cd_cnt)
-            
-            # Flatten targets
+
+            # Flatten targets (lines 182-183 in min_transformer_finetune.py)
             y_flat = [item for sublist in y for item in sublist]
-            
-            # Select only valid days
+            # y_flat is now [[15,42], [156], [22,15], ...] - list of code lists per day
+
+            # Select only valid days (lines 184 in min_transformer_finetune.py)
             valid_outputs = []
             for j in range(batch_size):
                 start_idx = config.len_dy * j
                 end_idx = start_idx + dt_cnt[j]
                 valid_outputs.append(output[start_idx:end_idx])
-            
-            output = torch.cat(valid_outputs, dim=0)
-            y_tensor = torch.tensor(y_flat, device=device, dtype=torch.long)
-            
-            # Ensure same length
-            min_len = min(len(output), len(y_tensor))
-            output = output[:min_len]
-            y_tensor = y_tensor[:min_len]
-            
-            # Compute loss
-            loss = criterion(output, y_tensor)
+
+            output = torch.cat(valid_outputs, dim=0)  # [total_valid_days, target_cd_cnt]
+
+            # Create multi-hot encoding (lines 186-191 in min_transformer_finetune.py)
+            y_cd = torch.zeros(len(output), config.target_cd_cnt, device=device)
+
+            for j in range(len(output)):  # For each valid day
+                for k in y_flat[j]:  # For each target code on this day
+                    if k != 0:
+                        if k < config.target_cd_cnt:
+                            y_cd[j, k] = 1
+                        else:
+                            # Warnings for out-of-bounds targets
+                            print(f"Warning: Target code {k} >= {config.target_cd_cnt}, skipping")
+
+            # BCEWithLogitsLoss with multi-hot targets
+            loss = criterion(output, y_cd)
         
         # Backward with gradient scaling
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
         
         total_loss += loss.item()
         
         # Memory cleanup
-        del x, output, loss
+        del x, output, loss, y_cd, dt_cnt, y
         if i % 100 == 0:
             torch.cuda.empty_cache()
     
@@ -1453,7 +1416,7 @@ def train_epoch(
     }
 
 
-def validate(
+def validate_epoch(
     model: FlashClinicalTransformer,
     data: pd.DataFrame,
     criterion: nn.Module,
@@ -1483,15 +1446,18 @@ def validate(
                 start_idx = config.len_dy * j
                 end_idx = start_idx + dt_cnt[j]
                 valid_outputs.append(output[start_idx:end_idx])
-            
+
             output = torch.cat(valid_outputs, dim=0)
-            y_tensor = torch.tensor(y_flat, device=device, dtype=torch.long)
-            
-            min_len = min(len(output), len(y_tensor))
-            output = output[:min_len]
-            y_tensor = y_tensor[:min_len]
-            
-            loss = criterion(output, y_tensor)
+
+            # ✅ Create multi-hot encoding (same as training)
+            y_cd = torch.zeros(len(output), config.target_cd_cnt, device=device)
+
+            for j in range(len(output)):
+                for k in y_flat[j]:
+                    if k != 0 and k < config.target_cd_cnt:
+                        y_cd[j, k] = 1
+
+            loss = criterion(output, y_cd)
             total_loss += loss.item()
     
     avg_loss = total_loss / num_batches
@@ -1502,7 +1468,7 @@ def validate(
 
 # #### Load data
 
-# In[8]:
+# In[28]:
 
 
 import logging
@@ -1534,7 +1500,21 @@ input_data = client.query(input_sql).to_dataframe()
 input_data.head()
 
 
-# In[11]:
+# In[23]:
+
+
+import pandas as pd
+df_train = pd.read_feather("sample_data/mdcd_train_8000.feather")
+df_val = pd.read_feather("sample_data/mdcd_val_2000.feather")
+
+
+# In[24]:
+
+
+df_train.head(20)
+
+
+# In[25]:
 
 
 import torch
@@ -1574,7 +1554,15 @@ def cleanup_gpu_memory():
 
 
 
-# In[12]:
+# In[26]:
+
+
+cleanup_gpu_memory()
+
+
+# ### Training
+
+# In[29]:
 
 
 # =============================================================================
@@ -1586,15 +1574,13 @@ print("Cleaning up GPU memory from previous runs...")
 print("="*70)
 cleanup_gpu_memory()
 
-train_data = input_data.iloc[:1500]
-val_data = input_data.iloc[1501:2000]
-
 config = FlashAttentionConfig(
     use_flash=True,
     use_rope=True,
     use_swiglu=True,
     use_prenorm=True,
-    dtype=torch.bfloat16
+    dtype=torch.bfloat16,
+    target_cd_cnt=8849 # Only for test, this is different when for formal retraining
 )
     
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1604,7 +1590,7 @@ print("\nStep 1: Creating Flash Attention model...")
 model = FlashClinicalTransformer(config).to(device)
 
 print("\nStep 2: Setting up training...")
-batch_size = 32
+batch_size = 16
 
 optimizer = optim.AdamW(
     model.parameters(),
@@ -1613,16 +1599,20 @@ optimizer = optim.AdamW(
     betas=(0.9, 0.95)
 )
 
-criterion = nn.NLLLoss()
-preparator = ClinicalDataPreparator(len_dy=200, len_cd=80)
-preparator.build_code_mapping(train_data)
+criterion = nn.BCEWithLogitsLoss()  # Multi-label loss for next days multiple code prediction
+preparator = ClinicalDataPreparator(len_dy=200, len_cd=80, target_cd_cnt=config.target_cd_cnt)
 
 
-# Step 6: Train
-print("\nStep 3: Training...")
+
+
+# In[ ]:
+
+
+# Train
+print("Training...")
 print("="*70)
 
-num_epochs = 5
+num_epochs = 1
 
 for epoch in range(num_epochs):
     print(f"\n{'='*70}")
@@ -1631,13 +1621,13 @@ for epoch in range(num_epochs):
 
     # Train
     train_stats = train_epoch(
-        model, train_data, optimizer, criterion,
+        model, df_train, optimizer, criterion,
         preparator, batch_size, device, config, epoch
     )
 
     # Validate
-    val_stats = validate(
-        model, val_data, criterion,
+    val_stats = validate_epoch(
+        model, df_val, criterion,
         preparator, batch_size, device, config
     )
     
@@ -1666,94 +1656,6 @@ print("\n" + "="*70)
 print("TRAINING COMPLETED!")
 print("="*70)
 
-
-# OUTPUT
-# ======================================================================
-# Cleaning up GPU memory from previous runs...
-# ======================================================================
-# GPU Memory - Allocated: 0.70 GB, Reserved: 1.83 GB
-# Using device: cuda
-
-# Step 1: Creating Flash Attention model...
-
-# Step 2: Setting up training...
-# Building code mapping for top 2767 codes...
-# ✓ Mapped 1779 codes to target indices
-#   Most common code: 1 (count: 1499)
-#   Least common in targets: 5001 (count: 1)
-#   Coverage: 100.00% of training codes in target vocabulary
-
-# Step 3: Training...
-# ======================================================================
-
-# ======================================================================
-# Epoch 1/5
-# ======================================================================
-# Epoch 0, Batch 0/46, Time: 0.00s
-
-# Epoch 0 completed: Avg Loss = 6.7877, Time = 56.73s
-# 2025-10-26 06:26:48 - INFO - Epoch 1/5 completed
-# 2025-10-26 06:26:48 - INFO -   Train Loss: 6.7877
-# 2025-10-26 06:26:48 - INFO -   Val Loss: 5.9962
-# 2025-10-26 06:26:48 - INFO -   Epoch Time: 56.73s
-# 2025-10-26 06:26:48 - INFO -   Throughput: 0.81 batches/sec
-# Validation Loss: 5.9962
-
-# ======================================================================
-# Epoch 2/5
-# ======================================================================
-# Epoch 1, Batch 0/46, Time: 0.00s
-
-# Epoch 1 completed: Avg Loss = 5.9135, Time = 58.28s
-# 2025-10-26 06:27:51 - INFO - Epoch 2/5 completed
-# 2025-10-26 06:27:51 - INFO -   Train Loss: 5.9135
-# 2025-10-26 06:27:51 - INFO -   Val Loss: 5.6089
-# 2025-10-26 06:27:51 - INFO -   Epoch Time: 58.28s
-# 2025-10-26 06:27:51 - INFO -   Throughput: 0.79 batches/sec
-# Validation Loss: 5.6089
-
-# ======================================================================
-# Epoch 3/5
-# ======================================================================
-# Epoch 2, Batch 0/46, Time: 0.00s
-
-# Epoch 2 completed: Avg Loss = 5.5273, Time = 58.20s
-# 2025-10-26 06:28:54 - INFO - Epoch 3/5 completed
-# 2025-10-26 06:28:54 - INFO -   Train Loss: 5.5273
-# 2025-10-26 06:28:54 - INFO -   Val Loss: 5.4233
-# 2025-10-26 06:28:54 - INFO -   Epoch Time: 58.20s
-# 2025-10-26 06:28:54 - INFO -   Throughput: 0.79 batches/sec
-# Validation Loss: 5.4233
-
-# ======================================================================
-# Epoch 4/5
-# ======================================================================
-# Epoch 3, Batch 0/46, Time: 0.00s
-
-# Epoch 3 completed: Avg Loss = 5.3262, Time = 58.26s
-# 2025-10-26 06:29:58 - INFO - Epoch 4/5 completed
-# 2025-10-26 06:29:58 - INFO -   Train Loss: 5.3262
-# 2025-10-26 06:29:58 - INFO -   Val Loss: 5.3796
-# 2025-10-26 06:29:58 - INFO -   Epoch Time: 58.26s
-# 2025-10-26 06:29:58 - INFO -   Throughput: 0.79 batches/sec
-# Validation Loss: 5.3796
-
-# ======================================================================
-# Epoch 5/5
-# ======================================================================
-# Epoch 4, Batch 0/46, Time: 0.00s
-
-# Epoch 4 completed: Avg Loss = 5.2410, Time = 58.22s
-# 2025-10-26 06:31:01 - INFO - Epoch 5/5 completed
-# 2025-10-26 06:31:01 - INFO -   Train Loss: 5.2410
-# 2025-10-26 06:31:01 - INFO -   Val Loss: 5.4012
-# 2025-10-26 06:31:01 - INFO -   Epoch Time: 58.22s
-# 2025-10-26 06:31:01 - INFO -   Throughput: 0.79 batches/sec
-# Validation Loss: 5.4012
-
-# ======================================================================
-# TRAINING COMPLETED!
-# ======================================================================
 
 # In[ ]:
 
