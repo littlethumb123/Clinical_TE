@@ -41,7 +41,7 @@ References:
 get_ipython().system('pip install xformers')
 
 
-# In[23]:
+# In[1]:
 
 
 # Test with T4-compatible settings
@@ -372,7 +372,7 @@ class SwiGLU(nn.Module):
 
 
 
-# In[22]:
+# In[3]:
 
 
 # ============================================================================
@@ -739,15 +739,34 @@ class FlashClinicalTransformer(nn.Module):
         # ---- Daily Code Encoder (Standard) ----
         # Keep standard transformer for daily encoder (sequences are short: 80 codes)
         # Flash Attention benefit is minimal for N < 100
-        
-        encoder_layer_cd = TransformerEncoderLayer(
-            d_model=config.embedding_size,
-            nhead=4,  # 4 heads for daily encoder
-            dim_feedforward=config.embedding_size,
-            dropout=0.0,
-            batch_first=False
-        )
-        self.transformer_encoder_cd = TransformerEncoder(encoder_layer_cd, num_layers=1)
+        if config.use_flash:
+            # Use Flash Attention for daily encoder
+            daily_config = FlashAttentionConfig(
+                embedding_size=config.embedding_size,
+                nhead=4,  # 4 heads for daily encoder
+                nlayers=1,
+                nhid=config.embedding_size,
+                dropout=0.0,
+                len_dy=config.len_cd,  # Sequence length = 80
+                use_flash=True,
+                use_rope=False,  # No need for position encoding in daily codes
+                use_swiglu=config.use_swiglu,
+                use_prenorm=config.use_prenorm,
+                dtype=config.dtype
+            )
+
+            # Single layer encoder
+            self.transformer_encoder_cd = FlashAttentionEncoderLayer(daily_config)
+        else:
+            # Fallback to standard
+            encoder_layer_cd = TransformerEncoderLayer(
+                d_model=config.embedding_size,
+                nhead=4,
+                dim_feedforward=config.embedding_size,
+                dropout=0.0,
+                batch_first=False
+            )
+            self.transformer_encoder_cd = TransformerEncoder(encoder_layer_cd, num_layers=1)
         
         # ---- Temporal Encoder (Flash Attention) ----
         # This is the critical path - 200 day sequences benefit greatly from Flash
@@ -849,7 +868,7 @@ class FlashClinicalTransformer(nn.Module):
         return predictions
 
 
-# In[19]:
+# In[4]:
 
 
 # ============================================================================
@@ -1251,7 +1270,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[8]:
+# In[5]:
 
 
 """
@@ -1581,7 +1600,7 @@ def validate_epoch(
 
 # #### Load data
 
-# In[9]:
+# In[6]:
 
 
 import logging
@@ -1613,7 +1632,7 @@ input_data = client.query(input_sql).to_dataframe()
 input_data.head()
 
 
-# In[10]:
+# In[7]:
 
 
 import pandas as pd
@@ -1627,7 +1646,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_2000.feather")
 df_train.head()
 
 
-# In[13]:
+# In[8]:
 
 
 import torch
@@ -2022,7 +2041,7 @@ print("="*70)
 
 # ### Benchmark
 
-# In[25]:
+# In[9]:
 
 
 # =============================================================================
@@ -2482,7 +2501,7 @@ def run_comparison_benchmark(
     print("\n" + "="*70)
     print("CREATING BASELINE MODEL (Standard Attention)")
     print("="*70)
-    model_dense = FlashClinicalTransformer(config_base).to(device).to(config_base.dtype)
+    model_dense = FlashClinicalTransformer(config_base).to(device)
     
     metrics_dense = benchmark.benchmark_model(
         model_name="Standard Attention",
@@ -2533,7 +2552,7 @@ def run_comparison_benchmark(
     
 
 
-# In[26]:
+# In[10]:
 
 
 # Option 1: Quick comparison on subset (recommended for testing)

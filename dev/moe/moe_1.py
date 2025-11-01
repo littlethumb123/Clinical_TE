@@ -43,13 +43,91 @@ from collections import Counter
 import time
 
 
-# In[2]:
+# In[4]:
 
 
 # ============================================================================
-# SECTION 1: CONFIGURATION
+# SECTION 1: CONFIGURATION CLASSES
 # ============================================================================
 
+
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class DataConfig:
+    """
+    Configuration for data loading and preprocessing.
+    """
+    # Column names in your DataFrame
+    input_code_column: str = 'cd'           # Input medical codes
+    target_code_column: str = 'target_cd'   # Target codes (YOUR COLUMN NAME!)
+    age_column: str = 'age_in_months'
+    gender_column: str = 'gender_cd'
+    dt_cnt_column: str = 'dt_cnt'
+    id_column: str = 'individual_id'
+    
+    # Sequence parameters
+    len_dy: int = 70        # Max days per sequence (check your data!)
+    len_cd: int = 25        # Max codes per day (check your data!)
+    max_age: int = 1439     # Max age in months (120 years)
+    
+    # Data paths (optional)
+    train_query: Optional[str] = None
+    val_query: Optional[str] = None
+    test_query: Optional[str] = None
+
+    
+@dataclass
+class ModelConfig:
+    """
+    Configuration for model architecture (excluding MoE).
+    """
+    # Vocabulary sizes
+    cd_cnt: int = 84010              # Input code vocabulary size
+    target_cd_cnt: int = 8850        # Target code vocabulary (YOUR VALUE!)
+    
+    # Architecture
+    embedding_size: int = 256
+    nhead: int = 16                  # Attention heads for temporal encoder
+    nhid: int = 512                  # FFN hidden dimension
+    nlayers: int = 6                 # Number of temporal layers
+    dropout: float = 0.1
+    
+    # MoE placement
+    use_moe_from_layer: int = 2      # Which layer to start MoE (0-5)
+    
+    # Embeddings
+    num_gender_categories: int = 4   # Gender embedding vocab    
+
+
+@dataclass
+class TrainingConfig:
+    """
+    Configuration for training hyperparameters.
+    """
+    # Optimization
+    batch_size: int = 128
+    learning_rate: float = 1e-4
+    weight_decay: float = 0.01
+    epochs: int = 1
+    
+    # Scheduler
+    scheduler_type: str = 'cosine'   # 'cosine', 'step', 'none'
+    warmup_steps: int = 0
+    
+    # Regularization
+    gradient_clip_norm: float = 1.0
+    
+    # Logging
+    log_interval: int = 100          # Batches between logging
+    eval_frequency: int = 1          # Epochs between evaluation
+    
+    # Device & Parallelism
+    device: str = 'cuda'  # ← Changed from 'cuda:0'
+    parallel: bool = True  # ← Enable DataParallel
+    num_gpus: int = 4      # ← Number of GPUs to use
+    
 @dataclass
 class MoEConfig:
     """
@@ -87,6 +165,13 @@ class MoEConfig:
     # Optional
     z_loss_weight: float = 0.0
 
+
+# In[6]:
+
+
+# ============================================================================
+# SECTION 1: CONFIGURATION
+# ============================================================================
 
 def get_experiment_configs() -> Dict[str, Optional[MoEConfig]]:
     """
@@ -329,7 +414,7 @@ class DeepSeekBiasCorrection(nn.Module):
             self.expert_bias -= self.bias_lr * bias_gradient
 
 
-# In[3]:
+# In[7]:
 
 
 # ============================================================================
@@ -621,7 +706,7 @@ class MoETransformerEncoderLayer(nn.Module):
         return src, moe_losses
 
 
-# In[4]:
+# In[8]:
 
 
 # ============================================================================
@@ -638,7 +723,7 @@ class HierarchicalMoETransformer(nn.Module):
            → Layers 2-5 replaced with MoE for conditional computation
            
     Input: [batch, 200 days, 82 features] where features = [age, gender, 80 medical codes]
-    Output: [batch, 200 days, 2767 target codes] - next code predictions
+    Output: [batch, 200 days, 8849 target codes] - next code predictions
     
     Key Design Decisions:
         - Daily encoder stays dense (simple aggregation, doesn't need specialization)
@@ -646,16 +731,19 @@ class HierarchicalMoETransformer(nn.Module):
         - Temporal encoder layers 2-5 use MoE (learn specialized patient trajectories)
     """
     
-    def __init__(self, cd_cnt: int, target_cd_cnt: int, embedding_size: int = 256,
+    def __init__(self, cd_cnt: int, 
+                 target_cd_cnt: int, 
+                 embedding_size: int = 256,
                  moe_config: Optional[MoEConfig] = None,
                  use_moe_from_layer: int = 2,
-                 nlayers: int = 6, nhead: int = 16, dropout: float = 0.1):
-        """
+                 nlayers: int = 6, nhead: int = 16, dropout: float = 0.1,
+                 len_dy: int = 200, len_cd: int = 80):
+        """50
         Initialize hierarchical MoE transformer.
         
         Args:
             cd_cnt: Size of medical code vocabulary (84010 in data)
-            target_cd_cnt: Number of target prediction classes (2767 in data)
+            target_cd_cnt: Number of target prediction classes (2767 original in data, test data is 8850)
             embedding_size: Embedding dimension (256)
             moe_config: MoEConfig for temporal encoder (None for dense baseline)
             use_moe_from_layer: Which temporal layer to start using MoE (2 = layers 2-5)
@@ -666,8 +754,8 @@ class HierarchicalMoETransformer(nn.Module):
         super().__init__()
         
         self.embedding_size = embedding_size
-        self.len_dy = 200  # Sequence length in days
-        self.len_cd = 80   # Max codes per day
+        self.len_dy = len_dy  # Sequence length in days
+        self.len_cd = len_cd   # Max codes per day
         self.use_moe_from_layer = use_moe_from_layer
         
         # === EMBEDDINGS ===
@@ -809,7 +897,6 @@ class HierarchicalMoETransformer(nn.Module):
         cd = self.norm(cd)
         cd = self.dropout(cd)
         cd = self.decoder_cd(cd)  # [batch, 200, target_cd_cnt]
-        cd = F.log_softmax(cd, dim=-1)
         
         if return_moe_losses and self.training:
             moe_losses = {
@@ -822,157 +909,7 @@ class HierarchicalMoETransformer(nn.Module):
         return cd, {}
 
 
-# In[5]:
-
-
-# ============================================================================
-# SECTION 5: EVALUATION METRICS
-# ============================================================================
-
-def compute_comprehensive_internal_metrics(
-    model: nn.Module,
-    val_data: pd.DataFrame,
-    prepare_tensor_fn,
-    criterion: nn.Module,
-    device: torch.device,
-    code_frequencies: np.ndarray,
-    batch_size: int = 16
-) -> Dict[str, float]:
-    """
-    Compute comprehensive internal evaluation metrics for medical code prediction.
-    
-    Healthcare-Optimized Metrics:
-        - Top-K Accuracy (K=1,5,10,20): Clinical utility - "correct code in top-K suggestions"
-        - MRR (Mean Reciprocal Rank): Ranking quality across all predictions
-        - Stratified Performance: Common vs. Rare vs. Tail code accuracy
-        - Validation NLL: Optimization objective
-        - Perplexity: For literature comparison (secondary metric)
-        
-    Why NOT just perplexity?
-        - Perplexity averages over all codes equally (doesn't highlight rare code performance)
-        - Clinical reality: rare codes (sepsis, MI) often most important
-        - Top-K matches clinical workflow: doctors review multiple suggestions
-        
-    Reference:
-        BEHRT (Li et al. 2020) - uses Top-K as primary metric for clinical transformers
-        
-    Args:
-        model: Trained model (dense or MoE)
-        val_data: Validation DataFrame
-        prepare_tensor_fn: Function to convert DataFrame rows to tensors
-        criterion: Loss function (nn.NLLLoss)
-        device: Torch device
-        code_frequencies: [target_cd_cnt] frequency of each code in training data
-        batch_size: Batch size for evaluation
-        
-    Returns:
-        metrics: Dictionary with all internal metrics
-    """
-    model.eval()
-    
-    all_predictions = []  # Log probabilities
-    all_targets = []      # True code indices
-    total_nll = 0.0
-    num_predictions = 0
-    
-    with torch.no_grad():
-        nbatch = len(val_data) // batch_size
-        
-        for i in range(nbatch):
-            batch = val_data.iloc[i*batch_size:(i+1)*batch_size]
-            dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)
-            
-            # Forward pass
-            if isinstance(model, HierarchicalMoETransformer):
-                opt, _ = model(x, return_moe_losses=False)
-            else:
-                opt = model(x)
-            
-            # Reshape for loss computation
-            opt = opt.reshape(batch_size * 200, -1)
-            y_list = [item for sublist in y for item in sublist]
-            opt = torch.cat([opt[200*j:200*j+dt_cnt[j], :] for j in range(batch_size)], dim=0)
-            y_tensor = torch.tensor(y_list, dtype=torch.long).to(device)
-            
-            # Compute NLL
-            nll = criterion(opt, y_tensor)
-            total_nll += nll.item() * len(y_tensor)
-            num_predictions += len(y_tensor)
-            
-            # Store for ranking metrics
-            all_predictions.append(opt.cpu())
-            all_targets.extend(y_list)
-    
-    # Aggregate predictions
-    val_nll = total_nll / num_predictions
-    all_predictions = torch.cat(all_predictions)  # [num_predictions, target_cd_cnt]
-    all_targets = torch.tensor(all_targets)        # [num_predictions]
-    
-    # === TOP-K ACCURACY (PRIMARY CLINICAL METRIC) ===
-    # For each prediction day:
-    # - Get top-K predicted codes
-    # - Check if ANY of the true codes (from multi-hot) appear in top-K
-        top_k_results = {}
-    for k in [1, 5, 10, 20]:
-        top_k_preds = torch.topk(all_predictions, k, dim=-1).indices
-        in_top_k = (top_k_preds == all_targets.unsqueeze(1)).any(dim=1)
-        for i in range(len(all_targets)):
-            true_codes = all_targets[i].nonzero(as_tuple=True)[0]  # Get all non-zero positions
-            if len(true_codes) > 0:
-                # Check if any true code is in top-K predictions
-                in_top_k[i] = (top_k_preds[i].unsqueeze(0) == true_codes.unsqueeze(1)).any()
-        top_k_results[f'top_{k}_acc'] = in_top_k.float().mean().item()
-    
-    # === MEAN RECIPROCAL RANK ===
-    sorted_indices = torch.argsort(all_predictions, dim=-1, descending=True)
-    reciprocal_ranks = []
-    for i in range(len(all_targets)):
-        rank = (sorted_indices[i] == all_targets[i]).nonzero(as_tuple=True)[0].item() + 1
-        reciprocal_ranks.append(1.0 / rank)
-    mrr = np.mean(reciprocal_ranks)
-    
-    # === STRATIFIED PERFORMANCE (RARE CODE ANALYSIS) ===
-    freq_percentiles = np.percentile(code_frequencies, [10, 50, 80])
-    target_freqs = code_frequencies[all_targets.numpy()]
-    
-    # Masks for different code frequency tiers
-    common_mask = target_freqs > freq_percentiles[2]  # Top 20% most frequent
-    rare_mask = target_freqs < freq_percentiles[1]    # Bottom 50%
-    tail_mask = target_freqs < freq_percentiles[0]    # Bottom 10% (very rare)
-    
-    # Top-10 accuracy for each tier
-    top_10_preds = torch.topk(all_predictions, 10, dim=-1).indices
-    correct_in_top10 = (top_10_preds == all_targets.unsqueeze(1)).any(dim=1)
-    
-    stratified = {
-        'common_codes_top10': correct_in_top10[common_mask].float().mean().item() if common_mask.any() else 0,
-        'rare_codes_top10': correct_in_top10[rare_mask].float().mean().item() if rare_mask.any() else 0,
-        'tail_codes_top10': correct_in_top10[tail_mask].float().mean().item() if tail_mask.any() else 0,
-    }
-    
-    # === COMBINE ALL METRICS ===
-    metrics = {
-        # Primary metrics (clinical decision-making)
-        'val_nll': val_nll,
-        'top_1_acc': top_k_results['top_1_acc'],
-        'top_5_acc': top_k_results['top_5_acc'],
-        'top_10_acc': top_k_results['top_10_acc'],
-        'top_20_acc': top_k_results['top_20_acc'],
-        'mrr': mrr,
-        
-        # Stratified performance (critical for healthcare)
-        'common_codes_top10': stratified['common_codes_top10'],
-        'rare_codes_top10': stratified['rare_codes_top10'],
-        'tail_codes_top10': stratified['tail_codes_top10'],
-        
-        # Secondary metric (literature comparison)
-        'perplexity': np.exp(val_nll),
-    }
-    
-    return metrics
-
-
-# In[6]:
+# In[9]:
 
 
 def compute_moe_specific_metrics(
@@ -1009,7 +946,7 @@ def compute_moe_specific_metrics(
         
         for i in range(nbatch):
             batch = val_data.iloc[i*batch_size:(i+1)*batch_size]
-            dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)
+            dt_cnt, x, y = prepare_tensor_fn(batch, device)
             
             # Forward pass
             _, moe_losses = model(x, return_moe_losses=True)
@@ -1034,390 +971,7 @@ def compute_moe_specific_metrics(
     return metrics
 
 
-# In[ ]:
-
-
-
-
-
-# In[7]:
-
-
-# ============================================================================
-# SECTION 6: TRAINING LOOP
-# ============================================================================
-
-def train_epoch(
-    model: nn.Module,
-    train_data: pd.DataFrame,
-    prepare_tensor_fn,
-    optimizer: optim.Optimizer,
-    criterion: nn.Module,
-    device: torch.device,
-    batch_size: int,
-    moe_config: Optional[MoEConfig],
-    epoch: int,
-    log_interval: int = 100
-) -> Dict[str, float]:
-    """
-    Train model for one epoch.
-    
-    Args:
-        model: Model to train
-        train_data: Training DataFrame
-        prepare_tensor_fn: Function to prepare tensors from DataFrame
-        optimizer: Optimizer
-        criterion: Loss function
-        device: Torch device
-        batch_size: Batch size
-        moe_config: MoE configuration (None for dense)
-        epoch: Current epoch number
-        log_interval: Batches between logging
-        
-    Returns:
-        metrics: Dictionary with training metrics
-    """
-    model.train()
-    nbatch = len(train_data) // batch_size
-    
-    total_pred_loss = 0.0
-    total_aux_loss = 0.0
-    total_loss_sum = 0.0
-    
-    for i in range(nbatch):
-        if i % 1000 == 0:
-            print(f'  Epoch {epoch}, Batch {i}/{nbatch}')
-        
-        optimizer.zero_grad()
-        
-        # Prepare batch
-        batch = train_data.iloc[i*batch_size:(i+1)*batch_size]
-        dt_cnt, x, y, day_indices = prepare_tensor_fn(batch, device)  # ← NOW RETURNS day_indices
-        
-        # Forward pass
-        is_moe = isinstance(model, HierarchicalMoETransformer)
-        if is_moe:
-            opt, moe_losses = model(x, return_moe_losses=True)
-        else:
-            opt = model(x)
-            moe_losses = {'aux_loss': torch.tensor(0.0, device=device)}
-        
-        opt = opt.reshape(batch_size * len_dy, target_cd_cnt)  # Use len_dy, not hardcoded 200
-        y = [item for sublist in y for item in sublist]  # Flatten: [[codes_day0], [codes_day1], ...] → [codes_day0, codes_day1, ...]
-        opt = torch.cat([opt[len_dy*j:len_dy*j+dt_cnt[j], :] for j in range(batch_size)], dim=0)
-        
-        # Create multi-hot encoding
-        y_cd = torch.zeros(len(opt), target_cd_cnt).to(device)  # [num_days, target_cd_cnt]
-
-        for j in range(len(opt)):
-            for k in y[j]:  # y[j] is a LIST of codes (could be multiple per day)
-                if k != 0:
-                    y_cd[j, k] = 1  # Multi-hot: multiple 1s possible
-
-        pred_loss = criterion(opt, y_cd)  # BCEWithLogitsLoss expects multi-hot
-        
-        # MoE auxiliary loss
-        aux_loss = moe_losses['aux_loss']
-        
-        # Total loss
-        if moe_config and moe_config.load_balance_strategy == 'switch':
-            total_loss = pred_loss + moe_config.aux_loss_weight * aux_loss
-        else:
-            total_loss = pred_loss
-        
-        total_loss.backward()
-        
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        
-        optimizer.step()
-        
-        # Track metrics
-        total_pred_loss += pred_loss.item()
-        total_aux_loss += aux_loss.item()
-        total_loss_sum += total_loss.item()
-        
-        # Log periodically
-        if i % log_interval == 0 and i > 0:
-            avg_pred = total_pred_loss / log_interval
-            avg_aux = total_aux_loss / log_interval
-            avg_total = total_loss_sum / log_interval
-            print(f'    Pred Loss: {avg_pred:.4f}, Aux Loss: {avg_aux:.4f}, Total: {avg_total:.4f}')
-            
-            if 'expert_usage' in moe_losses:
-                usage = moe_losses['expert_usage'].cpu().numpy()
-                print(f'    Expert Usage: {usage}')
-                usage_std = usage.std()
-                if usage_std > 0.1:
-                    print(f'    ⚠️ WARNING: Expert imbalance (std={usage_std:.4f})')
-            
-            total_pred_loss = 0.0
-            total_aux_loss = 0.0
-            total_loss_sum = 0.0
-    
-    return {
-        'train_loss': total_loss_sum / nbatch if nbatch > 0 else 0.0
-    }
-
-
-# In[11]:
-
-
-def run_single_experiment(
-    exp_name: str,
-    moe_config: Optional[MoEConfig],
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    prepare_tensor_fn,
-    model_params: Dict,
-    training_params: Dict,
-    code_frequencies: np.ndarray,
-    device: torch.device
-) -> Tuple[nn.Module, Dict[str, float]]:
-    """
-    Run a single experiment (one of the 5 configurations).
-    
-    Args:
-        exp_name: Experiment name
-        moe_config: MoE configuration (None for dense baseline)
-        train_data: Training DataFrame
-        val_data: Validation DataFrame  
-        prepare_tensor_fn: Tensor preparation function
-        model_params: Model hyperparameters (cd_cnt, target_cd_cnt, etc.)
-        training_params: Training hyperparameters (lr, epochs, etc.)
-        code_frequencies: Code frequency array for stratified evaluation
-        device: Torch device
-        
-    Returns:
-        model: Trained model
-        metrics: Final evaluation metrics
-    """
-    print(f"\n{'='*80}")
-    print(f"EXPERIMENT: {exp_name}")
-    print(f"{'='*80}")
-    
-    # Create model
-    if moe_config is None:
-        # Dense baseline - would use original TransformerModel from min_transformer.py
-        # For this implementation, we use HierarchicalMoETransformer without MoE
-        print("Model: Dense Baseline (no MoE)")
-        model = HierarchicalMoETransformer(
-            cd_cnt=model_params['cd_cnt'],
-            target_cd_cnt=model_params['target_cd_cnt'],
-            embedding_size=model_params['embedding_size'],
-            moe_config=None,
-            use_moe_from_layer=999,  # Never use MoE
-            nlayers=6,
-            nhead=16,
-            dropout=0.1
-        ).to(device)
-    else:
-        print(f"Model: MoE - {moe_config.num_experts} experts, "
-              f"{moe_config.num_shared_experts} shared, top-{moe_config.top_k}")
-        model = HierarchicalMoETransformer(
-            cd_cnt=model_params['cd_cnt'],
-            target_cd_cnt=model_params['target_cd_cnt'],
-            embedding_size=model_params['embedding_size'],
-            moe_config=moe_config,
-            use_moe_from_layer=2,
-            nlayers=6,
-            nhead=16,
-            dropout=0.1
-        ).to(device)
-    
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total parameters: {total_params:,}")
-    
-    # Optimizer and criterion
-    optimizer = optim.AdamW(model.parameters(), 
-                           lr=training_params['lr'], 
-                           weight_decay=training_params['weight_decay'])
-    
-    # The task is multi-label code prediction (multiple codes per day), 
-    # not single-label. NLLLoss expects integer class indices; BCEWithLogitsLoss expects multi-hot vectors.
-    criterion = nn.BCEWithLogitsLoss()
-    
-    # Training loop
-    print(f"\nTraining for {training_params['epochs']} epochs...")
-    training_metrics = []
-    
-    for epoch in range(training_params['epochs']):
-        print(f"\nEpoch {epoch+1}/{training_params['epochs']}")
-        
-       # Create wrapped prepare_tensor function with prediction mode and target_cd_cnt
-        def prepare_tensor_with_mode(batch, device):
-            return prepare_tensor_fn(batch, device, prediction_mode, model_params['target_cd_cnt'])
-        
-        
-        # Train
-        train_metrics = train_epoch(
-            model, train_data, prepare_tensor_fn, optimizer, criterion,
-            device, training_params['batch_size'], moe_config, epoch+1
-        )
-        
-        # Evaluate
-        print("  Evaluating...")
-        internal_metrics = compute_comprehensive_internal_metrics(
-            model, val_data, prepare_tensor_fn, criterion, device, 
-            code_frequencies, training_params['batch_size']
-        )
-        
-        # MoE-specific metrics
-        moe_metrics = None
-        if moe_config is not None:
-            moe_metrics = compute_moe_specific_metrics(
-                model, val_data, prepare_tensor_fn, device, training_params['batch_size']
-            )
-        
-        # Display key metrics
-        print(f"\n  PRIMARY METRICS:")
-        print(f"    Val NLL:         {internal_metrics['val_nll']:.4f}")
-        print(f"    Top-5 Acc:       {internal_metrics['top_5_acc']:.3f} ⭐")
-        print(f"    Top-10 Acc:      {internal_metrics['top_10_acc']:.3f} ⭐")
-        print(f"    MRR:             {internal_metrics['mrr']:.4f} ⭐")
-        print(f"  STRATIFIED (Top-10):")
-        print(f"    Common Codes:    {internal_metrics['common_codes_top10']:.3f}")
-        print(f"    Rare Codes:      {internal_metrics['rare_codes_top10']:.3f}")
-        print(f"    Tail Codes:      {internal_metrics['tail_codes_top10']:.3f} ⭐")
-        
-        if moe_metrics:
-            print(f"  MoE METRICS:")
-            print(f"    Balance Score:   {moe_metrics['balance_score']:.4f}")
-            print(f"    Expert Loads:    {moe_metrics['expert_loads']}")
-            if moe_metrics['expert_collapse']:
-                print(f"    ⚠️ WARNING: Expert collapse detected!")
-        
-        # Store metrics
-        epoch_metrics = {
-            'epoch': epoch + 1,
-            'train_loss': train_metrics['train_loss'],
-            **internal_metrics
-        }
-        if moe_metrics:
-            epoch_metrics.update({
-                'expert_balance': moe_metrics['balance_score'],
-                'expert_collapse': moe_metrics['expert_collapse']
-            })
-        training_metrics.append(epoch_metrics)
-    
-    # Final metrics
-    final_metrics = training_metrics[-1]
-    
-    print(f"\n{'='*80}")
-    print(f"EXPERIMENT COMPLETE: {exp_name}")
-    print(f"{'='*80}")
-    print(f"Final Top-10 Accuracy: {final_metrics['top_10_acc']:.3f}")
-    print(f"Final Tail Code Top-10: {final_metrics['tail_codes_top10']:.3f}")
-    print(f"Final Val NLL: {final_metrics['val_nll']:.4f}")
-    
-    return model, final_metrics
-
-
-def run_all_experiments(
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    prepare_tensor_fn,
-    model_params: Dict,
-    training_params: Dict,
-    device: torch.device
-) -> Dict[str, Tuple[nn.Module, Dict]]:
-    """
-    Run all 5 experiments and compare results.
-    
-    Args:
-        train_data: Training DataFrame
-        val_data: Validation DataFrame
-        prepare_tensor_fn: Tensor preparation function
-        model_params: Model hyperparameters
-        training_params: Training hyperparameters
-        device: Torch device
-        
-    Returns:
-        results: Dictionary mapping experiment name to (model, metrics)
-    """
-    print("\n" + "="*80)
-    print("STARTING 5-EXPERIMENT ABLATION STUDY")
-    print("="*80)
-    
-    # Prepare code frequencies for stratified evaluation
-    print("\nPreparing code frequencies...")
-    code_frequencies = np.zeros(model_params['target_cd_cnt'])
-    nbatch = len(train_data) // training_params['batch_size']
-    train_code_counts = Counter()
-    
-    for i in range(min(nbatch, 1000)):  # Sample for efficiency
-        batch = train_data.iloc[i*training_params['batch_size']:(i+1)*training_params['batch_size']]
-        _, _, y, _ = prepare_tensor_fn(batch, device, 'same_day', model_params['target_cd_cnt'])
-        y_flat = [item for sublist in y for item in sublist]
-        train_code_counts.update(y_flat)
-    
-    for code_idx, count in train_code_counts.items():
-        if code_idx < len(code_frequencies):
-            code_frequencies[code_idx] = count
-    
-    print(f"Computed frequencies for {len(train_code_counts)} unique codes")
-    
-    # Get experiment configurations
-    configs = get_experiment_configs()
-    
-    # Run all experiments
-    results = {}
-    all_metrics = []
-    
-    for exp_name, moe_config in configs.items():
-        start_time = time.time()
-        
-        model, metrics = run_single_experiment(
-            exp_name=exp_name,
-            moe_config=moe_config,
-            train_data=train_data,
-            val_data=val_data,
-            prepare_tensor_fn=prepare_tensor_fn,
-            model_params=model_params,
-            training_params=training_params,
-            code_frequencies=code_frequencies,
-            device=device
-        )
-        
-        elapsed = time.time() - start_time
-        metrics['training_time_seconds'] = elapsed
-        metrics['experiment'] = exp_name
-        
-        results[exp_name] = (model, metrics)
-        all_metrics.append(metrics)
-    
-    # === FINAL COMPARISON ===
-    print("\n" + "="*80)
-    print("FINAL COMPARISON: ALL 5 EXPERIMENTS")
-    print("="*80)
-    
-    comparison_df = pd.DataFrame(all_metrics)
-    comparison_df = comparison_df.set_index('experiment')
-    
-    # Display key metrics
-    key_metrics = ['top_10_acc', 'tail_codes_top10', 'mrr', 'val_nll', 'top_5_acc']
-    print("\nPrimary Metrics:")
-    print(comparison_df[key_metrics].to_string())
-    
-    # Rank experiments
-    comparison_df['rank_top10'] = comparison_df['top_10_acc'].rank(ascending=False)
-    comparison_df['rank_tail'] = comparison_df['tail_codes_top10'].rank(ascending=False)
-    comparison_df['rank_nll'] = comparison_df['val_nll'].rank()  # Lower is better
-    comparison_df['overall_rank'] = (comparison_df['rank_top10'] + 
-                                     comparison_df['rank_tail'] + 
-                                     comparison_df['rank_nll']) / 3
-    
-    comparison_df = comparison_df.sort_values('overall_rank')
-    
-    print("\n" + "="*80)
-    print("OVERALL RANKING")
-    print("="*80)
-    print(comparison_df[['top_10_acc', 'tail_codes_top10', 'val_nll', 'overall_rank']].to_string())
-    
-    return results
-
-
-# In[12]:
+# In[10]:
 
 
 # Add these helper functions after the imports in moe_experiments.py
@@ -1427,7 +981,7 @@ def run_all_experiments(
 # DATA PREPARATION FUNCTIONS
 # ============================================================================
 
-def conv_cd(ipt: str, len_dy: int = 200, len_cd: int = 80) -> List[List[int]]:
+def conv_cd(ipt: str, data_config: DataConfig) -> List[List[int]]:
     """
     Convert code string to 2D list of integers.
     
@@ -1445,15 +999,16 @@ def conv_cd(ipt: str, len_dy: int = 200, len_cd: int = 80) -> List[List[int]]:
         "1,2,3*4,5*6" -> [[1,2,3,0,...], [4,5,0,...], [6,0,...], [0,0,...], ...]
     """
     ipt = ipt.split('*')
-    ipt = ipt[:len_dy]
-    ipt = ipt + (len_dy - len(ipt)) * ['']
+    ipt = ipt[:data_config.len_dy]
+    ipt = ipt + (data_config.len_dy - len(ipt)) * ['']
     ipt = [dy.split(',') for dy in ipt]
     ipt = [[int(cd) if cd != '' else 0 for cd in dy] for dy in ipt]
-    ipt = [dy + (len_cd - len(dy)) * [0] for dy in ipt]
-    return ipt  # [len_dy, len_cd]
+    ipt = [dy + (data_config.len_cd - len(dy)) * [0] for dy in ipt]
+    return ipt
 
 
-def conv_age_gender(ipt: str, len_dy: int = 200, max_age: int = 1439) -> List[int]:
+
+def conv_age_gender(ipt: str, data_config: DataConfig) -> List[int]:
     """
     Convert age/gender string to list of integers.
     
@@ -1471,23 +1026,52 @@ def conv_age_gender(ipt: str, len_dy: int = 200, max_age: int = 1439) -> List[in
         "360*361*362" -> [360, 361, 362, 0, 0, ...] (up to 200 values)
     """
     ipt = ipt.split('*')
-    ipt = ipt[:len_dy]
-    ipt = [min(int(cd), 1439) for cd in ipt]  # Clip age to max 1439 months
-    ipt = ipt + (len_dy - len(ipt)) * [0]
-    return ipt  # [len_dy]
+    ipt = ipt[:data_config.len_dy]
+    ipt = [min(int(cd), data_config.max_age) for cd in ipt]
+    ipt = ipt + (data_config.len_dy - len(ipt)) * [0]
+    return ipt
 
 
-def conv_target(target, len_dy=200):
-    """Parse target codes string into nested list (multiple codes per day)."""
+def conv_target(target, data_config: DataConfig, model_config: ModelConfig):
+    """Parse target codes string into nested list (multiple codes per day).
+    
+    Args:
+        target: Target string "codes_day0*codes_day1*..."
+        data_config: DataConfig with len_dy
+    """
     target = target.split('*')
-    target = target[:len_dy]
-    target = [dy.split(',') for dy in target]  # Split codes within each day
-    target = [[int(cd) if cd != '' else 0 for cd in dy] for dy in target]
-    return target  # [[codes_day0], [codes_day1], ...] - nested list
+    target = target[:data_config.len_dy]
+    # Add pad to the days
+    target = target + (data_config.len_dy - len(target)) * ['']
+    target = [dy.split(',') for dy in target]
+    # Convert 1-indexed to 0-indexed
+    # Convert with strict bounds checking
+    result = []
+    for dy in target:
+        day_codes = []
+        for cd in dy:
+            if cd != '' and cd != '0':
+                code_idx = int(cd)  # 0 indexed cd
+                # Clip to valid range [0, target_cd_cnt]
+                if code_idx >= model_config.target_cd_cnt:
+                    # This should NEVER happen if target_cd_cnt is correct
+                    raise ValueError(
+                        f"Target code {code_idx} >= vocab size {model_config.target_cd_cnt}. "
+                        f"Max code seen: {max_seen}. "
+                        f"Fix: Set target_cd_cnt = {max_seen + 1}"
+                    )
+                day_codes.append(code_idx)
+            else:
+                day_codes.append(0)
+        result.append(day_codes if day_codes else [0])
+    
+    return result
 
 
-def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: str = 'same_day',
-                  target_cd_cnt: int = 2767) -> Tuple[List[int], torch.Tensor, List[List[int]], List[List[int]]]:
+def prepare_tensor(batch: pd.DataFrame, 
+                   device: torch.device,
+                   data_config: DataConfig,
+                   model_config: ModelConfig) -> Tuple[List[int], torch.Tensor, List[List[int]]]:
     """
     Prepare tensors from DataFrame batch for model input.
     
@@ -1503,46 +1087,95 @@ def prepare_tensor(batch: pd.DataFrame, device: torch.device, prediction_mode: s
     Args:
         batch: DataFrame with batch_size rows
         device: PyTorch device (cuda or cpu)
-        prediction_mode: 'same_day' or 'next_day'
-        target_cd_cnt: Number of target classes (for validation)
+        data_config: DataConfig with column names and sequence params
+        model_config: ModelConfig
         
     Returns:
         dt_cnt: List of actual day counts per sample in batch
         x: Tensor [batch_size, 200, 82] where 82 = [age, gender, 80 codes]
         y: List of lists, target codes for each sample (for loss computation)
-        day_indices: List of lists, day index for each target code
         
     Example shape:
-        batch_size=16, len_dy=200, len_cd=80
-        x shape: [16, 200, 82]
-        dt_cnt: [150, 180, 200, ...] (16 values)
-        y: [[code1, code2, ...], [code3, code4, ...], ...] (16 lists)
-        day_indices: [[0,0,1,1,2,...], [0,0,0,1,...], ...] (16 lists)
+        dt_cnt: List of actual day counts per sample
+        x: Tensor [batch_size, len_dy, 2+len_cd] where 2 = [age, gender]
+        y: List of lists, target codes [[day0_codes], [day1_codes], ...]
     """
     batch_size = len(batch)
     
     # Parse age
-    age_in_months = [conv_age_gender(ipt, len_dy) for ipt in batch['age_in_months'].tolist()]
+    age_in_months = [conv_age_gender(ipt, data_config) 
+                     for ipt in batch[data_config.age_column].tolist()]
     age_in_months = torch.tensor(age_in_months, dtype=torch.long).to(device)
-    age_in_months = age_in_months.reshape(batch_size, len_dy, 1)
+    age_in_months = age_in_months.reshape(batch_size, data_config.len_dy, 1)
     
     # Parse gender
-    gender_cd = [conv_age_gender(ipt, len_dy) for ipt in batch['gender_cd'].tolist()]
+    gender_cd = [conv_age_gender(ipt, data_config) 
+                 for ipt in batch[data_config.gender_column].tolist()]
     gender_cd = torch.tensor(gender_cd, dtype=torch.long).to(device)
-    gender_cd = gender_cd.reshape(batch_size, len_dy, 1)
+    gender_cd = gender_cd.reshape(batch_size, data_config.len_dy, 1)
     
     # Parse input codes
-    cd = [conv_cd(ipt, len_dy, len_cd) for ipt in batch['cd'].tolist()]
-    cd = torch.tensor(cd, dtype=torch.long).to(device)  # [batch, len_dy, len_cd]
+    cd = [conv_cd(ipt, data_config) 
+          for ipt in batch[data_config.input_code_column].tolist()]
+    cd = torch.tensor(cd, dtype=torch.long).to(device)
     
     # Concatenate: [batch, len_dy, 1+1+len_cd]
     x = torch.cat([age_in_months, gender_cd, cd], dim=-1)
     
     # Parse targets (nested list format)
-    dt_cnt = batch['dt_cnt'].tolist()
-    y = [conv_target(target, len_dy) for target in batch[target_column].tolist()]
+    dt_cnt = batch[data_config.dt_cnt_column].tolist()
+    y = [conv_target(target, data_config, model_config) 
+         for target in batch[data_config.target_code_column].tolist()]
     
     return dt_cnt, x, y
+
+def create_multihot_encoding(
+    y: List[List[int]], 
+    num_samples: int,
+    vocab_size: int,
+    device: torch.device,
+    validate: bool = True
+) -> torch.Tensor:
+    """
+    Create multi-hot encoding with optional validation.
+    
+    Args:
+        y: Nested list of target codes [[day0_codes], [day1_codes], ...]
+        num_samples: Number of samples (after dt_cnt filtering)
+        vocab_size: Target vocabulary size
+        device: PyTorch device
+        validate: Whether to validate code ranges (slower but safer)
+        
+    Returns:
+        y_cd: Multi-hot tensor [num_samples, vocab_size]
+    """
+    y_cd = torch.zeros(num_samples, vocab_size, device=device)
+    
+    invalid_count = 0
+    max_code_seen = 0
+    
+    for j in range(num_samples):
+        for k in y[j]:
+            if k == 0:
+                continue  # Skip padding
+            
+            max_code_seen = max(max_code_seen, k)
+            
+            if 0 < k < vocab_size:
+                y_cd[j, k] = 1
+            else:
+                invalid_count += 1
+                if validate and invalid_count == 1:
+                    raise ValueError(
+                        f"Code {k} out of bounds [0, {vocab_size}). "
+                        f"Max code: {max_code_seen}. "
+                        f"Increase target_cd_cnt to {max_code_seen + 1}"
+                    )
+    
+    if invalid_count > 0 and not validate:
+        print(f"    ⚠️ Skipped {invalid_count} out-of-bounds codes")
+    
+    return y_cd
 
 
 # ============================================================================
@@ -1629,6 +1262,833 @@ def benchmark_throughput(
     return samples_per_second
 
 
+# In[35]:
+
+
+# ============================================================================
+# SECTION 6: TRAINING LOOP
+# ============================================================================
+
+def train_epoch(
+    model: nn.Module,
+    train_data: pd.DataFrame,
+    optimizer: optim.Optimizer,
+    scheduler: Optional[optim.lr_scheduler._LRScheduler],  # ← Add this line!
+    criterion: nn.Module,
+    device: torch.device,
+    data_config: DataConfig,
+    model_config: ModelConfig,
+    training_config: TrainingConfig,
+    moe_config: Optional[MoEConfig],
+    epoch: int
+) -> Dict[str, float]:
+    """
+    Train model for one epoch.
+    
+    Args:
+        model: Model to train
+        train_data: Training DataFrame
+        prepare_tensor_fn: Function to prepare tensors from DataFrame
+        optimizer: Optimizer
+        criterion: Loss function
+        device: Torch device
+        batch_size: Batch size
+        moe_config: MoE configuration (None for dense)
+        epoch: Current epoch number
+        log_interval: Batches between logging
+        
+    Returns:
+        metrics: Dictionary with training metrics
+    """
+    model.train()
+    nbatch = len(train_data) // training_config.batch_size
+    
+    total_pred_loss = 0.0
+    total_aux_loss = 0.0
+    total_loss_sum = 0.0
+    
+    for i in range(nbatch):
+        if i % 1000 == 0:
+            print(f'  Epoch {epoch}, Batch {i}/{nbatch}')
+            # Report GPU memory usage for multiple GPUs
+            if device.type == 'cuda':
+                for gpu_id in range(torch.cuda.device_count()):
+                    allocated = torch.cuda.memory_allocated(gpu_id) / 1024**3
+                    reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
+                    print(f'    GPU {gpu_id}: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved')
+        
+        optimizer.zero_grad()
+        
+        # Prepare batch
+        batch = train_data.iloc[i*training_config.batch_size:
+                                (i+1)*training_config.batch_size]
+        dt_cnt, x, y = prepare_tensor(batch, device, data_config, model_config) 
+      
+        # Forward pass
+        is_moe = isinstance(model, HierarchicalMoETransformer)
+        if is_moe:
+            opt, moe_losses = model(x, return_moe_losses=True)
+        else:
+            opt, _ = model(x)
+            moe_losses = {'aux_loss': torch.tensor(0.0, device=device)}
+        
+        # Reshape outputs (using config values!)
+        opt = opt.reshape(training_config.batch_size * data_config.len_dy, 
+                         model_config.target_cd_cnt)
+        y = [item for sublist in y for item in sublist]  # Flatten: now length = batch*len_dy
+        # Filter opt by dt_cnt
+        opt = torch.cat([opt[data_config.len_dy*j:data_config.len_dy*j+dt_cnt[j], :] 
+                        for j in range(training_config.batch_size)], dim=0)
+        
+        # Create multi-hot encoding - iterate over filtered opt length
+        y_cd = torch.zeros(len(opt), model_config.target_cd_cnt, device=device)
+
+        for j in range(len(opt)):  # ← Use len(opt), not num_samples
+            # j corresponds to j-th filtered day across all patients
+            for k in y[j]:  # ← Access y directly (works because of consistent ordering)
+                if k != 0 and k < model_config.target_cd_cnt:
+                    y_cd[j, k] = 1
+                elif k >= model_config.target_cd_cnt:
+                    print(f"⚠️ Code {k} >= vocab {model_config.target_cd_cnt}")
+                    
+        # Compute loss
+        pred_loss = criterion(opt, y_cd)  # BCEWithLogitsLoss
+        aux_loss = moe_losses['aux_loss']
+        
+        # Total loss
+        if moe_config and moe_config.load_balance_strategy == 'switch':
+            total_loss = pred_loss + moe_config.aux_loss_weight * aux_loss
+        else:
+            total_loss = pred_loss
+        
+        total_loss.backward()
+        # gradient norm logging
+        total_grad_norm = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                total_grad_norm += p.grad.data.norm(2).item() ** 2
+        total_grad_norm = total_grad_norm ** 0.5
+        # track abnormal gradient norm
+        if total_grad_norm > training_config.gradient_clip_norm * 2:
+            print(f"    ⚠️ High gradient norm: {total_grad_norm:.2f}")
+            
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 
+                                      training_config.gradient_clip_norm)
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        
+        # Track metrics
+        total_pred_loss += pred_loss.item()
+        total_aux_loss += aux_loss.item()
+        total_loss_sum += total_loss.item()
+        
+        # Log periodically
+        if i % training_config.log_interval == 0 and i > 0:
+            avg_pred = total_pred_loss / training_config.log_interval
+            avg_aux = total_aux_loss / training_config.log_interval
+            avg_total = total_loss_sum / training_config.log_interval
+            print(f'    Pred Loss: {avg_pred:.4f}, Aux Loss: {avg_aux:.4f}, Total: {avg_total:.4f}')
+            
+            if 'expert_usage' in moe_losses:
+                usage = moe_losses['expert_usage'].cpu().numpy()
+                print(f'    Expert Usage: {usage}')
+                usage_std = usage.std()
+                if usage_std > 0.1:
+                    print(f'    ⚠️ WARNING: Expert imbalance (std={usage_std:.4f})')
+            
+            total_pred_loss = 0.0
+            total_aux_loss = 0.0
+            total_loss_sum = 0.0
+    
+    return {'train_loss': total_loss_sum / nbatch if nbatch > 0 else 0.0}
+
+
+# In[42]:
+
+
+# ============================================================================
+# SECTION 5: EVALUATION METRICS
+# ============================================================================
+
+def compute_comprehensive_internal_metrics(
+    model: nn.Module,
+    val_data: pd.DataFrame,
+    criterion: nn.Module,
+    device: torch.device,
+    data_config: DataConfig,
+    model_config: ModelConfig,
+    training_config: TrainingConfig,
+    code_frequencies: np.ndarray
+) -> Dict[str, float]:
+    """
+    Compute comprehensive internal evaluation metrics for medical code prediction.
+    
+    Healthcare-Optimized Metrics:
+        - Top-K Accuracy (K=1,5,10,20): Clinical utility - "correct code in top-K suggestions"
+        - MRR (Mean Reciprocal Rank): Ranking quality across all predictions
+        - Stratified Performance: Common vs. Rare vs. Tail code accuracy
+        - Validation bce: Optimization objective
+        - Perplexity: For literature comparison (secondary metric) not used anymore
+        
+    Why NOT use perplexity?
+        - Confirm that the BCE entropy loss is used and 
+        - Perplexity averages over all codes equally (doesn't highlight rare code performance)
+        - Clinical reality: rare codes (sepsis, MI) often most important
+        - Top-K matches clinical workflow: doctors review multiple suggestions
+        
+    Reference:
+        BEHRT (Li et al. 2020) - uses Top-K as primary metric for clinical transformers
+        
+    Args:
+        model: Trained model (dense or MoE)
+        val_data: Validation DataFrame
+        prepare_tensor_fn: Function to convert DataFrame rows to tensors
+        criterion: Loss function (nn.BCELoss)
+        device: Torch device
+        code_frequencies: [target_cd_cnt] frequency of each code in training data
+        batch_size: Batch size for evaluation
+        
+    Returns:
+        metrics: Dictionary with all internal metrics
+    """
+    model.eval()
+    
+    all_predictions = []
+    all_targets = []
+    total_bce = 0.0
+    num_predictions = 0
+    
+    with torch.no_grad():
+        nbatch = len(val_data) // training_config.batch_size
+        
+        for i in range(nbatch):
+            batch = val_data.iloc[i*training_config.batch_size:
+                                 (i+1)*training_config.batch_size]
+            dt_cnt, x, y = prepare_tensor(batch, device, data_config, model_config)  # ← 3 values!
+            # Get the actual model (unwrap if DataParallel)
+            actual_model = model.module if isinstance(model, nn.DataParallel) else model            
+            # Forward pass
+            if isinstance(actual_model, HierarchicalMoETransformer):
+                opt, _ = model(x, return_moe_losses=False)
+            else:
+                opt = model(x)
+            
+            # Reshape for loss computation
+            opt = opt.reshape(training_config.batch_size * data_config.len_dy, 
+                            model_config.target_cd_cnt)
+            y_list = [item for sublist in y for item in sublist]
+            opt = torch.cat([opt[data_config.len_dy*j:data_config.len_dy*j+dt_cnt[j], :] 
+                           for j in range(training_config.batch_size)], dim=0)
+            
+            # Create multi-hot targets
+            y_cd = torch.zeros(len(opt), model_config.target_cd_cnt).to(device)
+            for j in range(len(opt)):
+                for k in y_list[j]:
+                    if k != 0:
+                        y_cd[j, k] = 1
+            
+            # Compute bce
+            bce_loss = criterion(opt, y_cd)
+            total_bce += bce_loss.item() * len(opt)
+            num_predictions += len(opt)
+            
+            # Store for ranking metrics
+            all_predictions.append(opt.cpu())
+            all_targets.append(y_cd.cpu())
+    
+    # Aggregate predictions
+    val_bce = total_bce / num_predictions
+    all_predictions = torch.cat(all_predictions)  # [num_predictions, target_cd_cnt]
+    all_targets = torch.cat(all_targets)          # [num_predictions, target_cd_cnt] (multi-hot)
+    
+    # === TOP-K ACCURACY (Multi-label aware) ===
+    top_k_results = {}
+    for k in [1, 5, 10, 20]:
+        top_k_preds = torch.topk(all_predictions, k, dim=-1).indices  # [N, k]
+        
+        # For each sample, check if ANY true code is in top-K
+        correct = []
+        for i in range(len(all_targets)):
+            true_codes = all_targets[i].nonzero(as_tuple=True)[0]  # Get all true codes
+            if len(true_codes) > 0:
+                # Check if any true code is in top-K predictions
+                hit = any(code.item() in top_k_preds[i].tolist() for code in true_codes)
+                correct.append(hit)
+        
+        top_k_results[f'top_{k}_acc'] = sum(correct) / len(correct) if correct else 0.0
+    
+    # === MEAN RECIPROCAL RANK (First true code) ===
+    sorted_indices = torch.argsort(all_predictions, dim=-1, descending=True)
+    reciprocal_ranks = []
+    for i in range(len(all_targets)):
+        true_codes = all_targets[i].nonzero(as_tuple=True)[0]
+        if len(true_codes) > 0:
+            # Find rank of first true code
+            first_true = true_codes[0].item()
+            rank = (sorted_indices[i] == first_true).nonzero(as_tuple=True)[0].item() + 1
+            reciprocal_ranks.append(1.0 / rank)
+    mrr = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
+    
+    # === STRATIFIED PERFORMANCE (RARE CODE ANALYSIS) ===
+    # For multi-label, analyze performance by code frequency
+    freq_percentiles = np.percentile(code_frequencies[code_frequencies > 0], [10, 50, 80])
+
+    # Categorize codes into tiers
+    common_codes = np.where(code_frequencies > freq_percentiles[2])[0]
+    rare_codes = np.where((code_frequencies < freq_percentiles[1]) & (code_frequencies > 0))[0]
+    tail_codes = np.where((code_frequencies < freq_percentiles[0]) & (code_frequencies > 0))[0]
+
+    # Compute top-10 accuracy for each tier
+    def compute_tier_accuracy(predictions, targets, code_set):
+        """Compute accuracy for specific code tier."""
+        if len(code_set) == 0:
+            return 0.0
+
+        correct = 0
+        total = 0
+        top_10_preds = torch.topk(predictions, 10, dim=-1).indices
+
+        for i in range(len(targets)):
+            true_codes = targets[i].nonzero(as_tuple=True)[0].tolist()
+            # Only count samples with at least one code in this tier
+            tier_true_codes = [c for c in true_codes if c in code_set]
+            if len(tier_true_codes) > 0:
+                total += 1
+                # Check if any tier code is in top-10
+                if any(c in top_10_preds[i].tolist() for c in tier_true_codes):
+                    correct += 1
+
+        return correct / total if total > 0 else 0.0
+
+    stratified = {
+        'common_codes_top10': compute_tier_accuracy(all_predictions, all_targets, set(common_codes)),
+        'rare_codes_top10': compute_tier_accuracy(all_predictions, all_targets, set(rare_codes)),
+        'tail_codes_top10': compute_tier_accuracy(all_predictions, all_targets, set(tail_codes)),
+    }
+    
+    # === COMBINE ALL METRICS ===
+    metrics = {
+        # Primary metrics (clinical decision-making)
+        'val_bce': val_bce,
+        'top_1_acc': top_k_results['top_1_acc'],
+        'top_5_acc': top_k_results['top_5_acc'],
+        'top_10_acc': top_k_results['top_10_acc'],
+        'top_20_acc': top_k_results['top_20_acc'],
+        'mrr': mrr,
+        # Secondary metric (literature comparison)
+        # 'perplexity': np.exp(val_nll),
+        
+        # Stratified accuracy
+        'common_codes_top10': stratified['common_codes_top10'],
+        'rare_codes_top10': stratified['rare_codes_top10'],
+        'tail_codes_top10': stratified['tail_codes_top10']
+    }
+    
+    return metrics
+
+
+# #### Memory management
+
+# In[32]:
+
+
+import torch
+import gc
+
+def cleanup_gpu_memory(verbose = True):
+    """
+    Comprehensive GPU memory cleanup before training.
+    
+    Clears:
+    - Python garbage collector
+    - PyTorch CUDA cache
+    - All cached allocations
+    - Resets memory statistics
+    """
+    # Collect Python garbage first
+    gc.collect()
+    
+    if not torch.cuda.is_available():
+        if verbose:
+            print("No CUDA devices available")
+        return
+    
+    num_gpus = torch.cuda.device_count()
+    
+    # Synchronize ALL GPUs before cleanup
+    for device_id in range(num_gpus):
+        torch.cuda.synchronize(device_id)
+    
+    # Clear CUDA cache (global operation, but call after sync)
+    torch.cuda.empty_cache()
+    
+    # Reset memory statistics for ALL GPUs
+    for device_id in range(num_gpus):
+        torch.cuda.reset_peak_memory_stats(device_id)
+        torch.cuda.reset_accumulated_memory_stats(device_id)
+    
+    # Print memory status for each GPU
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"GPU MEMORY STATUS ({num_gpus} GPU{'s' if num_gpus > 1 else ''})")
+        print(f"{'='*80}")
+        
+        for device_id in range(num_gpus):
+            allocated = torch.cuda.memory_allocated(device_id) / 1024**3  # GB
+            reserved = torch.cuda.memory_reserved(device_id) / 1024**3    # GB
+            max_allocated = torch.cuda.max_memory_allocated(device_id) / 1024**3
+            
+            print(f"GPU {device_id}:")
+            print(f"  Allocated:     {allocated:.2f} GB")
+            print(f"  Reserved:      {reserved:.2f} GB")
+            print(f"  Peak Allocated: {max_allocated:.2f} GB")
+            
+            # Calculate fragmentation
+            if reserved > 0:
+                fragmentation = (reserved - allocated) / reserved * 100
+                print(f"  Fragmentation: {fragmentation:.1f}%")
+            print()
+        
+        print(f"{'='*80}\n")
+def cleanup_gpu_memory_hard(device_ids: list = None):
+    """
+    AGGRESSIVE cleanup for stubborn memory leaks.
+    
+    Use when normal cleanup doesn't free enough memory.
+    
+    Args:
+        device_ids: List of GPU IDs to clean. If None, clean all GPUs.
+    """
+    import gc
+    import torch
+    
+    # Multiple garbage collection passes
+    for _ in range(3):
+        gc.collect()
+    
+    if not torch.cuda.is_available():
+        return
+    
+    num_gpus = torch.cuda.device_count()
+    if device_ids is None:
+        device_ids = list(range(num_gpus))
+    
+    # Synchronize all operations
+    for device_id in device_ids:
+        with torch.cuda.device(device_id):
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()  # Clean up IPC handles
+    
+    # Final global cleanup
+    torch.cuda.empty_cache()
+    
+    # Multiple GC passes again
+    for _ in range(2):
+        gc.collect()
+    
+    print(f"✅ Aggressive cleanup completed for GPUs: {device_ids}")      
+    
+def monitor_gpu_memory_usage(
+    model: torch.nn.Module = None,
+    detailed: bool = False,
+    return_stats: bool = False
+) -> dict:
+    """
+    Monitor current GPU memory usage across all devices.
+    
+    Useful for debugging memory issues during training.
+    
+    Args:
+        model: If provided, also report model size
+        detailed: If True, show memory breakdown
+        
+    Returns:
+        Dictionary with memory stats for each GPU
+    """
+    if not torch.cuda.is_available():
+        return {}
+    
+    num_gpus = torch.cuda.device_count()
+    stats = {}
+    
+    print(f"\n{'='*80}")
+    print(f"DETAILED GPU MEMORY MONITOR")
+    print(f"{'='*80}")
+    
+    for device_id in range(num_gpus):
+        allocated = torch.cuda.memory_allocated(device_id) / 1024**3
+        reserved = torch.cuda.memory_reserved(device_id) / 1024**3
+        max_allocated = torch.cuda.max_memory_allocated(device_id) / 1024**3
+        max_reserved = torch.cuda.max_memory_reserved(device_id) / 1024**3
+        
+        # Get total GPU memory
+        props = torch.cuda.get_device_properties(device_id)
+        total_memory = props.total_memory / 1024**3
+        
+        print(f"GPU {device_id} ({props.name}):")
+        print(f"  Total Memory:   {total_memory:.2f} GB")
+        print(f"  Allocated:      {allocated:.2f} GB ({allocated/total_memory*100:.1f}%)")
+        print(f"  Reserved:       {reserved:.2f} GB ({reserved/total_memory*100:.1f}%)")
+        print(f"  Free:           {total_memory - reserved:.2f} GB")
+        
+        if detailed:
+            print(f"  Peak Allocated: {max_allocated:.2f} GB")
+            print(f"  Peak Reserved:  {max_reserved:.2f} GB")
+            
+            # Memory segments info (PyTorch internal)
+            try:
+                memory_stats = torch.cuda.memory_stats(device_id)
+                active_bytes = memory_stats.get('active_bytes.all.current', 0) / 1024**3
+                inactive_bytes = memory_stats.get('inactive_split_bytes.all.current', 0) / 1024**3
+                print(f"  Active:         {active_bytes:.2f} GB")
+                print(f"  Inactive:       {inactive_bytes:.2f} GB")
+            except:
+                pass
+        if return_stats:
+            stats[f'gpu_{device_id}'] = {
+            'allocated': allocated,
+            'reserved': reserved,
+            'max_allocated': max_allocated,
+            'max_reserved': max_reserved,
+            'total': total_memory,
+            'free': total_memory - reserved
+            }
+        print()
+    
+    # Model size if provided
+    if model is not None:
+        model_params = sum(p.numel() for p in model.parameters())
+        model_size = model_params * 4 / 1024**3  # Assume FP32
+        
+        # If model is DataParallel, calculate replicated size
+        if isinstance(model, torch.nn.DataParallel):
+            replicated_size = model_size * len(model.device_ids)
+            print(f"Model Size (per GPU):  {model_size:.2f} GB")
+            print(f"Model Size (total):    {replicated_size:.2f} GB (replicated across {len(model.device_ids)} GPUs)")
+        else:
+            print(f"Model Size: {model_size:.2f} GB")
+        print()
+    
+    print(f"{'='*80}\n")
+    if return_stats: 
+        return stats
+    
+def save_checkpoint_multigpu(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    epoch: int,
+    metrics: Dict,
+    filepath: str
+):
+    """
+    Save checkpoint compatible with DataParallel.
+    
+    CRITICAL: DataParallel wraps the model, so state_dict has 'module.' prefix.
+    We save the unwrapped state_dict for compatibility.
+    """
+    # Check if model is wrapped in DataParallel
+    if isinstance(model, nn.DataParallel):
+        model_state_dict = model.module.state_dict()  # ← Unwrap!
+    else:
+        model_state_dict = model.state_dict()
+    
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model_state_dict,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'metrics': metrics,
+    }
+    
+    torch.save(checkpoint, filepath)
+    print(f"✅ Checkpoint saved: {filepath}")
+
+
+def load_checkpoint_multigpu(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    filepath: str,
+    device: torch.device
+):
+    """
+    Load checkpoint compatible with DataParallel.
+    """
+    checkpoint = torch.load(filepath, map_location=device)
+    
+    # If model is wrapped in DataParallel, load to module
+    if isinstance(model, nn.DataParallel):
+        model.module.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    print(f"✅ Checkpoint loaded: {filepath}")
+    return checkpoint['epoch'], checkpoint['metrics']
+        
+        
+
+
+# #### Run experimentation
+
+# In[11]:
+
+
+def run_single_experiment(
+    exp_name: str,
+    moe_config: Optional[MoEConfig],
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    prepare_tensor_fn,
+    model_params: Dict,
+    training_params: Dict,
+    code_frequencies: np.ndarray,
+    device: torch.device
+) -> Tuple[nn.Module, Dict[str, float]]:
+    """
+    Run a single experiment (one of the 5 configurations).
+    
+    Args:
+        exp_name: Experiment name
+        moe_config: MoE configuration (None for dense baseline)
+        train_data: Training DataFrame
+        val_data: Validation DataFrame  
+        prepare_tensor_fn: Tensor preparation function
+        model_params: Model hyperparameters (cd_cnt, target_cd_cnt, etc.)
+        training_params: Training hyperparameters (lr, epochs, etc.)
+        code_frequencies: Code frequency array for stratified evaluation
+        device: Torch device
+        
+    Returns:
+        model: Trained model
+        metrics: Final evaluation metrics
+    """
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT: {exp_name}")
+    print(f"{'='*80}")
+    
+    # Create model
+    if moe_config is None:
+        # Dense baseline - would use original TransformerModel from min_transformer.py
+        # For this implementation, we use HierarchicalMoETransformer without MoE
+        print("Model: Dense Baseline (no MoE)")
+        model = HierarchicalMoETransformer(
+            cd_cnt=model_params['cd_cnt'],
+            target_cd_cnt=model_params['target_cd_cnt'],
+            embedding_size=model_params['embedding_size'],
+            moe_config=None,
+            use_moe_from_layer=999,  # Never use MoE
+            nlayers=6,
+            nhead=16,
+            dropout=0.1
+        ).to(device)
+    else:
+        print(f"Model: MoE - {moe_config.num_experts} experts, "
+              f"{moe_config.num_shared_experts} shared, top-{moe_config.top_k}")
+        model = HierarchicalMoETransformer(
+            cd_cnt=model_params['cd_cnt'],
+            target_cd_cnt=model_params['target_cd_cnt'],
+            embedding_size=model_params['embedding_size'],
+            moe_config=moe_config,
+            use_moe_from_layer=2,
+            nlayers=6,
+            nhead=16,
+            dropout=0.1
+        ).to(device)
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
+    
+    # Optimizer and criterion
+    optimizer = optim.AdamW(model.parameters(), 
+                           lr=training_params['lr'], 
+                           weight_decay=training_params['weight_decay'])
+    
+    # The task is multi-label code prediction (multiple codes per day), 
+    # not single-label. BCEoss expects integer class indices; BCEWithLogitsLoss expects multi-hot vectors.
+    criterion = nn.BCEWithLogitsLoss()
+    
+    # Training loop
+    print(f"\nTraining for {training_params['epochs']} epochs...")
+    training_metrics = []
+    
+    for epoch in range(training_params['epochs']):
+        print(f"\nEpoch {epoch+1}/{training_params['epochs']}")
+        
+       # Create wrapped prepare_tensor function with prediction mode and target_cd_cnt
+        def prepare_tensor_with_mode(batch, device):
+            return prepare_tensor_fn(batch, device, prediction_mode, model_params['target_cd_cnt'])
+        
+        
+        # Train
+        train_metrics = train_epoch(
+            model, train_data, prepare_tensor_fn, optimizer, criterion,
+            device, training_params['batch_size'], moe_config, epoch+1
+        )
+        
+        # Evaluate
+        print("  Evaluating...")
+        internal_metrics = compute_comprehensive_internal_metrics(
+            model, val_data, prepare_tensor_fn, criterion, device, 
+            code_frequencies, training_params['batch_size']
+        )
+        
+        # MoE-specific metrics
+        moe_metrics = None
+        if moe_config is not None:
+            moe_metrics = compute_moe_specific_metrics(
+                model, val_data, prepare_tensor_fn, device, training_params['batch_size']
+            )
+        
+        # Display key metrics
+        print(f"\n  PRIMARY METRICS:")
+        print(f"    Val BCE:         {internal_metrics['val_bce']:.4f}")
+        print(f"    Top-5 Acc:       {internal_metrics['top_5_acc']:.3f} ⭐")
+        print(f"    Top-10 Acc:      {internal_metrics['top_10_acc']:.3f} ⭐")
+        print(f"    MRR:             {internal_metrics['mrr']:.4f} ⭐")
+        print(f"  STRATIFIED (Top-10):")
+        print(f"    Common Codes:    {internal_metrics['common_codes_top10']:.3f}")
+        print(f"    Rare Codes:      {internal_metrics['rare_codes_top10']:.3f}")
+        print(f"    Tail Codes:      {internal_metrics['tail_codes_top10']:.3f} ⭐")
+        
+        if moe_metrics:
+            print(f"  MoE METRICS:")
+            print(f"    Balance Score:   {moe_metrics['balance_score']:.4f}")
+            print(f"    Expert Loads:    {moe_metrics['expert_loads']}")
+            if moe_metrics['expert_collapse']:
+                print(f"    ⚠️ WARNING: Expert collapse detected!")
+        
+        # Store metrics
+        epoch_metrics = {
+            'epoch': epoch + 1,
+            'train_loss': train_metrics['train_loss'],
+            **internal_metrics
+        }
+        if moe_metrics:
+            epoch_metrics.update({
+                'expert_balance': moe_metrics['balance_score'],
+                'expert_collapse': moe_metrics['expert_collapse']
+            })
+        training_metrics.append(epoch_metrics)
+    
+    # Final metrics
+    final_metrics = training_metrics[-1]
+    
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT COMPLETE: {exp_name}")
+    print(f"{'='*80}")
+    print(f"Final Top-10 Accuracy: {final_metrics['top_10_acc']:.3f}")
+    print(f"Final Tail Code Top-10: {final_metrics['tail_codes_top10']:.3f}")
+    print(f"Final Val bce: {final_metrics['val_bce']:.4f}")
+    
+    return model, final_metrics
+
+
+def run_all_experiments(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    prepare_tensor_fn,
+    model_params: Dict,
+    training_params: Dict,
+    device: torch.device
+) -> Dict[str, Tuple[nn.Module, Dict]]:
+    """
+    Run all 5 experiments and compare results.
+    
+    Args:
+        train_data: Training DataFrame
+        val_data: Validation DataFrame
+        prepare_tensor_fn: Tensor preparation function
+        model_params: Model hyperparameters
+        training_params: Training hyperparameters
+        device: Torch device
+        
+    Returns:
+        results: Dictionary mapping experiment name to (model, metrics)
+    """
+    print("\n" + "="*80)
+    print("STARTING 5-EXPERIMENT ABLATION STUDY")
+    print("="*80)
+    
+    # Prepare code frequencies for stratified evaluation
+    print("\nPreparing code frequencies...")
+    code_frequencies = np.zeros(model_params['target_cd_cnt'])
+    nbatch = len(train_data) // training_params['batch_size']
+    train_code_counts = Counter()
+    
+    for i in range(min(nbatch, 1000)):  # Sample for efficiency
+        batch = train_data.iloc[i*training_params['batch_size']:(i+1)*training_params['batch_size']]
+        _, _, y  = prepare_tensor_fn(batch, device, 'same_day', model_params['target_cd_cnt'])
+        y_flat = [item for sublist in y for item in sublist]
+        train_code_counts.update(y_flat)
+    
+    for code_idx, count in train_code_counts.items():
+        if code_idx < len(code_frequencies):
+            code_frequencies[code_idx] = count
+    
+    print(f"Computed frequencies for {len(train_code_counts)} unique codes")
+    
+    # Get experiment configurations
+    configs = get_experiment_configs()
+    
+    # Run all experiments
+    results = {}
+    all_metrics = []
+    
+    for exp_name, moe_config in configs.items():
+        start_time = time.time()
+        
+        model, metrics = run_single_experiment(
+            exp_name=exp_name,
+            moe_config=moe_config,
+            train_data=train_data,
+            val_data=val_data,
+            prepare_tensor_fn=prepare_tensor_fn,
+            model_params=model_params,
+            training_params=training_params,
+            code_frequencies=code_frequencies,
+            device=device
+        )
+        
+        elapsed = time.time() - start_time
+        metrics['training_time_seconds'] = elapsed
+        metrics['experiment'] = exp_name
+        
+        results[exp_name] = (model, metrics)
+        all_metrics.append(metrics)
+    
+    # === FINAL COMPARISON ===
+    print("\n" + "="*80)
+    print("FINAL COMPARISON: ALL 5 EXPERIMENTS")
+    print("="*80)
+    
+    comparison_df = pd.DataFrame(all_metrics)
+    comparison_df = comparison_df.set_index('experiment')
+    
+    # Display key metrics
+    key_metrics = ['top_10_acc', 'tail_codes_top10', 'mrr', 'val_bce', 'top_5_acc']
+    print("\nPrimary Metrics:")
+    print(comparison_df[key_metrics].to_string())
+    
+    # Rank experiments
+    comparison_df['rank_top10'] = comparison_df['top_10_acc'].rank(ascending=False)
+    comparison_df['rank_tail'] = comparison_df['tail_codes_top10'].rank(ascending=False)
+    comparison_df['rank_bce'] = comparison_df['val_bce'].rank()  # Lower is better
+    comparison_df['overall_rank'] = (comparison_df['rank_top10'] + 
+                                     comparison_df['rank_tail'] + 
+                                     comparison_df['rank_bce']) / 3
+    
+    comparison_df = comparison_df.sort_values('overall_rank')
+    
+    print("\n" + "="*80)
+    print("OVERALL RANKING")
+    print("="*80)
+    print(comparison_df[['top_10_acc', 'tail_codes_top10', 'val_bce', 'overall_rank']].to_string())
+    
+    return results
+
+
 # ### Training
 
 # In[16]:
@@ -1642,25 +2102,6 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[17]:
-
-
-# === MODEL PARAMETERS ===
-model_params = {
-    'cd_cnt': 84010,           # Medical code vocabulary size, expected to change
-    'target_cd_cnt': 2767,     # Target prediction classes
-    'embedding_size': 256,
-}
-
-# === TRAINING PARAMETERS ===
-training_params = {
-    'batch_size': 16,
-    'epochs': 1,               # Increase for real training
-    'lr': 1e-4,
-    'weight_decay': 0.01,
-}
-
-
 # In[18]:
 
 
@@ -1670,43 +2111,303 @@ select * from
 anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_OOT_o3_score_ending
 limit 2000
 """
-input_data = client.query(input_sql).to_dataframe() 
+# input_data = client.query(input_sql).to_dataframe() 
 
 
-# In[19]:
+# In[22]:
 
 
-df_train = input_data.iloc[:1500]
-df_val = input_data.iloc[1500]
+import pandas as pd
+df_train = pd.read_feather("sample_data/mdcd_train_8000.feather")
+df_val = pd.read_feather("sample_data/mdcd_val_2000.feather")
 
 
-# In[24]:
+# In[13]:
 
 
 df_train.head()
 
 
-# In[20]:
+# #### Initiate parameters
+
+# In[13]:
+
+
+# === 1. CREATE CONFIGURATIONS ===
+data_config = DataConfig(
+    input_code_column='cd',
+    target_code_column='target_cd',  # ← YOUR COLUMN NAME!
+    age_column='age_in_months',
+    gender_column='gender_cd',
+    dt_cnt_column='dt_cnt',
+    len_dy=200,   
+    len_cd=80
+)
+
+model_config = ModelConfig(
+    cd_cnt=84010,           # Input vocabulary
+    target_cd_cnt=8850,    # Predicted target dimension
+    embedding_size=256,
+    nhead=16,
+    nhid=512,
+    nlayers=6,
+    use_moe_from_layer=2,
+)
+
+training_config = TrainingConfig(
+    batch_size=128,
+    learning_rate=1e-4,
+    weight_decay=0.01,
+    epochs=1,
+    gradient_clip_norm=1.0,
+    device='cuda',
+    num_gpus=4,
+    parallel=True
+)
+
+moe_config = MoEConfig(
+    d_model=256,
+    d_ff=512,
+    num_experts=8,
+    num_shared_experts=1,
+    top_k=2,
+    load_balance_strategy='switch',
+    aux_loss_weight=0.01,
+)
+
+
+# In[15]:
+
+
+# Check the max number of voc counts
+all_target_codes = []
+for target_str in df_train['target_cd'].tolist():
+    codes = [int(c) for c in target_str.replace('*', ',').split(',') if c and c != '0']
+    all_target_codes.extend(codes)
+
+max_target = max(all_target_codes)
+min_target = min(all_target_codes)
+unique_target = len(set(all_target_codes))
+
+print(f"\n{'='*80}")
+print(f"ACTUAL DATA VOCABULARY ANALYSIS")
+print(f"{'='*80}")
+print(f"Target codes (target_cd):")
+print(f"  Min value: {min_target}")
+print(f"  Max value: {max_target}")
+print(f"  Unique codes: {unique_target}")
+print(f"  Expected vocab size: {max_target + 1}")
+print(f"\nCurrent config:")
+print(f"  target_cd_cnt: {model_config.target_cd_cnt}")
+print(f"\nREQUIRED FIX:")
+print(f"  target_cd_cnt = {max_target + 1}")
+print(f"{'='*80}\n")
+
+
+# In[15]:
 
 
 # Device setup
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[21]:
+# In[18]:
 
 
-base_model = HierarchicalMoETransformer(
-    cd_cnt=model_params['cd_cnt'],
-    target_cd_cnt=model_params['target_cd_cnt'],
-    embedding_size=model_params['embedding_size'],
-    moe_config=None,
-    use_moe_from_layer=999,  # Never use MoE
-    nlayers=6,
-    nhead=16,
-    dropout=0.1
-).to(device)
+def init_model_multgpu(
+    model_config: ModelConfig,
+    training_config: TrainingConfig,
+    moe_config: Optional[MoEConfig] = None
+) -> nn.Module:
+    """
+    Create model with DataParallel support.
+    
+    DataParallel splits the batch across GPUs:
+    - GPU 0: samples 0-31
+    - GPU 1: samples 32-63
+    - GPU 2: samples 64-95
+    - GPU 3: samples 96-127
+    
+    Each GPU:
+    1. Receives its portion of the batch
+    2. Runs forward pass independently
+    3. Computes gradients
+    4. GPU 0 gathers and averages all gradients
+    5. Updates weights (synchronized across all GPUs)
+    """
+    
+    # Create model on CPU first
+    model = HierarchicalMoETransformer(
+        cd_cnt=model_config.cd_cnt,
+        target_cd_cnt=model_config.target_cd_cnt,
+        embedding_size=model_config.embedding_size,
+        moe_config=moe_config,
+        use_moe_from_layer=model_config.use_moe_from_layer,
+        nlayers=model_config.nlayers,
+        nhead=model_config.nhead,
+        dropout=model_config.dropout,
+        len_dy=data_config.len_dy,
+        len_cd=data_config.len_cd
+    )
+    
+    # Check available GPUs
+    num_gpus = torch.cuda.device_count()
+    print(f"\n{'='*80}")
+    print(f"GPU CONFIGURATION")
+    print(f"{'='*80}")
+    print(f"Available GPUs: {num_gpus}")
+    
+    if num_gpus == 0:
+        print("⚠️ No GPUs detected! Using CPU...")
+        device = torch.device('cpu')
+        return model.to(device)
+    
+    for i in range(num_gpus):
+        props = torch.cuda.get_device_properties(i)
+        print(f"GPU {i}: {props.name}")
+        print(f"  Memory: {props.total_memory / 1024**3:.2f} GB")
+        print(f"  Compute Capability: {props.major}.{props.minor}")
+    
+    # Move to GPU and wrap with DataParallel
+    if training_config.parallel and num_gpus > 1:
+        # Use specified number of GPUs (or all available)
+        gpu_ids = list(range(min(training_config.num_gpus, num_gpus)))
+        print(f"\n✅ Using DataParallel with GPUs: {gpu_ids}")
+        print(f"   Batch size per GPU: {training_config.batch_size // len(gpu_ids)}")
+        
+        model = model.to('cuda:0')  # Move to first GPU
+        model = nn.DataParallel(model, device_ids=gpu_ids)
+        
+        device = torch.device('cuda:0')  # Primary device
+    else:
+        print(f"\n✅ Using single GPU: cuda:0")
+        device = torch.device('cuda:0')
+        model = model.to(device)
+    
+    print(f"{'='*80}\n")
+    
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
+    
+    return model, device
+
+
+
+# # Single GPU model initiation
+# model = HierarchicalMoETransformer(
+#     cd_cnt=model_config.cd_cnt,
+#     target_cd_cnt=model_config.target_cd_cnt,
+#     embedding_size=model_config.embedding_size,
+#     moe_config=moe_config,
+#     use_moe_from_layer=model_config.use_moe_from_layer,
+#     nlayers=model_config.nlayers,
+#     nhead=model_config.nhead,
+#     dropout=model_config.dropout,
+#     len_dy=data_config.len_dy,
+#     len_cd=data_config.len_cd  
+# ).to(device)
+
+
+# In[19]:
+
+
+# Create model with DataParallel
+model, device = init_model_multgpu(
+    model_config, training_config, moe_config
+)
+
+
+# In[20]:
+
+
+# === 4. OPTIMIZER & CRITERION ===
+optimizer = optim.AdamW(
+    model.parameters(),
+    lr=training_config.learning_rate,
+    weight_decay=training_config.weight_decay
+)
+if training_config.scheduler_type == 'cosine':
+    from torch.optim.lr_scheduler import CosineAnnealingLR
+    scheduler = CosineAnnealingLR(optimizer, T_max=training_config.epochs)
+elif training_config.scheduler_type == 'step':
+    from torch.optim.lr_scheduler import StepLR
+    scheduler = StepLR(optimizer, step_size=training_config.epochs // 3, gamma=0.1)
+else:
+    scheduler = None
+criterion = nn.BCEWithLogitsLoss()  # ← Multi-label loss
+
+
+# In[23]:
+
+
+# === 5. COMPUTE CODE FREQUENCIES FOR STRATIFIED EVAL ===
+print("\nComputing code frequencies from training data...")
+code_frequencies = np.zeros(model_config.target_cd_cnt)
+train_code_counts = Counter()
+
+# Sample training data to compute frequencies
+nbatch = min(len(df_train) // training_config.batch_size, 1000)
+for i in range(nbatch):
+    batch = df_train.iloc[i*training_config.batch_size:(i+1)*training_config.batch_size]
+    _, _, y = prepare_tensor(batch, device, data_config, model_config)
+    y_flat = [code 
+          for patient in y           # Level 1: Iterate patients
+          for day in patient          # Level 2: Iterate days per patient
+          for code in day             # Level 3: Iterate codes per day
+          if code != 0]               # Filter out padding
+    train_code_counts.update(y_flat)
+
+for code_idx, count in train_code_counts.items():
+    if 0 <= code_idx < model_config.target_cd_cnt:
+        code_frequencies[code_idx] = count
+
+
+# In[33]:
+
+
+monitor_gpu_memory_usage()
+
+
+# In[43]:
+
+
+# cleanup_gpu_memory()
+
+for epoch in range(1):
+    print(f"\nEpoch {epoch+1}/{training_config.epochs}")
+
+    # Train
+    # train_metrics = train_epoch(
+    #     model, df_train, optimizer, None, criterion, device,  # ← Add None here!
+    #     data_config, model_config, training_config, moe_config, 
+    #     epoch+1
+    # )
+
+    # Evaluate
+    if (epoch + 1) % training_config.eval_frequency == 0:
+        val_metrics = compute_comprehensive_internal_metrics(
+            model, df_val, criterion, device,
+            data_config, model_config, training_config, code_frequencies
+        )
+
+        print(f"\n  Validation Metrics:")
+        print(f"    Val bce:     {val_metrics['val_bce']:.4f}")
+        print(f"    Top-10 Acc:  {val_metrics['top_10_acc']:.3f}")
+        print(f"    MRR:         {val_metrics['mrr']:.4f}")
+
+
+# In[38]:
+
+
+train_metrics                                                                                                                                                      
+
+
+# In[45]:
+
+
+val_metrics
 
 
 # #### Time estimate
@@ -1743,7 +2444,7 @@ for code_idx, count in train_code_counts.items():
         code_frequencies[code_idx] = count
 
 
-# In[22]:
+# In[53]:
 
 
 # Get experiment configurations
@@ -1776,7 +2477,7 @@ for exp_name, (moe_config, prediction_mode) in configs.items():
     all_metrics.append(metrics)
 
 
-# In[ ]:
+# In[37]:
 
 
 
