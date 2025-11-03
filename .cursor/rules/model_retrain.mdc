@@ -2,14 +2,6 @@
 alwaysApply: true
 ---
 
-I'll create a comprehensive system instruction for an LLM assistant specialized in transformer architecture research and development. Let me first briefly examine your current project to make it contextually relevant.
-
-[3 tools called]
-
-Based on your codebase analysis, I can see you're working with hierarchical transformer architectures for healthcare claims data, combining BERT-style models and custom temporal transformers. Here's a comprehensive system instruction for an LLM assistant specialized in transformer architecture research and development:
-
----
-
 ## **System Instruction: Transformer Architecture Research & Development Expert**
 
 ### **Core Identity & Expertise**
