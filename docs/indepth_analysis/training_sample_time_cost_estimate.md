@@ -790,7 +790,7 @@ total = 3,051 + 763 + 366 + 153 + 92 = 4,425 hours = 184 days
 # Updated cloud provider pricing (4-GPU clusters)
 T4_rate = $2.992/hour    # 4× T4, 64 GB total
 L4_rate = $3.304/hour    # 4× L4, 96 GB total
-A100_rate = $11.992/hour # 4× A100, 160 GB total
+A100_rate = $25.00/hour  # 4× A100 80GB, 320 GB total (4 × $6.25)
 H100_rate = $36.384/hour # 4× H100, 320 GB total
 ```
 
@@ -805,10 +805,10 @@ total_cost = total_wall_clock_hours × hourly_rate
 total_cost = 4,425 × $2.992 = $13,231
 
 # 4× A100 for 14 days (333 hours)
-total_cost = 333 × $11.992 = $3,993
+total_cost = 333 × $25.00 = $8,325
 
-# 4× H100 for 2 days (48 hours)
-total_cost = 48 × $36.384 = $1,747
+# 4× H100 for 2 days (49.2 hours)
+total_cost = 49.2 × $36.384 = $1,790
 ```
 
 ---
@@ -962,6 +962,116 @@ time/epoch = 4,425 / 10 = 442.5 hours ✓
 ```
 
 **Result**: 184 days, $13,231 on 4× T4 GPUs
+
+---
+
+### **8.4.1 Baseline Model: Hardware Comparison (1M members, 1 epoch)**
+
+Applying the same baseline architecture to **1M members, 1 epoch** across all hardware types for direct comparison.
+
+#### **Architecture**: Same as Section 8.4 (27.7M parameters)
+
+#### **FLOPs Calculation**:
+```python
+# Scale from 12M×10 to 1M×1
+baseline_flops = 257 ExaFLOPs / 120 = 2.142 PetaFLOPs
+```
+
+#### **Batch Sizes by Hardware**:
+```python
+# Memory constraints (with gradient checkpointing)
+T4 (16 GB):   batch = 64
+L4 (24 GB):   batch = 128
+A100 (40 GB): batch = 256
+H100 (80 GB): batch = 512
+```
+
+#### **Training Steps**:
+```python
+steps_T4 = ceil(1M / 64) = 15,625
+steps_L4 = ceil(1M / 128) = 7,813
+steps_A100 = ceil(1M / 256) = 3,907
+steps_H100 = ceil(1M / 512) = 1,954
+```
+
+#### **Hardware Throughput & Compute Time**:
+```python
+# T4: 260 TFLOPs × 9% MFU = 23.4 TFLOPs/sec
+compute_T4 = 2.142e15 / (23.4e12) / 3600 = 25.4 hours
+
+# L4: 484 TFLOPs × 15% MFU = 72.6 TFLOPs/sec
+compute_L4 = 2.142e15 / (72.6e12) / 3600 = 8.2 hours
+
+# A100: 1,248 TFLOPs × 22% MFU = 274.6 TFLOPs/sec
+compute_A100 = 2.142e15 / (274.6e12) / 3600 = 2.2 hours
+
+# H100: 3,956 TFLOPs × 25% MFU = 989 TFLOPs/sec
+compute_H100 = 2.142e15 / (989e12) / 3600 = 0.60 hours
+```
+
+#### **Overhead Calculation**:
+```python
+# T4 (with grad accum = 2)
+overhead_T4 = 25.4 × (0.25 + 0.12 + 0.05 + 0.03) = 11.4 hours
+total_T4 = 25.4 + 11.4 = 36.8 hours
+
+# L4
+overhead_L4 = 8.2 × (0.22 + 0.10 + 0.03) = 2.9 hours
+total_L4 = 8.2 + 2.9 = 11.1 hours
+
+# A100 (with NVLink)
+overhead_A100 = 2.2 × (0.20 + 0.05 + 0.03) = 0.6 hours
+total_A100 = 2.2 + 0.6 = 2.8 hours
+
+# H100 (single GPU config from Appendix C)
+overhead_H100 = 0.60 × (0.20 + 0.03 + 0.03) = 0.16 hours
+total_H100 = 0.60 + 0.16 = 0.76 hours
+```
+
+#### **Cost Calculation**:
+```python
+cost_T4 = 36.86 × $2.992 = $110
+cost_L4 = 11.06 × $3.304 = $37
+cost_A100 = 2.77 × $25.00 = $69
+cost_H100 = 0.76 × $36.384 = $28
+```
+
+---
+
+#### **COMPLETE SUMMARY: 1M Members, 1 Epoch, Baseline Model**
+
+| Hardware | Batch | MFU | Compute | Overhead | Total Time | Cost | Speedup |
+|----------|-------|-----|---------|----------|------------|------|---------|
+| **4× T4** | 64 | 9% | 25.4h | 11.4h | **36.9h** | **$110** | 1.0× |
+| **4× L4** | 128 | 15% | 8.2h | 2.9h | **11.1h** | **$37** | 3.3× |
+| **4× A100** | 256 | 22% | 2.2h | 0.6h | **2.8h** | **$69** | 13× |
+| **4× H100** | 512 | 25% | 0.60h | 0.16h | **0.76h** | **$28** | 48× |
+
+**Key Insights:**
+1. **H100 most cost-effective**: 48× faster than T4, 75% cheaper than T4
+2. **L4 best budget option**: 3.3× faster than T4 for only $37
+3. **A100 premium pricing**: 2.5× more expensive than H100 despite similar speed
+4. **Samples/sec**: T4 = 7.5, L4 = 25.1, A100 = 100, H100 = 366
+
+---
+
+#### **8.4.2 Scaling to Full Dataset (12M members, 10 epochs)**
+
+Using linear scaling from 1M×1 baseline:
+
+| Hardware | Time | Cost | vs T4 | Cost Efficiency |
+|----------|------|------|-------|-----------------|
+| **4× T4** | 184 days | $13,231 | 1.0× | Baseline |
+| **4× L4** | 55 days | $4,386 | 3.3× faster | 3.0× better |
+| **4× A100** | 14 days | $8,320 | 13× faster | 1.6× better |
+| **4× H100** | 3.8 days | $3,309 | 48× faster | 4.0× better ⭐ |
+
+**Result**: H100 baseline completes full 12M×10 in **91 hours for $3,309**
+
+**Key Comparison (Baseline vs Flash+MoE on H100)**:
+- Baseline H100: 3.8 days, $3,309
+- Flash+MoE H100: 2.05 days, $1,790
+- **Flash+MoE saves**: 1.75 days (46%) and $1,519 (46%)
 
 ---
 
@@ -1297,7 +1407,7 @@ total_H100 = 0.33 + 0.07 = 0.40 hours
 ```python
 rate_T4 = $2.992/hour
 rate_L4 = $3.304/hour
-rate_A100 = $11.992/hour  # $2.072 kernel + 4 × $2.48
+rate_A100 = $25.00/hour  # 4× A100 80GB (4 × $6.25)
 rate_H100 = $36.384/hour
 ```
 
@@ -1305,7 +1415,7 @@ rate_H100 = $36.384/hour
 ```python
 cost_T4 = 18.2 × $2.992 = $54
 cost_L4 = 6.8 × $3.304 = $22
-cost_A100 = 1.3 × $11.992 = $16
+cost_A100 = 1.3 × $25.00 = $33
 cost_H100 = 0.40 × $36.384 = $15
 ```
 
@@ -1336,7 +1446,7 @@ tokens_H100 = 200M / (0.40 × 3600) = 138,889 tokens/sec ✓
 |----------|-------|-----|---------|----------|------------|------|---------|
 | **4× T4** | 128 | 16% | 14.3h | 3.9h | **18.2h** | **$54** | 1.0× |
 | **4× L4** | 256 | 23% | 5.4h | 1.4h | **6.8h** | **$22** | 2.7× |
-| **4× A100** | 512 | 45% | 1.1h | 0.2h | **1.3h** | **$16** | 14× |
+| **4× A100** | 512 | 45% | 1.1h | 0.2h | **1.3h** | **$33** | 14× |
 | **4× H100** | 1024 | 46% | 0.33h | 0.07h | **0.40h** | **$15** | 45.5× |
 
 **Key Insights:**
@@ -1355,7 +1465,7 @@ Using same per-member-epoch FLOPs:
 |----------|------|------|----------------|
 | **4× T4** | 91 days | $6,535 | 2.0× faster |
 | **4× L4** | 34 days | $2,696 | 5.4× faster |
-| **4× A100** | 6.5 days | $1,869 | 28× faster |
+| **4× A100** | 6.5 days | $3,900 | 28× faster |
 | **4× H100** | 2.05 days | $1,790 | 92× faster |
 
 **Result**: Flash+MoE on H100 completes full 12M×10 training in **49.2 hours for $1,790** ✓
@@ -1400,9 +1510,9 @@ Using same per-member-epoch FLOPs:
 
 | Hardware | Peak TFLOPs | Memory | Batch | MFU | Time | Cost | $/hour | Value Rank |
 |----------|-------------|--------|-------|-----|------|------|--------|------------|
-| 4× T4 | 260 | 64 GB | 128 | 16% | 18.2h | $54 | $2.99 | 4th |
-| 4× L4 | 484 | 96 GB | 256 | 23% | 6.8h | $22 | $3.30 | 3rd |
-| 4× A100 | 1,248 | 160 GB | 512 | 45% | 1.3h | $16 | $11.99 | 2nd |
+| 4× T4 | 260 | 64 GB | 128 | 16% | 18.2h | $54 | $2.99 | 3rd |
+| 4× L4 | 484 | 96 GB | 256 | 23% | 6.8h | $22 | $3.30 | 2nd |
+| 4× A100 | 1,248 | 320 GB | 512 | 45% | 1.3h | $33 | $25.00 | 4th |
 | 4× H100 | 3,956 | 320 GB | 4,096 | 46% | **0.4h** | **$15** | $36.38 | **1st** ⭐ |
 
 **Key Insight**: H100 achieves best time AND cost despite 12× higher hourly rate due to 46% MFU and massive batch capability.
@@ -1466,8 +1576,8 @@ if weekly_metrics < threshold:
 - ✅ Train on **1.2M sample (10%)**
 - ✅ Validate on **600K sample (5%)**
 - ✅ Test on **600K sample (5%)**
-- ✅ **Cost**: $1,290 (T4) or $399 (A100) or $179 (H100)
-- ✅ **Time**: 18 days (T4) or 1.4 days (A100) or 0.2 days (H100)
+- ✅ **Cost**: $1,290 (T4) or $390 (A100) or $179 (H100)
+- ✅ **Time**: 18 days (T4) or 0.65 days (A100) or 0.2 days (H100)
 
 #### **Phase 2: Validation (Month 4)**
 - ✅ External validation on **2.4M holdout (20%)**
@@ -1512,16 +1622,16 @@ For detailed calculations of training time and cost using the methodology descri
 |--------------|----------|------|------|------------------|
 | **10% Sample (1.2M)** | 4× T4 | 18 days | $1,290 | Good ROI |
 | **10% Sample** | 4× L4 | 13 days | $1,032 | Better ROI |
-| **10% Sample** | 4× A100 | 1.4 days | $399 | Fast iteration |
-| **10% Sample** | 4× H100 | 0.2 days | $179 | **Fastest** |
+| **10% Sample** | 4× A100 | 1.4 days | $390 | Moderate speed |
+| **10% Sample** | 4× H100 | 0.2 days | $179 | **Fastest & Best** ⭐ |
 | **Full Dataset (12M)** | 4× T4 Baseline | 184 days | $13,231 | Baseline |
 | **Full Dataset** | 4× T4 Flash+MoE | 91 days | $6,535 | 2.0× faster |
 | **Full Dataset** | 4× L4 Flash+MoE | 34 days | $2,696 | 5.4× faster |
-| **Full Dataset** | 4× A100 Flash+MoE | 6.5 days | $1,869 | 28× faster |
+| **Full Dataset** | 4× A100 Flash+MoE | 6.5 days | $3,900 | 28× faster |
 | **Full Dataset** | 4× H100 Flash+MoE | 2.05 days | $1,790 | **92× faster** ⭐ |
 
-⭐ **Best overall**: H100 with Flash+MoE (fastest time, comparable cost to A100)  
-**Recommendation**: Start with 10% sample on H100 for ultra-rapid iteration ($437, 12 hours), then scale to full dataset.
+⭐ **Best overall**: H100 with Flash+MoE (fastest time, significantly cheaper than A100)  
+**Recommendation**: Start with 10% sample on H100 for ultra-rapid iteration ($179, 5 hours), then scale to full dataset.
 
 ---
 
@@ -1647,8 +1757,8 @@ total = 260 + 52 + 13 + 8 = 333 hours = 13.9 days
 
 #### **Step 10: Cost**
 ```python
-hourly_rate = $11.992/hour  # 4× A100 cluster
-total_cost = 333 × $11.992 = $3,993
+hourly_rate = $25.00/hour  # 4× A100 cluster
+total_cost = 333 × $25.00 = $8,325
 ```
 
 #### **Sanity Checks**
@@ -1657,7 +1767,7 @@ samples/sec = 12M × 10 / (333 × 3600) = 100 samples/sec ✓
 tokens/sec = 24B / (333 × 3600) = 20,020 tokens/sec ✓
 ```
 
-**Result**: **14 days, $3,993** → 13.3× faster than T4 baseline, 70% cheaper
+**Result**: **14 days, $8,325** → 13.3× faster than T4 baseline, 37% cheaper
 
 ---
 
@@ -1712,7 +1822,7 @@ total = 124 + 19 + 4 + 4 = 151 hours = 6.3 days
 
 #### **Step 10: Cost**
 ```python
-total_cost = 151 × $11.992 = $1,811
+total_cost = 151 × $25.00 = $3,775
 ```
 
 #### **Sanity Checks**
@@ -1723,7 +1833,7 @@ time/epoch = 151 / 10 = 15.1 hours ✓
 MFU of 46% matches published benchmarks ✓
 ```
 
-**Result**: **6.3 days, $1,811** → 29× faster than T4 baseline, 86% cheaper!
+**Result**: **6.3 days, $3,775** → 29× faster than T4 baseline, 71% cheaper!
 
 ---
 
@@ -1732,30 +1842,30 @@ MFU of 46% matches published benchmarks ✓
 | Configuration | Hardware | Batch | MFU | Time (days) | Cost | vs T4 Baseline |
 |--------------|----------|-------|-----|-------------|------|----------------|
 | **Baseline** | 4× T4 | 64 | 9% | 184 | $13,231 | 1.0× |
-| **Baseline** | 4× L4 | 128 | 15% | 103 | $8,161 | 1.8× faster |
-| **Baseline** | 4× A100 | 256 | 22% | 13.9 | $3,993 | 13.3× faster |
-| **Baseline** | 4× H100 | 512 | 30% | 4.8 | $4,193 | 38× faster |
-| **Flash+MoE** | 4× T4 | 128 | 16% | 91 | $6,523 | 2.0× faster |
+| **Baseline** | 4× L4 | 128 | 15% | 55 | $4,386 | 3.3× faster |
+| **Baseline** | 4× A100 | 256 | 22% | 13.9 | $8,320 | 13× faster |
+| **Baseline** | 4× H100 | 512 | 25% | 3.8 | $3,309 | 48× faster |
+| **Flash+MoE** | 4× T4 | 128 | 16% | 91 | $6,535 | 2.0× faster |
 | **Flash+MoE** | 4× L4 | 256 | 23% | 34 | $2,696 | 5.4× faster |
-| **Flash+MoE** | 4× A100 | 512 | 45% | 6.5 | $1,869 | 28× faster |
-| **Flash+MoE** | 4× H100 | 1024 | 46% | **2.0** | **$1,747** | **92× faster** ⭐ |
+| **Flash+MoE** | 4× A100 | 512 | 45% | 6.5 | $3,900 | 28× faster |
+| **Flash+MoE** | 4× H100 | 1024 | 46% | **2.05** | **$1,790** | **92× faster** ⭐ |
 
-⭐ **Best choice**: H100 Flash+MoE (2 days, $1,747)
+⭐ **Best choice**: H100 Flash+MoE (2.05 days, $1,790)
 
 ---
 
 ### **B.4 Decision Framework**
 
 **When to choose H100**:
-1. ✅ **Best overall value**: Fastest training + competitive cost ($1,747 vs $1,869 for A100)
-2. ✅ **Iterative development**: 10-20 runs on 10% sample = $4K-$9K vs $4K-$8K on A100
+1. ✅ **Best overall value**: Fastest training + significantly cheaper ($1,790 vs $3,900 for A100)
+2. ✅ **Iterative development**: 10-20 runs on 10% sample = $1.8K-$3.6K vs $7.8K-$15.6K on A100
 3. ✅ **Ultra-long sequences**: 80 GB enables batch=1024+ with Flash Attention
 4. ✅ **Time-critical projects**: 2-day full training vs 6.5 days on A100
 
 **When to choose A100**:
-1. ✅ **Proven reliability**: More mature software stack
-2. ✅ **Wider availability**: Easier to provision
-3. ✅ **Slightly lower hourly cost**: $11.99/h vs $36.38/h (but H100 3× faster → net cheaper)
+1. ✅ **H100 unavailable**: If H100 not accessible in your region
+2. ✅ **Proven reliability**: More mature software stack
+3. ⚠️ **Higher cost**: $25/h is now comparable to H100 $36.38/h but H100 3× faster
 
 **When to choose L4**:
 1. ✅ **Middle ground**: 5× faster than T4, half the cost of A100
@@ -1773,15 +1883,21 @@ MFU of 46% matches published benchmarks ✓
 H100_premium = $36.384/hour vs $2.992/hour = 12.2× more per hour
 H100_speedup = 92× faster
 Cost efficiency = 92 / 12.2 = 7.5× better cost/performance
-Total: $1,747 (H100) vs $6,523 (T4) → H100 is 73% cheaper!
+Total: $1,790 (H100) vs $6,535 (T4) → H100 is 73% cheaper!
 
 # H100 vs A100
-H100_premium = $36.384/hour vs $11.992/hour = 3.0× more per hour
+H100_premium = $36.384/hour vs $25.00/hour = 1.46× more per hour
 H100_speedup = 3.3× faster  
-Cost efficiency = 3.3 / 3.0 = 1.1× better cost/performance
-Total: $1,747 (H100) vs $1,869 (A100) → H100 is 7% cheaper + 3× faster
+Cost efficiency = 3.3 / 1.46 = 2.3× better cost/performance
+Total: $1,790 (H100) vs $3,900 (A100) → H100 is 54% cheaper + 3× faster!
 
-# Break-even: H100 always cheaper for full training; use A100 only if H100 unavailable
+# H100 vs L4
+H100_premium = $36.384/hour vs $3.304/hour = 11× more per hour
+H100_speedup = 44× faster
+Cost efficiency = 44 / 11 = 4.0× better cost/performance
+Total: $1,790 (H100) vs $2,696 (L4) → H100 is 34% cheaper + 44× faster!
+
+# Break-even: H100 is always the best choice for any serious training workload
 ```
 
 ---
@@ -2121,10 +2237,10 @@ Single training:
 **Total Project Cost (Development + Production)**:
 ```python
 4× H100 path: $3,560 + $1,790 = $5,350
-vs 4× A100 path: ~$8,000 + $1,869 = $9,869
-vs 4× T4 path: ~$25,000 + $6,523 = $31,523
+vs 4× A100 path: ~$7,800 + $3,900 = $11,700
+vs 4× T4 path: ~$13,040 + $6,535 = $19,575
 
-Savings: $4,519 vs A100, $26,173 vs T4
+Savings: $6,350 vs A100, $14,225 vs T4
 ```
 
 ---
@@ -2175,8 +2291,8 @@ def estimate_training_time_cost(
             'hourly_cost': 3.304, 'nvlink': False
         },
         'A100x4': {
-            'peak_tflops': 1248, 'memory_gb': 160,
-            'hourly_cost': 11.992, 'nvlink': True
+            'peak_tflops': 1248, 'memory_gb': 320,
+            'hourly_cost': 25.00, 'nvlink': True
         },
         'H100x1': {
             'peak_tflops': 989, 'memory_gb': 80,
@@ -2317,12 +2433,12 @@ if __name__ == "__main__":
 | Configuration | Hardware | Batch | MFU | Time | Cost | Speedup |
 |--------------|----------|-------|-----|------|------|---------|
 | **Baseline** | 4× T4 | 64 | 9% | 184 days | $13,231 | 1.0× |
-| **Baseline** | 4× L4 | 128 | 15% | 103 days | $8,161 | 1.8× |
-| **Baseline** | 4× A100 | 256 | 22% | 14 days | $3,993 | 13× |
-| **Baseline** | 4× H100 | 2048 | 24% | 3.9 days | $3,420 | 47× |
+| **Baseline** | 4× L4 | 128 | 15% | 55 days | $4,386 | 3.3× |
+| **Baseline** | 4× A100 | 256 | 22% | 14 days | $8,320 | 13× |
+| **Baseline** | 4× H100 | 512 | 25% | 3.8 days | $3,309 | 48× |
 | **Flash+MoE** | 4× T4 | 128 | 16% | 91 days | $6,535 | 2.0× |
 | **Flash+MoE** | 4× L4 | 256 | 23% | 34 days | $2,696 | 5.4× |
-| **Flash+MoE** | 4× A100 | 512 | 45% | 6.5 days | $1,869 | 28× |
+| **Flash+MoE** | 4× A100 | 512 | 45% | 6.5 days | $3,900 | 28× |
 | **Flash+MoE** | 4× H100 | 4096 | 45% | **2.05 days** | **$1,790** | **92×** ⭐ |
 
 ⭐ **Best overall**: 4× H100 with Flash Attention + MoE
@@ -2393,13 +2509,13 @@ Start
   │
   ├─ Have H100 access?
   │   ├─ YES → Always use 4× H100 Flash+MoE
-  │   │   ├─ Development: 1.2M sample ($215/run, 6 hours)
-  │   │   └─ Production: 12M full ($1,783, 2 days)
+  │   │   ├─ Development: 1.2M sample ($179/run, 5 hours)
+  │   │   └─ Production: 12M full ($1,790, 2 days)
   │   │
   │   └─ NO → Choose between T4/L4/A100
-  │       ├─ Budget > $10K? → Use 4× A100
-  │       │   ├─ Timeline < 1 week? → Full data Flash+MoE ($1,869, 6.5 days)
-  │       │   └─ Iteration? → 10% sample ($399 × N runs)
+  │       ├─ Budget > $12K? → Use 4× A100
+  │       │   ├─ Timeline < 1 week? → Full data Flash+MoE ($3,900, 6.5 days)
+  │       │   └─ Iteration? → 10% sample ($390 × N runs)
   │       │
   │       ├─ Budget $5K-$10K? → Use 4× L4
   │       │   └─ 10% sample Flash+MoE ($258/run, 1 day)
@@ -2438,22 +2554,22 @@ This document provides comprehensive guidance for training clinical transformers
 
 **Alternative Without H100**:
 - **Development**: 4× A100 Flash+MoE on 1.2M
-  - 20 experiments × $399 = $7,980
+  - 20 experiments × $390 = $7,800
 - **Production**: 4× A100 Flash+MoE on 12M
-  - Single training: 6.5 days, $1,869
-- **Total**: $9,849, 1 month
+  - Single training: 6.5 days, $3,900
+- **Total**: $11,700, 1 month
 
 **Hardware ROI Summary**:
 ```
 4× H100: $5,370 total, 1 week → BEST VALUE ⭐
-4× A100: $9,849 total, 1 month → Good alternative
+4× A100: $11,700 total, 1 month → Premium cost
 4× L4:   ~$7,900 total, 2 months → Budget option
 4× T4:   ~$31,600 total, 7 months → Avoid if possible
 ```
 
 **Expected Development Cost**: 
 - **With H100**: $3.6K-$5.4K ⭐ **Best value**
-- **With A100**: $8K-$10K  
+- **With A100**: $7.8K-$11.7K (Higher due to new pricing)
 - **With T4**: $26K-$32K
 
 ---
