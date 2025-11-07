@@ -102,7 +102,7 @@ Date: 2025-10-24
 # ============================================================================
 
 
-# In[20]:
+# In[1]:
 
 
 import pandas as pd
@@ -110,7 +110,7 @@ df_train = pd.read_feather("sample_data/mdcd_train_8000.feather")
 df_val = pd.read_feather("sample_data/mdcd_val_2000.feather")
 
 
-# In[21]:
+# In[2]:
 
 
 """
@@ -150,7 +150,7 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[22]:
+# In[3]:
 
 
 @dataclass
@@ -181,7 +181,7 @@ class BaseConfig:
     age_vocab: int = 1440     # Age in months (120 years)
     
     # Training
-    batch_size: int = 128     # Batch size
+    batch_size: int = 64     # Batch size
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
     gradient_clip: float = 1.0  # Gradient clipping norm
@@ -249,7 +249,7 @@ class MoEConfig:
 
 
 
-# In[31]:
+# In[4]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -378,7 +378,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### RPE and Swiglu
 
-# In[24]:
+# In[5]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -501,9 +501,40 @@ class SwiGLU(nn.Module):
         return output
 
 
+# In[6]:
+
+
+def test_rotary_position_embedding():
+    rope = RotaryPositionEmbedding(dim=32, max_seq_len=16).to(device)
+    q = torch.randn(2, 4, 16, 32, device=device)
+    k = torch.randn(2, 4, 16, 32, device=device)
+    q_rot, k_rot = rope(q, k)
+
+    assert q_rot.shape == q.shape, "q not equal"
+    assert k_rot.shape == k.shape, "k not equal"
+    assert torch.allclose(q_rot.norm(dim=-1), q.norm(dim=-1), atol=1e-4), "q close failed"
+    assert torch.allclose(k_rot.norm(dim=-1), k.norm(dim=-1), atol=1e-4), "k close failed"
+    print("RoPE forward ✔️")
+test_rotary_position_embedding()
+
+
+# In[7]:
+
+
+def test_swiglu_forward():
+    layer = SwiGLU(d_model=256, d_ff=512, dropout=0.1).to(device)
+    x = torch.randn(6, 256, device=device)
+    y = layer(x)
+
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
+    print("SwiGLU forward ✔️")
+test_swiglu_forward()
+
+
 # ### Flash attention
 
-# In[25]:
+# In[8]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -742,9 +773,32 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
+# In[9]:
+
+
+def test_flash_attention_layer_fallback():
+    layer = FlashAttentionLayer(
+        d_model=256,
+        nhead=8,
+        dropout=0.1,
+        use_rope=True,
+        use_flash=False,  # ensures no xFormers dependency for the smoke test
+        max_seq_len=32,
+        dtype=torch.float32
+    ).to(device)
+
+    x = torch.randn(32, 3, 256, device=device)  # [seq, batch, dim]
+    out = layer(x, is_causal=True)
+
+    assert out.shape == x.shape
+    assert torch.isfinite(out).all()
+    print("FlashAttentionLayer fallback path ✔️")
+test_flash_attention_layer_fallback()
+
+
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[26]:
+# In[11]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -827,9 +881,23 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
+# In[12]:
+
+
+def test_learned_attention_pooling():
+    pooling = LearnedAttentionPooling(d_model=256, dropout=0.0).to(device)
+    x = torch.randn(80, 5, 256, device=device)  # [seq, batch, dim]
+    pooled = pooling(x)
+
+    assert pooled.shape == (5, 256)
+    assert torch.isfinite(pooled).all()
+    print("LearnedAttentionPooling ✔️")
+test_learned_attention_pooling()
+
+
 # ### MOE components
 
-# In[27]:
+# In[14]:
 
 
 # ============================================================================
@@ -1156,9 +1224,78 @@ class MoELayer(nn.Module):
         return output, losses
 
 
+# In[15]:
+
+
+def test_switch_auxiliary_loss():
+    loss_fn = SwitchAuxiliaryLoss(num_experts=4).to(device)
+    router_probs = torch.softmax(torch.randn(20, 4, device=device), dim=-1)
+    expert_indices = torch.randint(0, 4, (20, 2), device=device)
+    loss = loss_fn(router_probs, expert_indices)
+
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    print("SwitchAuxiliaryLoss ✔️")
+test_switch_auxiliary_loss()
+
+
+# In[16]:
+
+
+def test_deepseek_bias_correction():
+    correction = DeepSeekBiasCorrection(num_experts=4, bias_lr=0.1, momentum=0.5)
+    before = correction.get_bias().clone()
+    expert_indices = torch.randint(0, 4, (16, 2))
+    correction.update_bias(expert_indices)
+    after = correction.get_bias()
+
+    assert not torch.equal(before, after)
+    print("DeepSeekBiasCorrection ✔️")
+test_deepseek_bias_correction()
+
+
+# In[17]:
+
+
+def test_expert_layer_forward():
+    expert = ExpertLayer(d_model=256, d_ff=128, dropout=0.1, use_swiglu=False).to(device)
+    x = torch.randn(10, 256, device=device)
+    y = expert(x)
+
+    assert y.shape == x.shape
+    print("ExpertLayer ✔️")
+test_expert_layer_forward()
+
+
+# In[18]:
+
+
+def test_moe_layer_forward():
+    moe_cfg = MoEConfig(
+        d_model=256,
+        d_ff=128,
+        num_experts=4,
+        num_shared_experts=1,
+        top_k=2,
+        load_balance_strategy='switch',
+        aux_loss_weight=0.1,
+        expert_dropout=0.0,
+        use_moe_from_layer=0
+    )
+    moe = MoELayer(moe_cfg).to(device)
+    x = torch.randn(12, 3, 256, device=device)  # [seq, batch, dim]
+    out, losses = moe(x, train=True)
+
+    assert out.shape == x.shape
+    assert 'aux_loss' in losses
+    assert torch.isfinite(losses['aux_loss'])
+    print("MoELayer ✔️")
+test_moe_layer_forward()
+
+
 # ### Model architecture
 
-# In[28]:
+# In[33]:
 
 
 # ============================================================================
@@ -1500,8 +1637,9 @@ class FlashAttentionTransformer(nn.Module):
                 cd = residual + cd
 
                 # Max pooling
-                cd = cd.permute(1, 2, 0)
-                cd = nn.MaxPool1d(self.config.len_cd)(cd)
+                cd = cd.permute(1, 2, 0)  # [batch*len_dy, embedding_size, len_cd]
+                cd = nn.MaxPool1d(self.config.len_cd)(cd)  # [batch*len_dy, embedding_size, 1]
+                cd = cd.squeeze(-1)  # [batch*len_dy, embedding_size]
             
             
         else:
@@ -1633,15 +1771,16 @@ class FlashMoETransformer(nn.Module):
             # Layer norms
             norm1 = nn.LayerNorm(config.embedding_size)
             norm2 = nn.LayerNorm(config.embedding_size)
-            
-            self.temporal_layers.append(nn.ModuleDict({
+            layer_dict = nn.ModuleDict({
                 'attention': attn,
                 'ffn': ffn,
                 'norm1': norm1,
                 'norm2': norm2,
-                'is_moe': is_moe
-            }))
-        
+            })
+            layer_dict.is_moe = is_moe
+            self.temporal_layers.append(layer_dict)
+            
+            
         # Output layers
         self.mm = nn.GELU()
         self.decoder_cd = nn.Linear(config.embedding_size, config.target_cd_cnt)
@@ -1679,7 +1818,7 @@ class FlashMoETransformer(nn.Module):
         if self.config.use_learnt_att_pool:
             cd_pooled = self.daily_pooling(cd)
             cd_pooled = self.daily_mlp(cd_pooled) # Optional
-            cd_pooled = self.daily_norm(cd_pooled)   
+            cd = self.daily_norm(cd_pooled)   
         else: 
             # Pre-norm attention
             residual = cd
@@ -1694,8 +1833,9 @@ class FlashMoETransformer(nn.Module):
             cd = residual + cd
 
             # Max pooling
-            cd = cd.permute(1, 2, 0)
-            cd = nn.MaxPool1d(self.config.len_cd)(cd)
+            cd = cd.permute(1, 2, 0)  # [batch*len_dy, embedding_size, len_cd]
+            cd = nn.MaxPool1d(self.config.len_cd)(cd)  # [batch*len_dy, embedding_size, 1]
+            cd = cd.squeeze(-1)  # [batch*len_dy, embedding_size]
         
         # Reshape it back
         cd = cd.reshape(gpu_batchsize, self.config.len_dy, self.config.embedding_size)
@@ -1721,7 +1861,7 @@ class FlashMoETransformer(nn.Module):
             residual = cd
             cd_norm = layer['norm2'](cd)
             
-            if layer['is_moe']:
+            if layer.is_moe:
                 cd_ffn, moe_losses = layer['ffn'](cd_norm, train=self.training)
                 if self.training and return_moe_losses:
                     total_aux_loss += moe_losses['aux_loss']
@@ -1748,9 +1888,90 @@ class FlashMoETransformer(nn.Module):
         return cd, moe_losses
 
 
+# In[30]:
+
+
+def test_baseline_transformer_forward():
+    cfg = BaseConfig(len_dy=32, len_cd=40, batch_size=4, device=device.type)
+    batch = df_train.head(cfg.batch_size).copy()
+    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+
+    model = BaselineTransformer(cfg).to(device)
+    with torch.no_grad():
+        out = model(x.to(device))
+
+    assert out.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt)
+    print("BaselineTransformer forward ✔️")
+test_baseline_transformer_forward()
+
+
+# In[31]:
+
+
+def test_flash_attention_transformer_forward():
+    cfg = FlashAttentionConfig(
+        len_dy=32,
+        len_cd=40,
+        batch_size=4,
+        device=device.type,
+        use_flash=False,          # fallback path for portability
+        use_learnt_att_pool=False,
+        dtype=torch.float32,
+        nhead=8
+    )
+    batch = df_train.head(cfg.batch_size).copy()
+    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+
+    model = FlashAttentionTransformer(cfg).to(device)
+    with torch.no_grad():
+        out = model(x.to(device))
+
+    assert out.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt)
+    print("FlashAttentionTransformer forward ✔️")
+test_flash_attention_transformer_forward()
+
+
+# In[34]:
+
+
+def test_flash_moe_transformer_forward():
+    cfg = FlashAttentionConfig(
+        len_dy=32,
+        len_cd=40,
+        batch_size=4,
+        device=device.type,
+        use_flash=False,
+        use_learnt_att_pool=True,
+        dtype=torch.float32,
+        nhead=8
+    )
+    moe_cfg = MoEConfig(
+        d_model=cfg.embedding_size,
+        d_ff=128,
+        num_experts=4,
+        num_shared_experts=1,
+        top_k=2,
+        load_balance_strategy='switch',
+        aux_loss_weight=0.1,
+        expert_dropout=0.0,
+        use_moe_from_layer=0
+    )
+    batch = df_train.head(cfg.batch_size).copy()
+    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+
+    model = FlashMoETransformer(cfg, moe_cfg).to(device)
+    with torch.no_grad():
+        out, moe_losses = model(x.to(device), return_moe_losses=True)
+
+    assert out.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt)
+    assert 'aux_loss' in moe_losses
+    print("FlashMoETransformer forward ✔️")
+test_flash_moe_transformer_forward()
+
+
 # ### Training session
 
-# In[29]:
+# In[21]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2398,18 +2619,106 @@ def create_bucketing_dataloader(
 
 # #### Test
 
-# In[17]:
+# In[35]:
 
 
-# Test equivalence
-base_config = BaseConfig()
-batch_test = df_train.head(16)
-dt_cnt_old, x_old, y_old = prepare_tensor(batch_test, base_config, device)
-print(x_old)
-print("✅ Vectorized data prep validated!")
+def test_prepare_tensor_and_multihot():
+    cfg = BaseConfig(batch_size=4, len_dy=32, len_cd=40, device=device.type)
+    dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
+
+    assert x.shape == (cfg.batch_size, cfg.len_dy, 2 + cfg.len_cd)
+    assert len(y) == cfg.batch_size
+
+    y_flat = [codes for day_list in y for codes in day_list]
+    multihot = create_multihot_targets_vectorized(
+        y_flat[:10],
+        num_samples=10,
+        vocab_size=cfg.target_cd_cnt,
+        device=device
+    )
+
+    assert multihot.shape == (10, cfg.target_cd_cnt)
+    print("prepare_tensor + multihot ✔️")
+test_prepare_tensor_and_multihot()
 
 
-# In[ ]:
+# In[36]:
+
+
+def test_compute_loss_smoke():
+    cfg = BaseConfig(batch_size=4, len_dy=32, len_cd=40, device=device.type)
+    dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
+
+    model = BaselineTransformer(cfg).to(device)
+    with torch.no_grad():
+        logits = model(x.to(device))
+
+    crit = nn.BCEWithLogitsLoss()
+    loss = compute_loss(logits, y, dt_cnt, cfg, crit, device)
+
+    assert loss.ndim == 0 and torch.isfinite(loss)
+    print("compute_loss ✔️")
+test_compute_loss_smoke()
+
+
+# In[37]:
+
+
+def test_train_epoch_smoke():
+    cfg = BaseConfig(batch_size=4, len_dy=16, len_cd=30, learning_rate=1e-3, device=device.type)
+    model = BaselineTransformer(cfg).to(device)
+    opt = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
+    sched = optim.lr_scheduler.StepLR(opt, step_size=1, gamma=0.9)
+    crit = nn.BCEWithLogitsLoss()
+
+    train_subset = df_train.head(cfg.batch_size)  # single batch
+    metrics = train_epoch(
+        model=model,
+        train_data=train_subset,
+        optimizer=opt,
+        scheduler=sched,
+        criterion=crit,
+        config=cfg,
+        device=device,
+        use_mixed_precision=False,
+        use_bucketing=False
+    )
+
+    assert 'train_loss' in metrics and 'aux_loss' in metrics
+    print("train_epoch smoke ✔️")
+test_train_epoch_smoke()
+
+
+# In[38]:
+
+
+def test_evaluate_smoke():
+    cfg = BaseConfig(batch_size=4, len_dy=16, len_cd=30, device=device.type)
+    model = BaselineTransformer(cfg).to(device)
+    crit = nn.BCEWithLogitsLoss()
+
+    # Prime the model with one forward so embeddings are on-device
+    dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
+    with torch.no_grad():
+        model(x.to(device))
+
+    val_metrics = evaluate(
+        model=model,
+        val_data=df_val.head(cfg.batch_size),
+        criterion=crit,
+        config=cfg,
+        device=device,
+        use_mixed_precision=False
+    )
+
+    assert 'val_loss' in val_metrics and 'top_10_acc' in val_metrics
+    print("evaluate smoke ✔️")
+test_evaluate_smoke()
+
+
+# ### Evaluation metrics
+
+# In[40]:
 
 
 """
@@ -3418,10 +3727,70 @@ def comprehensive_evaluation(
     return evaluation
 
 
+# In[41]:
 
-# #### Run experimentation
 
-# In[30]:
+def test_metric_utilities():
+    vocab = 50
+    predictions = torch.randn(32, vocab)
+    targets = [[i % vocab] for i in range(32)]
+    multihot = torch.randint(0, 2, (32, vocab)).float()
+    freq = np.random.randint(1, 100, size=vocab)
+
+    primary = compute_primary_task_metrics(predictions, targets, vocab)
+    losses = compute_loss_metrics(predictions, multihot, nn.BCEWithLogitsLoss())
+    stratified = compute_stratified_metrics(predictions, targets, freq, vocab)
+
+    assert 'recall@10' in primary
+    assert 'bce_loss' in losses
+    assert 'tail_top10_acc' in stratified
+    print("Metric utilities ✔️")
+test_metric_utilities()
+
+
+# In[42]:
+
+
+def test_comprehensive_evaluation_dense():
+    cfg = BaseConfig(batch_size=4, len_dy=16, len_cd=30, device=device.type)
+    model = BaselineTransformer(cfg).to(device)
+    criterion = nn.BCEWithLogitsLoss()
+
+    train_subset = df_train.head(cfg.batch_size)
+    val_subset = df_val.head(cfg.batch_size)
+    epoch_history = [{'val_loss': 1.0, 'top_10_acc': 0.1}]
+    code_freq = np.ones(cfg.target_cd_cnt, dtype=np.int32)
+
+    previous = globals().get('config')
+    globals()['config'] = cfg  # required by compute_training_time_metrics
+
+    evaluation = comprehensive_evaluation(
+        model=model,
+        train_data=train_subset,
+        val_data=val_subset,
+        config=cfg,
+        device=device,
+        training_time_sec=1.0,
+        epoch_history=epoch_history,
+        code_frequencies=code_freq,
+        moe_config=None,
+        use_mixed_precision=False
+    )
+
+    assert 'performance' in evaluation
+    assert 'efficiency' in evaluation
+    print("comprehensive_evaluation (dense) ✔️")
+
+    if previous is not None:
+        globals()['config'] = previous
+    else:
+        del globals()['config']
+test_comprehensive_evaluation_dense()
+
+
+# ### Run experimentation
+
+# In[32]:
 
 
 def run_single_experiment(
@@ -3990,6 +4359,230 @@ def load_checkpoint_multigpu(
         
 
 
+# ### Time and cost estimation
+
+# In[1]:
+
+
+import numpy as np
+from typing import Dict, Tuple
+
+def estimate_training_time_cost(
+    num_members: int,
+    epochs: int,
+    model_type: str = "baseline",  # "baseline" or "flash_moe"
+    hardware: str = "T4x4"  # "T4x4" or "A100x4"
+) -> Dict[str, float]:
+    """
+    Estimate training time and cost for clinical transformer.
+    
+    Args:
+        num_members: Number of patient records to train on
+        epochs: Number of training epochs
+        model_type: "baseline" or "flash_moe"
+        hardware: "T4x4" (4× T4) or "A100x4" (4× A100)
+    
+    Returns:
+        Dict with keys: 'hours', 'cost_usd', 'days', 'samples_per_sec'
+    """
+    
+    # Base FLOPs calculation (from methodology)
+    # 257 ExaFLOPs for 12M members, 10 epochs
+    base_flops = 257e18  # ExaFLOPs
+    flops_per_member_epoch = base_flops / (12e6 * 10)
+    total_flops = flops_per_member_epoch * num_members * epochs
+    
+    # Hardware specifications
+    hardware_specs = {
+        'T4x4': {
+            'peak_tflops': 260,  # 4 × 65 TFLOPs
+            'memory_gb': 64,     # 4 × 16 GB
+            'hourly_cost': 3.472,  # $2.072 + 4×$0.35
+            'nvlink': False
+        },
+        'A100x4': {
+            'peak_tflops': 1248,  # 4 × 312 TFLOPs
+            'memory_gb': 160,     # 4 × 40 GB
+            'hourly_cost': 11.992,  # $2.072 + 4×$2.48
+            'nvlink': True
+        }
+    }
+    
+    # Model configurations with practical adjustments
+    model_configs = {
+        'baseline': {
+            'T4x4': {
+                'batch_size': 64,
+                'mfu': 0.09,  # 9% - verified from PaLM paper
+                'grad_accum_steps': 2,
+                'data_overhead': 0.25,
+                'comm_overhead': 0.12,
+                'misc_overhead': 0.03
+            },
+            'A100x4': {
+                'batch_size': 256,
+                'mfu': 0.20,  # 20% - better hardware utilization
+                'grad_accum_steps': 1,
+                'data_overhead': 0.20,
+                'comm_overhead': 0.05,  # NVLink benefit
+                'misc_overhead': 0.03
+            }
+        },
+        'flash_moe': {
+            'T4x4': {
+                'batch_size': 128,
+                'mfu': 0.16,  # Practical speedup factors applied
+                'grad_accum_steps': 1,
+                'data_overhead': 0.20,  # Bucketing optimization
+                'comm_overhead': 0.10,
+                'misc_overhead': 0.03
+            },
+            'A100x4': {
+                'batch_size': 512,
+                'mfu': 0.40,  # Near-optimal for Flash+MoE
+                'grad_accum_steps': 1,
+                'data_overhead': 0.15,
+                'comm_overhead': 0.03,
+                'misc_overhead': 0.02
+            }
+        }
+    }
+    
+    # Get configuration
+    config = model_configs[model_type][hardware]
+    hw_spec = hardware_specs[hardware]
+    
+    # Calculate effective throughput
+    effective_tflops_per_sec = hw_spec['peak_tflops'] * 1e12 * config['mfu']
+    
+    # Pure compute time
+    compute_seconds = total_flops / effective_tflops_per_sec
+    compute_hours = compute_seconds / 3600
+    
+    # Add overheads (linear, not multiplicative)
+    grad_accum_overhead = compute_hours * 0.05 * (config['grad_accum_steps'] - 1)
+    data_overhead = compute_hours * config['data_overhead']
+    comm_overhead = compute_hours * config['comm_overhead']
+    misc_overhead = compute_hours * config['misc_overhead']
+    
+    total_hours = compute_hours + grad_accum_overhead + data_overhead + comm_overhead + misc_overhead
+    
+    # Calculate cost
+    total_cost = total_hours * hw_spec['hourly_cost']
+    
+    # Calculate throughput metrics
+    samples_per_sec = (num_members * epochs) / (total_hours * 3600)
+    
+    return {
+        'hours': round(total_hours, 1),
+        'cost_usd': round(total_cost, 2),
+        'days': round(total_hours / 24, 1),
+        'samples_per_sec': round(samples_per_sec, 2),
+        'compute_hours': round(compute_hours, 1),
+        'overhead_hours': round(total_hours - compute_hours, 1),
+        'mfu_percent': round(config['mfu'] * 100, 1),
+        'batch_size': config['batch_size']
+    }
+import numpy as np
+from typing import Dict
+
+def h100_time_cost(
+    num_members: int,
+    epochs: int,
+    model: str = "baseline",  # "baseline" or "flash_moe"
+    num_h100: int = 1
+) -> Dict[str, float]:
+    """
+    Estimate training time & cost on NVIDIA H100 80-GB GPUs.
+    """
+    # 1. FLOPs scaling factor
+    base_flops = 257e18         # 257 EFLOPs for 12 M × 10
+    flop_per_ex = base_flops / (12_000_000 * 10)
+    total_flops = flop_per_ex * num_members * epochs
+
+    # 2. Hardware
+    peak_tf = 395 * num_h100        # TFLOPs/s cluster
+    hourly_rate = 18.191 * num_h100 # USD / h
+
+    # 3. Model-specific config
+    conf = {
+        ("baseline", 1): dict(mfu=0.25, data=0.20, comm=0.00, grad=0.05, misc=0.03),
+        ("baseline", "multi"): dict(mfu=0.25, data=0.20, comm=0.03, grad=0.05, misc=0.03),
+        ("flash_moe", 1): dict(mfu=0.50, data=0.15, comm=0.00, grad=0.00, misc=0.02),
+        ("flash_moe", "multi"): dict(mfu=0.50, data=0.15, comm=0.03, grad=0.00, misc=0.02),
+    }
+    key = (model, 1 if num_h100 == 1 else "multi")
+    cfg = conf[key]
+
+    # 4. Pure compute time
+    compute_h = total_flops / (peak_tf * 1e12 * cfg["mfu"]) / 3600
+
+    # 5. Overheads
+    overhead_h = compute_h * (
+        cfg["data"] + cfg["comm"] + cfg["misc"]
+        + cfg["grad"]    # grad_accum=2 only for baseline small batches -> already accounted
+    )
+    total_h = compute_h + overhead_h
+    cost = total_h * hourly_rate
+
+    return {
+        "hours": round(total_h, 2),
+        "days": round(total_h / 24, 2),
+        "cost_usd": round(cost, 0),
+        "compute_only_h": round(compute_h, 2),
+        "mfu_percent": round(cfg["mfu"] * 100, 1)
+    }
+
+
+# In[4]:
+
+
+for n in [1, 2, 4]:
+    print("Baseline", n, "GPU", h100_time_cost(12_000_000, 1, "flash_moe", n))
+    print("Flash+MoE", n, "GPU:", h100_time_cost(12_000_000, 1, "flash_moe", n))
+
+
+# In[7]:
+
+
+scenarios = [
+    ("Baseline", "baseline", "T4x4"),
+    ("Flash+MoE", "flash_moe", "T4x4"),
+    ("Baseline", "baseline", "A100x4"),
+    ("Flash+MoE", "flash_moe", "A100x4"),
+]
+
+for name, model, hw in scenarios:
+    result = estimate_training_time_cost(
+        num_members=1_000_000,
+        epochs=1,
+        model_type=model,
+        hardware=hw
+    )
+
+    print(f"\n{name} on {hw}:")
+    print(f"  Time: {result['hours']} hours ({result['days']} days)")
+    print(f"  Cost: ${result['cost_usd']}")
+    print(f"  Batch Size: {result['batch_size']}")
+    print(f"  MFU: {result['mfu_percent']}%")
+    print(f"  Throughput: {result['samples_per_sec']} samples/sec")
+
+# Extended example: Different scales
+print("\n\nScaling Analysis (Flash+MoE on A100x4)")
+print("=" * 50)
+
+for members in [100_000, 500_000, 1_000_000, 5_000_000, 12_000_000]:
+    for epochs in [1, 10]:
+        result = estimate_training_time_cost(
+            num_members=members,
+            epochs=epochs,
+            model_type="flash_moe",
+            hardware="A100x4"
+        )
+        print(f"{members/1e6:.1f}M members, {epochs} epochs: "
+              f"{result['hours']:.1f}h (${result['cost_usd']})")
+
+
 # ### Training
 
 # In[16]:
@@ -4038,3 +4631,45 @@ df_train.head()
 
 
 # ### Start experimentation
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
