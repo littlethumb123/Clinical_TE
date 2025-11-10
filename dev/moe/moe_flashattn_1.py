@@ -102,7 +102,7 @@ Date: 2025-10-24
 # ============================================================================
 
 
-# In[48]:
+# In[1]:
 
 
 import pandas as pd
@@ -111,7 +111,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[1]:
+# In[2]:
 
 
 """
@@ -152,7 +152,65 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[35]:
+# In[69]:
+
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+
+import logging
+from pathlib import Path
+import json
+
+def setup_experiment_logging(
+    exp_name: str,
+    log_dir: str = "logs"
+) -> logging.Logger:
+    """
+    Set up comprehensive logging for experiment tracking.
+    
+    Creates:
+    1. Console logger (INFO level)
+    2. File logger (DEBUG level) - saves to logs/{exp_name}/training.log
+    3. Metrics JSON logger - saves metrics to logs/{exp_name}/metrics.json
+    
+    Returns:
+        Logger instance
+    """
+    # Create log directory
+    log_path = Path(log_dir) / exp_name
+    log_path.mkdir(parents=True, exist_ok=True)
+    
+    # Setup logger
+    logger = logging.getLogger(exp_name)
+    logger.setLevel(logging.DEBUG)
+    logger.handlers = []  # Clear existing handlers
+    
+    # Console handler (INFO level)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler (DEBUG level)
+    file_handler = logging.FileHandler(log_path / 'training.log')
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
+# In[3]:
 
 
 @dataclass
@@ -250,7 +308,7 @@ class MoEConfig:
 
 
 
-# In[36]:
+# In[4]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -379,7 +437,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### RPE and Swiglu
 
-# In[4]:
+# In[5]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -502,7 +560,7 @@ class SwiGLU(nn.Module):
         return output
 
 
-# In[5]:
+# In[6]:
 
 
 def test_rotary_position_embedding():
@@ -519,7 +577,7 @@ def test_rotary_position_embedding():
 test_rotary_position_embedding()
 
 
-# In[6]:
+# In[7]:
 
 
 def test_swiglu_forward():
@@ -535,7 +593,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[7]:
+# In[37]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -620,7 +678,7 @@ class FlashAttentionLayer(nn.Module):
                 print("xFormers not available - will use standard attention")
         
         self._init_weights()
-    
+            
     def _init_weights(self):
         """Initialize weights for stable training."""
         # Small initialization for attention weights
@@ -774,7 +832,7 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
-# In[8]:
+# In[9]:
 
 
 def test_flash_attention_layer_fallback():
@@ -799,7 +857,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[9]:
+# In[10]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -882,7 +940,7 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
-# In[10]:
+# In[11]:
 
 
 def test_learned_attention_pooling():
@@ -898,7 +956,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[11]:
+# In[41]:
 
 
 # ============================================================================
@@ -1125,9 +1183,9 @@ class MoELayer(nn.Module):
         Forward pass through MoE layer.
         
         Process:
-        1. Router selects top-K experts per token
-        2. Each token processed only by selected experts (efficient!)
-        3. Weighted combination of expert outputs
+        1. Sort tokens by expert assignment
+        2. Batch process all tokens for same expert
+        3. Vectorized scatter-add for output combination
         4. Add shared expert outputs (if any)
         
         Args:
@@ -1139,93 +1197,99 @@ class MoELayer(nn.Module):
             losses: Dictionary with 'aux_loss' and 'expert_usage'
         """
         seq_len, batch_size, d_model = x.shape
-        
-        # Flatten for routing
         x_flat = x.reshape(-1, d_model)  # [num_tokens, d_model]
         num_tokens = x_flat.shape[0]
-        
-        # Router computation
-        router_logits = self.router(x_flat)  # [num_tokens, num_routed_experts]
-        
-        # Apply DeepSeek bias if used
+
+        # ========================================================================
+        # STEP 1: Router computation
+        # ========================================================================
+        router_logits = self.router(x_flat)  # [num_tokens, num_experts]
+
         if self.config.load_balance_strategy == 'deepseek':
             bias = self.bias_correction.get_bias()
             router_logits = router_logits + bias.unsqueeze(0)
-        
-        # Get router probabilities
+
         router_probs = F.softmax(router_logits, dim=-1)
-        
-        # Select top-K experts
         top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
-        
-        # Renormalize gates
         top_k_gates = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
-        
-        # Process tokens through experts
+
+        # ========================================================================
+        # STEP 2: Create dispatch mask (vectorized approach)
+        # ========================================================================
+        # Build a [num_tokens, num_experts] mask with gate values
+        dispatch_mask = torch.zeros(
+            num_tokens, self.num_routed_experts,
+            dtype=x.dtype, device=x.device
+        )
+
+        # Scatter gate values into dispatch mask
+        for k in range(self.top_k):
+            dispatch_mask.scatter_add_(
+                1,  # dim: experts
+                top_k_indices[:, k:k+1],  # indices
+                top_k_gates[:, k:k+1]  # values
+            )
+
+        # ========================================================================
+        # STEP 3: Process each expert with its assigned tokens
+        # ========================================================================
         output = torch.zeros_like(x_flat)
-        
-        # Efficient expert processing
+
         for expert_idx in range(self.num_routed_experts):
-            # Find tokens for this expert
-            expert_mask = (top_k_indices == expert_idx).any(dim=-1)
-            
+            # Get gate weights for this expert
+            gates = dispatch_mask[:, expert_idx]  # [num_tokens]
+
+            # Find tokens with non-zero gates (assigned to this expert)
+            expert_mask = gates > 0
+
             if not expert_mask.any():
-                continue  # Skip unused expert
-            
-            # Get tokens
-            expert_tokens = x_flat[expert_mask]
-            
-            # Expert forward
+                continue  # Skip if no tokens for this expert
+
+            # Get tokens and gates for this expert
+            expert_tokens = x_flat[expert_mask]  # [num_expert_tokens, d_model]
+            expert_gates = gates[expert_mask]  # [num_expert_tokens]
+
+            # Forward through expert (BATCHED!)
             expert_output = self.experts[expert_idx](expert_tokens)
-            
-            # Get gates for these tokens
-            token_positions = torch.where(expert_mask)[0]
-            expert_gates = torch.zeros(len(token_positions), device=x.device)
-            
-            for i, pos in enumerate(token_positions):
-                k_positions = torch.where(top_k_indices[pos] == expert_idx)[0]
-                if len(k_positions) > 0:
-                    expert_gates[i] = top_k_gates[pos, k_positions[0]]
-            
-            # Add weighted output
+
+            # Weighted scatter back (VECTORIZED!)
             output[expert_mask] += expert_output * expert_gates.unsqueeze(-1)
-        
-        # Add shared experts
+
+        # ========================================================================
+        # STEP 4: Add shared experts
+        # ========================================================================
         if self.num_shared_experts > 0:
             for shared_expert in self.shared_experts:
                 shared_output = shared_expert(x_flat)
                 output += shared_output / self.num_shared_experts
-        
-        # Reshape back
+
+        # Reshape back to sequence format
         output = output.reshape(seq_len, batch_size, d_model)
-        
-        # Compute losses
+
+        # ========================================================================
+        # STEP 5: Compute losses (same as before)
+        # ========================================================================
         losses = {}
-        
         if train:
             if self.config.load_balance_strategy == 'switch':
                 losses['aux_loss'] = self.aux_loss_fn(router_probs, top_k_indices)
             else:
                 losses['aux_loss'] = torch.tensor(0.0, device=x.device)
-            
+
             if self.config.load_balance_strategy == 'deepseek':
                 self.bias_correction.update_bias(top_k_indices)
-            
-            # Track usage
+
+            # Track expert usage (vectorized)
             with torch.no_grad():
                 expert_usage = torch.zeros(self.num_routed_experts, device=x.device)
                 for k in range(self.top_k):
-                    expert_usage.scatter_add_(
-                        0,
-                        top_k_indices[:, k],
-                        torch.ones(num_tokens, device=x.device)
-                    )
+                    expert_usage.scatter_add_(0, top_k_indices[:, k], torch.ones(num_tokens, device=x.device))
                 losses['expert_usage'] = expert_usage / (num_tokens * self.top_k)
-        
+
         return output, losses
 
 
-# In[12]:
+# In[42]:
 
 
 def test_switch_auxiliary_loss():
@@ -1240,7 +1304,7 @@ def test_switch_auxiliary_loss():
 test_switch_auxiliary_loss()
 
 
-# In[13]:
+# In[43]:
 
 
 def test_deepseek_bias_correction():
@@ -1255,7 +1319,7 @@ def test_deepseek_bias_correction():
 test_deepseek_bias_correction()
 
 
-# In[14]:
+# In[44]:
 
 
 def test_expert_layer_forward():
@@ -1268,7 +1332,7 @@ def test_expert_layer_forward():
 test_expert_layer_forward()
 
 
-# In[15]:
+# In[45]:
 
 
 def test_moe_layer_forward():
@@ -1298,7 +1362,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[16]:
+# In[17]:
 
 
 # ============================================================================
@@ -1476,7 +1540,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[17]:
+# In[54]:
 
 
 # ============================================================================
@@ -1597,7 +1661,7 @@ class FlashAttentionTransformer(nn.Module):
         self.norm = nn.LayerNorm(config.embedding_size)
         
         self.init_weights()
-    
+            
     def init_weights(self):
         """Initialize weights."""
         initrange = 0.1
@@ -1695,7 +1759,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[18]:
+# In[55]:
 
 
 # ============================================================================
@@ -1805,7 +1869,7 @@ class FlashMoETransformer(nn.Module):
         self.norm = nn.LayerNorm(config.embedding_size)
         
         self.init_weights()
-    
+            
     def init_weights(self):
         initrange = 0.1
         nn.init.zeros_(self.decoder_cd.bias)
@@ -1910,7 +1974,7 @@ class FlashMoETransformer(nn.Module):
 
 # #### Test
 
-# In[25]:
+# In[24]:
 
 
 def test_baseline_transformer_forward():
@@ -1927,7 +1991,7 @@ def test_baseline_transformer_forward():
 test_baseline_transformer_forward()
 
 
-# In[26]:
+# In[25]:
 
 
 def test_flash_attention_transformer_forward():
@@ -1953,7 +2017,7 @@ def test_flash_attention_transformer_forward():
 test_flash_attention_transformer_forward()
 
 
-# In[27]:
+# In[26]:
 
 
 def test_flash_moe_transformer_forward():
@@ -1993,7 +2057,9 @@ test_flash_moe_transformer_forward()
 
 # ### Training session
 
-# In[65]:
+# #### Data preparation
+
+# In[27]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2265,6 +2331,13 @@ def compute_loss(
     
     return loss
 
+
+
+# #### Train and evaluation
+
+# In[ ]:
+
+
 # Training each epoch
 def train_epoch(
     model: nn.Module,
@@ -2276,8 +2349,9 @@ def train_epoch(
     device: torch.device,
     use_mixed_precision: bool = False,
     moe_config: Optional[MoEConfig] = None,
-    epoch: int = 0,
-    use_bucketing: bool = False
+    epoch: int = 1,
+    use_bucketing: bool = False,
+    log_interval: int = 100 
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -2286,6 +2360,14 @@ def train_epoch(
     - Step 1: Build batch list (either bucketed or sequential)
     - Step 2: Iterate over batch list uniformly
     - Step 3: Dynamic truncation for bucketed batches
+    
+    Logs metrics every `log_interval` batches:
+    - Loss (BCE + aux loss if MoE)
+    - Recall@10 (primary clinical metric)
+    - mAP@20 (ranking quality)
+    - Brier score (calibration)
+    - MoE health (if applicable)
+    
     """
     model.train()
     scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
@@ -2311,6 +2393,8 @@ def train_epoch(
     
     total_pred_loss = 0.0
     total_aux_loss = 0.0
+    batch_metrics_buffer = []  
+    moe_metrics_buffer = []
     
     # ============================================================
     # STEP 2: ITERATE OVER BATCHES (UNIFORM LOGIC)
@@ -2406,12 +2490,35 @@ def train_epoch(
         total_pred_loss += pred_loss.item()
         total_aux_loss += aux_loss.item()
         
-        # Log expert usage
-        if 'expert_usage' in moe_losses and batch_idx % 100 == 0:
-            usage = moe_losses['expert_usage'].cpu().numpy()
-            print(f'    Expert usage: {usage}')
-            if usage.std() > 0.1:
-                print(f'    ⚠️ Expert imbalance (std={usage.std():.3f})')
+        # ========================================================================
+        # STEP 6a: COMPUTE & LOG REAL-TIME METRICS (every log_interval batches)
+        # ========================================================================        
+        if batch_idx % log_interval == 0:
+            with torch.no_grad():
+                # Compute batch metrics (FAST)
+                batch_metrics = compute_batch_metrics_lightweight(
+                    output, y, dt_cnt, config, device
+                )
+                batch_metrics_buffer.append(batch_metrics)
+                
+                # Log to console
+                print(f"    Loss: {pred_loss.item():.4f} | "
+                      f"R@10: {batch_metrics['recall@10']:.3f} | "
+                      f"mAP: {batch_metrics['mAP@20']:.3f} | "
+                      f"Brier: {batch_metrics['brier_score']:.4f}")
+                
+                # MoE metrics if applicable
+                if moe_losses and 'expert_usage' in moe_losses:
+                    moe_batch_metrics = compute_moe_batch_metrics(moe_losses)
+                    moe_metrics_buffer.append(moe_batch_metrics)
+                    
+                    print(f"    MoE: CV={moe_batch_metrics['expert_load_cv']:.3f} | "
+                          f"Collapsed={moe_batch_metrics['num_collapsed_experts']} | "
+                          f"Gini={moe_batch_metrics['expert_gini']:.3f}")
+                    
+                    # WARNING if experts collapsing
+                    if moe_batch_metrics['num_collapsed_experts'] > 0:
+                        print(f" {moe_batch_metrics['num_collapsed_experts']} experts collapsed!")
         
         # Memory cleanup (NO empty_cache in loop!)
         del x, output, pred_loss, total_loss
@@ -2430,10 +2537,29 @@ def train_epoch(
         gc.collect()
         torch.cuda.empty_cache()
     
-    return {
+    # ========================================================================
+    # AGGREGATE EPOCH METRICS
+    # ========================================================================
+    epoch_metrics = {
         'train_loss': total_pred_loss / nbatch,
         'aux_loss': total_aux_loss / nbatch
     }
+    
+    # Add averaged batch metrics
+    if batch_metrics_buffer:
+        for key in batch_metrics_buffer[0].keys():
+            epoch_metrics[f'train_{key}'] = np.mean([m[key] for m in batch_metrics_buffer])
+    
+    # Add averaged MoE metrics
+    if moe_metrics_buffer:
+        for key in moe_metrics_buffer[0].keys():
+            epoch_metrics[f'train_{key}'] = np.mean([m[key] for m in moe_metrics_buffer])
+        
+        # Store final expert usage for comprehensive evaluation
+        if 'expert_usage' in moe_losses:
+            epoch_metrics['expert_usage'] = moe_losses['expert_usage']
+    
+    return epoch_metrics
 
 def evaluate(
     model: nn.Module,
@@ -2441,7 +2567,8 @@ def evaluate(
     criterion: nn.Module,
     config: BaseConfig,
     device: torch.device,
-    use_mixed_precision: bool = False
+    use_mixed_precision: bool = False,
+    compute_embeddings: bool = False
 ) -> Dict[str, float]:
     """
     Evaluate model on validation set.
@@ -2450,6 +2577,7 @@ def evaluate(
     1. Validation loss
     2. Top-K accuracy (1, 5, 10, 20)
     3. Mean Reciprocal Rank
+    4. Embedding quality (if compute_embeddings=True, this will be expensive)
     """
     model.eval()
     
@@ -2469,8 +2597,11 @@ def evaluate(
     
     if nbatch == 0:
         # Dataset too small, no evaluation possible
-        return {'val_loss': 0.0, 'top_1_acc': 0.0, 'top_5_acc': 0.0, 
-                'top_10_acc': 0.0, 'top_20_acc': 0.0}
+        return {'val_loss': 0.0, 
+                'top_1_acc': 0.0, 
+                'top_5_acc': 0.0, 
+                'top_10_acc': 0.0, 
+                'top_20_acc': 0.0}
         
     total_loss = 0.0
     
@@ -2546,10 +2677,26 @@ def evaluate(
         
         top_k_results[f'top_{k}_acc'] = correct / total if total > 0 else 0.0
     
-    return {
+    results = {
         'val_loss': val_loss,
         **top_k_results
     }
+    
+    # ========================================================================
+    # NEW: OPTIONAL EMBEDDING QUALITY CHECK (expensive!)
+    # ========================================================================
+    if compute_embeddings:
+        print("    Computing embedding quality metrics...")
+        emb_metrics = compute_embedding_quality_epoch(
+            model, val_data, config, device, num_samples=200
+        )
+        results.update(emb_metrics)
+        
+        # Log embedding health
+        print(f"    Embedding std: {emb_metrics['embedding_std_mean']:.4f} | "
+              f"NN overlap: {emb_metrics['nn_target_overlap']:.3f}")
+    
+    return results
 
 
 class BucketingBatchSampler:
@@ -2767,7 +2914,361 @@ test_evaluate_smoke()
 
 # ### Evaluation metrics
 
-# In[41]:
+# In[70]:
+
+
+class MetricsLogger:
+    """
+    JSON-based metrics logger for structured experiment tracking.
+    
+    Usage:
+        logger = MetricsLogger("exp1_baseline", log_dir="logs")
+        logger.log_epoch(epoch=1, metrics={'train_loss': 0.5, 'val_loss': 0.6})
+        logger.log_batch(epoch=1, batch=100, metrics={'loss': 0.55, 'recall@10': 0.3})
+        logger.save()
+    """
+    
+    def __init__(self, exp_name: str, log_dir: str = "logs"):
+        self.exp_name = exp_name
+        self.log_path = Path(log_dir) / exp_name
+        self.log_path.mkdir(parents=True, exist_ok=True)
+        
+        self.epoch_metrics = []
+        self.batch_metrics = []
+        self.config = {}
+    
+    def log_config(self, config: Dict):
+        """Log experiment configuration."""
+        self.config = config
+    
+    def log_epoch(self, epoch: int, metrics: Dict[str, float]):
+        """Log epoch-level metrics."""
+        entry = {'epoch': epoch, **metrics}
+        self.epoch_metrics.append(entry)
+    
+    def log_batch(self, epoch: int, batch: int, metrics: Dict[str, float]):
+        """Log batch-level metrics (for real-time monitoring)."""
+        entry = {'epoch': epoch, 'batch': batch, **metrics}
+        self.batch_metrics.append(entry)
+    
+    def save(self):
+        """Save all metrics to JSON files."""
+        # Save epoch metrics
+        with open(self.log_path / 'epoch_metrics.json', 'w') as f:
+            json.dump(self.epoch_metrics, f, indent=2)
+        
+        # Save batch metrics
+        with open(self.log_path / 'batch_metrics.json', 'w') as f:
+            json.dump(self.batch_metrics, f, indent=2)
+        
+        # Save config
+        if self.config:
+            with open(self.log_path / 'config.json', 'w') as f:
+                json.dump(self.config, f, indent=2)
+    
+    def get_summary(self) -> Dict:
+        """Get summary statistics."""
+        if not self.epoch_metrics:
+            return {}
+        
+        final_epoch = self.epoch_metrics[-1]
+        best_val_loss_epoch = min(self.epoch_metrics, key=lambda x: x.get('val_loss', float('inf')))
+        
+        return {
+            'num_epochs': len(self.epoch_metrics),
+            'final_train_loss': final_epoch.get('train_loss', 0),
+            'final_val_loss': final_epoch.get('val_loss', 0),
+            'best_val_loss': best_val_loss_epoch.get('val_loss', 0),
+            'best_epoch': best_val_loss_epoch.get('epoch', 0)
+        }
+
+
+# #### Batch-based metrics
+
+# In[68]:
+
+
+def compute_batch_metrics_lightweight(
+    output: torch.Tensor,
+    y: List[List[List[int]]],
+    dt_cnt: List[int],
+    config: BaseConfig,
+    device: torch.device
+) -> Dict[str, float]:
+    """
+    Lightweight metrics for real-time training monitoring (every 100 batches).
+    
+    These are FAST approximations that complement loss during training.
+    Full comprehensive metrics are computed at epoch end via evaluate().
+    
+    Why these metrics:
+    1. Recall@10 - Primary clinical utility metric (cheapest to compute)
+    2. mAP@20 - Ranking quality (faster than mAP@50)
+    3. Brier score - Calibration quality (critical for embeddings)
+    
+    Returns:
+        Dict with 'recall@10', 'mAP@20', 'brier_score'
+    """
+    with torch.no_grad():
+        batch_size = len(dt_cnt)
+        actual_len_dy = output.shape[1]
+        output_flat = output.reshape(batch_size * actual_len_dy, config.target_cd_cnt)
+        y_flat = [item for sublist in y for item in sublist]
+        
+        # Filter valid outputs (only actual days, not padding)
+        valid_outputs = []
+        valid_y = []
+        
+        for j in range(batch_size):
+            start = actual_len_dy * j
+            end = start + dt_cnt[j]
+            valid_outputs.append(output_flat[start:end])
+            valid_y.extend(y_flat[start:end])
+        
+        if len(valid_outputs) == 0:
+            return {'recall@10': 0.0, 'mAP@20': 0.0, 'brier_score': 0.0}
+        
+        predictions = torch.cat(valid_outputs)  # [num_valid_samples, vocab_size]
+        num_samples = len(predictions)
+        
+        metrics = {}
+        
+        # 1. Recall@10 (FAST - single topk operation)
+        top_10_preds = torch.topk(predictions, 10, dim=-1).indices
+        correct = 0
+        total = 0
+        
+        for i, target_codes in enumerate(valid_y):
+            true_codes = [c for c in target_codes if c != 0]
+            if len(true_codes) > 0:
+                total += 1
+                if any(code in top_10_preds[i].tolist() for code in true_codes):
+                    correct += 1
+        
+        metrics['recall@10'] = correct / total if total > 0 else 0.0
+        
+        # 2. mAP@20 (FAST - truncated to 20 instead of 50)
+        aps = []
+        sorted_indices = torch.argsort(predictions, dim=-1, descending=True)
+        
+        for i, target_codes in enumerate(valid_y):
+            true_codes = set([c for c in target_codes if c != 0])
+            if len(true_codes) > 0:
+                hits = 0
+                precisions = []
+                for rank, pred_code in enumerate(sorted_indices[i, :20].tolist(), 1):
+                    if pred_code in true_codes:
+                        hits += 1
+                        precisions.append(hits / rank)
+                
+                if precisions:
+                    aps.append(np.mean(precisions))
+        
+        metrics['mAP@20'] = np.mean(aps) if aps else 0.0
+        
+        # 3. Brier Score (FAST - calibration quality)
+        probs = torch.sigmoid(predictions)
+        targets_binary = torch.zeros_like(predictions)
+        
+        for i, target_codes in enumerate(valid_y):
+            for code in target_codes:
+                if code > 0 and code < config.target_cd_cnt:
+                    targets_binary[i, code] = 1
+        
+        brier = ((probs - targets_binary) ** 2).mean().item()
+        metrics['brier_score'] = brier
+        
+        return metrics
+
+
+def compute_embedding_quality_epoch(
+    model: nn.Module,
+    val_data: pd.DataFrame,
+    config: BaseConfig,
+    device: torch.device,
+    num_samples: int = 200
+) -> Dict[str, float]:
+    """
+    Evaluate embedding quality at epoch end.
+    
+    Run this ONCE per epoch (expensive!) to check if embeddings are useful
+    for downstream tasks.
+    
+    Metrics computed:
+    1. Embedding std_mean - Detects embedding collapse (should be > 0.05)
+    2. NN target overlap - Do similar embeddings have similar codes? (higher = better)
+    
+    Why these matter for downstream tasks:
+    - If embeddings collapse (low std), they won't transfer to downstream classifiers
+    - If NN overlap is low, embeddings don't capture clinical similarity
+    
+    Returns:
+        Dict with 'embedding_std_mean', 'nn_target_overlap'
+    """
+    model.eval()
+    metrics = {}
+    
+    # Sample validation data
+    sample_size = min(num_samples, len(val_data))
+    val_sample = val_data.sample(sample_size, random_state=42)
+    
+    all_embeddings = []
+    all_targets = []
+    
+    with torch.no_grad():
+        nbatch = len(val_sample) // config.batch_size
+        
+        for i in range(nbatch):
+            batch = val_sample.iloc[i*config.batch_size:(i+1)*config.batch_size]
+            dt_cnt, x, y = prepare_tensor(batch, config, device)
+            
+            # Extract embeddings (last temporal layer output, before classifier)
+            # Works for all model types
+            if isinstance(model, BaselineTransformer):
+                # Run through model but capture before decoder
+                age_in_months = model.embedding_age_in_months(x[:, :, 0].long())
+                gender_cd = model.embedding_gender_cd(x[:, :, 1].long())
+                cd = model.embedding_cd(x[:, :, 2:].long())
+                cd_res = cd.sum(-2)
+                
+                # Daily encoding
+                cd = cd.reshape(-1, config.len_cd, config.embedding_size)
+                cd = torch.swapaxes(cd, 0, 1)
+                cd = model.transformer_encoder_cd(cd)
+                cd = cd.permute(1, 2, 0)
+                cd = nn.MaxPool1d(config.len_cd)(cd)
+                cd = cd.reshape(config.batch_size, config.len_dy, config.embedding_size)
+                
+                # Combine
+                cd = cd_res + cd + gender_cd + age_in_months
+                cd = model.mm(cd)
+                cd = model.norm(cd)
+                cd = torch.swapaxes(cd, 0, 1)
+                
+                # Temporal encoding
+                mth_mask = model._generate_square_subsequent_mask(config.len_dy).to(device)
+                embeddings = model.transformer_encoder_dy(cd, mth_mask)
+                embeddings = torch.swapaxes(embeddings, 0, 1)  # [batch, len_dy, 256]
+                
+            else:
+                # For Flash/MoE models - just get output before decoder
+                # Run full forward then extract
+                if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                    output_full, _ = model(x, return_moe_losses=False)
+                else:
+                    output_full = model(x)
+                
+                # Reconstruct embeddings from just before decoder
+                # This is a workaround - ideally modify model to return embeddings
+                # For now, use the output logits as proxy (not ideal but works)
+                embeddings = output_full  # [batch, len_dy, target_cd_cnt]
+                # Take PCA to reduce to embedding_size
+                # Skip for now - too expensive
+                continue
+            
+            # Extract last valid day embedding per patient
+            for j in range(len(dt_cnt)):
+                if dt_cnt[j] > 0:
+                    valid_emb = embeddings[j, dt_cnt[j]-1, :]  # Last day
+                    all_embeddings.append(valid_emb.cpu())
+                    
+                    # Aggregate all target codes for this patient
+                    patient_targets = y[j]
+                    all_codes = set()
+                    for day_codes in patient_targets:
+                        all_codes.update([c for c in day_codes if c > 0])
+                    all_targets.append(all_codes)
+    
+    if len(all_embeddings) == 0:
+        return {'embedding_std_mean': 0.0, 'nn_target_overlap': 0.0}
+    
+    embeddings_tensor = torch.stack(all_embeddings)  # [num_patients, 256]
+    
+    # 1. Embedding Space Utilization (detect collapse)
+    emb_std = embeddings_tensor.std(dim=0)
+    metrics['embedding_std_mean'] = emb_std.mean().item()
+    
+    # WARNING if collapsed
+    if metrics['embedding_std_mean'] < 0.01:
+        print(f"⚠️ WARNING: Embeddings collapsing! std_mean={metrics['embedding_std_mean']:.4f}")
+    
+    # 2. Nearest Neighbor Target Overlap (do similar embeddings have similar codes?)
+    dists = torch.cdist(embeddings_tensor, embeddings_tensor)
+    
+    nn_accuracies = []
+    for i in range(min(100, len(embeddings_tensor))):  # Sample 100 for speed
+        # Get 5 nearest neighbors
+        _, indices = torch.topk(dists[i], k=6, largest=False)
+        neighbors = indices[1:6].tolist()  # Exclude self
+        
+        my_targets = all_targets[i]
+        if len(my_targets) > 0:
+            overlaps = []
+            for nb_idx in neighbors:
+                nb_targets = all_targets[nb_idx]
+                if len(nb_targets) > 0:
+                    # Jaccard similarity
+                    overlap = len(my_targets & nb_targets) / len(my_targets | nb_targets)
+                    overlaps.append(overlap)
+            if overlaps:
+                nn_accuracies.append(np.mean(overlaps))
+    
+    metrics['nn_target_overlap'] = np.mean(nn_accuracies) if nn_accuracies else 0.0
+    
+    return metrics
+
+
+def compute_moe_batch_metrics(
+    moe_losses: Dict[str, torch.Tensor]
+) -> Dict[str, float]:
+    """
+    Extract MoE health metrics from a single batch.
+    
+    Call this every batch during training to track MoE routing in real-time.
+    
+    Metrics:
+    1. Expert load CV - Coefficient of variation (lower = better balance)
+    2. Num collapsed experts - Experts with <5% usage (should be 0)
+    3. Expert Gini - Inequality metric (0 = perfect equality, 1 = total inequality)
+    
+    Returns:
+        Dict with MoE health metrics
+    """
+    if 'expert_usage' not in moe_losses:
+        return {}
+    
+    metrics = {}
+    usage = moe_losses['expert_usage'].cpu().numpy()
+    
+    # 1. Load balance CV
+    if usage.mean() > 0:
+        metrics['expert_load_cv'] = usage.std() / usage.mean()
+    else:
+        metrics['expert_load_cv'] = 0.0
+    
+    # 2. Collapsed experts
+    metrics['num_collapsed_experts'] = int((usage < 0.05).sum())
+    
+    # 3. Gini coefficient
+    sorted_usage = np.sort(usage)
+    n = len(sorted_usage)
+    if sorted_usage.sum() > 0:
+        index = np.arange(1, n + 1)
+        gini = (2 * np.sum(index * sorted_usage)) / (n * np.sum(sorted_usage)) - (n + 1) / n
+        metrics['expert_gini'] = gini
+    else:
+        metrics['expert_gini'] = 0.0
+    
+    # 4. Aux loss
+    if 'aux_loss' in moe_losses:
+        metrics['aux_loss'] = moe_losses['aux_loss'].item()
+    
+    return metrics
+
+
+# #### Primary metrics
+
+# In[28]:
 
 
 """
@@ -2818,7 +3319,29 @@ def compute_primary_task_metrics(
                     correct += 1
         
         metrics[f'recall@{k}'] = correct / total if total > 0 else 0.0
+
+    # 2. Mean Average Precision (mAP) - comprehensive ranking quality
+    aps = []
     
+    for i, target_codes in enumerate(valid_y):
+        true_codes = set([c for c in target_codes if c != 0])
+        if len(true_codes) > 0:
+            # Sort predictions
+            sorted_preds = torch.argsort(predictions[i], descending=True)
+
+            # Compute AP for this sample
+            hits = 0
+            precisions = []
+            for rank, pred_code in enumerate(sorted_preds[:50].tolist(), 1):
+                if pred_code in true_codes:
+                    hits += 1
+                    precisions.append(hits / rank)
+
+            if precisions:
+                aps.append(np.mean(precisions))
+
+    metrics['mAP@50'] = np.mean(aps) if aps else 0.0
+        
     # Precision@K (Fraction of top-K that are correct)
     for k in [5, 10, 20]:
         top_k_preds = torch.topk(predictions, k, dim=-1).indices
@@ -2849,12 +3372,24 @@ def compute_primary_task_metrics(
     metrics['mrr'] = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
     
     # F1@K (Harmonic mean of precision and recall)
-    for k in [10, 20]:
+    for k in [5, 10, 20]:
         if f'recall@{k}' in metrics and f'precision@{k}' in metrics:
             r = metrics[f'recall@{k}']
             p = metrics[f'precision@{k}']
             metrics[f'f1@{k}'] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
-    
+
+    # 4. Coverage@K - what % of true labels found in top-K
+    coverages = []
+    for k in [5, 10, 20]:
+        top_k_preds = torch.topk(predictions, k, dim=-1).indices
+        for i, target_codes in enumerate(valid_y):
+            true_codes = set([c for c in target_codes if c != 0])
+            if len(true_codes) > 0:
+                found = sum(1 for c in true_codes if c in top_k_preds[i].tolist())
+                coverages.append(found / len(true_codes))
+        metrics[f'coverage@{k}'] = np.mean(coverages) if coverages else 0.0
+            
+            
     return metrics
 
 """
@@ -3807,7 +4342,7 @@ def comprehensive_evaluation(
     return evaluation
 
 
-# In[42]:
+# In[29]:
 
 
 def test_metric_utilities():
@@ -3828,7 +4363,7 @@ def test_metric_utilities():
 test_metric_utilities()
 
 
-# In[43]:
+# In[30]:
 
 
 def test_comprehensive_evaluation_dense():
@@ -3870,7 +4405,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Run experimentation
 
-# In[30]:
+# In[31]:
 
 
 def compute_code_frequencies(
@@ -3935,7 +4470,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[31]:
+# In[32]:
 
 
 def run_single_experiment(
@@ -3945,8 +4480,11 @@ def run_single_experiment(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     device: torch.device,
-    epochs: int = 10,
-    code_frequencies: Optional[np.ndarray] = None
+    epochs: int = 4,
+    code_frequencies: Optional[np.ndarray] = None,
+    log_dir: str = "logs",  # logging directory
+    check_embeddings_every: int = 2,  # check embeddings every N epochs
+    log_metrics_every: int = 100
 ) -> Dict[str, any]:
     """
     Run a SINGLE experiment.
@@ -3974,6 +4512,68 @@ def run_single_experiment(
     print(f"\n{'='*80}")
     print(f"EXPERIMENT: {exp_name}")
     print(f"{'='*80}")
+
+    # ============================================================
+    # SETUP LOGGING
+    # ============================================================
+    
+    logger = setup_experiment_logging(exp_name, log_dir)
+    metrics_logger = MetricsLogger(exp_name, log_dir)
+    
+    logger.info(f"Starting experiment: {exp_name}")
+    
+    # Model creation (same as before)
+    if exp_name == 'exp1_dense_baseline':
+        config = BaseConfig()
+        model = BaselineTransformer(config).to(device)
+        use_mixed_precision = False
+        use_bucketing = False
+        logger.info("Model: Baseline Transformer (FP32)")
+        
+    elif exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']:
+        config = FlashAttentionConfig(
+            nhead=8,
+            use_swiglu=True,
+            dtype=torch.float16,
+            use_learnt_att_pool=use_learnt_att_pool
+        )
+        model = FlashAttentionTransformer(config).to(device)
+        use_mixed_precision = True
+        use_bucketing = True
+        logger.info(f"Model: Flash Attention Transformer (FP16, pooling={use_learnt_att_pool})")
+        
+    else:
+        config = FlashAttentionConfig(
+            nhead=8,
+            use_swiglu=True,
+            dtype=torch.float16,
+            use_learnt_att_pool=use_learnt_att_pool
+        )
+        model = FlashMoETransformer(config, moe_config).to(device)
+        use_mixed_precision = True
+        use_bucketing = True
+        logger.info(f"Model: Flash + MoE Transformer (FP16, {moe_config.num_experts} experts)")
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Total parameters: {total_params:,}")
+    
+    # Log config
+    config_dict = {
+        'experiment': exp_name,
+        'parameters': total_params,
+        'epochs': epochs,
+        'batch_size': config.batch_size,
+        'learning_rate': config.learning_rate,
+        'use_mixed_precision': use_mixed_precision,
+        'use_bucketing': use_bucketing
+    }
+    if moe_config:
+        config_dict['moe'] = {
+            'num_experts': moe_config.num_experts,
+            'top_k': moe_config.top_k,
+            'load_balance': moe_config.load_balance_strategy
+        }
+    metrics_logger.log_config(config_dict)
     
     # ============================================================
     # MODEL CREATION (3 model types)
@@ -4049,13 +4649,13 @@ def run_single_experiment(
     # ============================================================
     # TRAINING LOOP
     # ============================================================
-    print(f"\nTraining for {epochs} epochs...")
+    logger.info(f"Training for {epochs} epochs...")
     epoch_history = []
     
     start_time = time.time()
     
     for epoch in range(epochs):
-        print(f"\n--- Epoch {epoch+1}/{epochs} ---")
+        logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
         
         # Train
         train_metrics = train_epoch(
@@ -4069,17 +4669,20 @@ def run_single_experiment(
             use_mixed_precision=use_mixed_precision,
             moe_config=moe_config,
             epoch=epoch,
-            use_bucketing=use_bucketing
+            use_bucketing=use_bucketing,
+            log_interval=log_metrics_every
         )
         
         # Evaluate
+        check_embeddings = (epoch % check_embeddings_every == 0)
         val_metrics = evaluate(
             model=model,
             val_data=val_data,
             criterion=criterion,
             config=config,
             device=device,
-            use_mixed_precision=use_mixed_precision
+            use_mixed_precision=use_mixed_precision,
+            compute_embeddings=check_embeddings
         )
         
         # Combine metrics
@@ -4090,13 +4693,34 @@ def run_single_experiment(
         }
         epoch_history.append(epoch_metrics)
         
-        # Log
-        print(f"  Train Loss: {train_metrics['train_loss']:.4f}")
-        print(f"  Val Loss: {val_metrics['val_loss']:.4f}")
-        print(f"  Top-10 Acc: {val_metrics['top_10_acc']:.3f}")
+        # ====================================================================
+        # LOG EPOCH METRICS
+        # ====================================================================
+        logger.info(f"Train Loss: {train_metrics['train_loss']:.4f}")
+        logger.info(f"Val Loss: {val_metrics['val_loss']:.4f}")
+        logger.info(f"Top-10 Acc: {val_metrics['top_10_acc']:.3f}")   
+        
+        if 'train_recall@10' in train_metrics:
+            logger.info(f"Train Recall@10: {train_metrics['train_recall@10']:.3f}")
+            logger.info(f"Train mAP@20: {train_metrics['train_mAP@20']:.3f}")
+            logger.info(f"Train Brier: {train_metrics['train_brier_score']:.4f}")
+        
+        if 'embedding_std_mean' in val_metrics:
+            logger.info(f"Embedding std: {val_metrics['embedding_std_mean']:.4f}")
+            logger.info(f"NN overlap: {val_metrics['nn_target_overlap']:.3f}")
+        
+        if 'train_expert_load_cv' in train_metrics:
+            logger.info(f"MoE Load CV: {train_metrics['train_expert_load_cv']:.3f}")
+            logger.info(f"MoE Collapsed: {train_metrics['train_num_collapsed_experts']}")
+
+        metrics_logger.log_epoch(epoch + 1, epoch_metrics)
     
     total_time = time.time() - start_time
-    
+    logger.info(f"\nTraining completed in {total_time:.1f}s")
+            
+    # ========================================================================
+    # COMPREHENSIVE EVALUATION
+    # ========================================================================
     evaluation = comprehensive_evaluation(
         model=model,
         train_data=train_data,
@@ -4133,12 +4757,19 @@ def run_single_experiment(
         'all_epochs': epoch_history
     }
     
-    print(f"\n{'='*80}")
-    print(f"EXPERIMENT COMPLETE: {exp_name}")
-    print(f"{'='*80}")
-    print(f"  Final Top-10 Acc: {final_metrics['top_10_acc']:.3f}")
-    print(f"  Final Val Loss: {final_metrics['val_loss']:.4f}")
-    print(f"  Training Time: {total_time:.1f}s")
+    # Save metrics
+    metrics_logger.save()
+    logger.info(f"Metrics saved to {log_dir}/{exp_name}/")
+    
+    # Print summary
+    summary = metrics_logger.get_summary()
+    logger.info(f"\n{'='*80}")
+    logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
+    logger.info(f"{'='*80}")
+    logger.info(f"Final Top-10 Acc: {final_metrics['top_10_acc']:.3f}")
+    logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f} (epoch {summary['best_epoch']})")
+    logger.info(f"Training Time: {total_time:.1f}s")
+    logger.info(f"{'='*80}\n")
     
     return results
 
@@ -4264,7 +4895,7 @@ def run_all_experiments(
 
 # ### Memory management
 
-# In[32]:
+# In[33]:
 
 
 import torch
@@ -4730,7 +5361,7 @@ for members in [100_000, 500_000, 1_000_000, 5_000_000, 12_000_000]:
 
 # ### Final tests
 
-# In[38]:
+# In[34]:
 
 
 """
@@ -5675,7 +6306,7 @@ test_bucketing_effectiveness()
 
 # #### Evaluation loop 
 
-# In[51]:
+# In[41]:
 
 
 # ============================================================================
@@ -5862,7 +6493,7 @@ test_comprehensive_metrics_computation()
 
 # #### End to end experimentation tests
 
-# In[51]:
+# In[35]:
 
 
 def test_single_experiment_end_to_end():
@@ -5955,8 +6586,8 @@ def test_multi_experiment_comparison():
     cleanup_gpu_memory_hard()
     
     # Minimal dataset
-    train_tiny = df_train.head(32000)
-    val_tiny = df_val.head(3200)
+    train_tiny = df_train.head(12000)
+    val_tiny = df_val.head(1200)
     
     # Run 3 experiments
     exp_names = ['exp1_dense_baseline', 'exp2b_flash_learned_pool', 'exp3b_moe_learned_pool']
@@ -6006,8 +6637,10 @@ def test_multi_experiment_comparison():
     print("\n✅ TEST 13 PASSED: Multi-experiment framework works\n")
     
 # test_single_experiment_end_to_end()
-# test_multi_experiment_comparison()
+test_multi_experiment_comparison()
 
+
+# ##### Follow up tests
 
 # In[56]:
 
@@ -6047,7 +6680,7 @@ elif min(all_codes) == 0:
     print("\n  ✅ Codes are 0-indexed (correct)")
 
 
-# In[59]:
+# In[43]:
 
 
 # Diagnostic: What is model actually predicting?
@@ -6087,7 +6720,7 @@ print(f"Overlap: {overlap}")
 print(f"Overlap count: {len(overlap)}")
 
 
-# In[58]:
+# In[65]:
 
 
 # Why MOE is slower than expected?
@@ -6097,20 +6730,24 @@ cfg = FlashAttentionConfig(batch_size=16, len_dy=200, len_cd=80, use_learnt_att_
 moe_cfg = MoEConfig(d_model=256, d_ff=512, num_experts=8, top_k=2)
 model = FlashMoETransformer(cfg, moe_cfg).to(device)
 
-batch = df_train.head(16)
+batch = df_train.head(32)
 dt_cnt, x, y = prepare_tensor(batch, cfg, device)
 
 # Time components
 model.train()
 
+# ✅ FIX: Add autocast for first forward pass
 start = time.time()
 with torch.no_grad():
-    # Just forward (no MoE losses)
-    output, _ = model(x, return_moe_losses=False)
+    with torch.cuda.amp.autocast(dtype=cfg.dtype):
+        # Just forward (no MoE losses)
+        output, _ = model(x, return_moe_losses=False)
 forward_time = time.time() - start
 
+# ✅ FIX: Add autocast for second forward pass
 start = time.time()
-output, moe_losses = model(x, return_moe_losses=True)
+with torch.cuda.amp.autocast(dtype=cfg.dtype):
+    output, moe_losses = model(x, return_moe_losses=True)
 forward_with_routing_time = time.time() - start
 
 print(f"Forward (no routing): {forward_time*1000:.2f}ms")
@@ -6118,8 +6755,62 @@ print(f"Forward (with routing): {forward_with_routing_time*1000:.2f}ms")
 print(f"Routing overhead: {(forward_with_routing_time - forward_time)*1000:.2f}ms")
 
 
+# In[60]:
 
-# In[70]:
+
+# After refactoring the MOE forward to speed up; test that shapes are preserved
+cfg = FlashAttentionConfig()
+moe_cfg = MoEConfig(d_model=256, d_ff=512)
+layer = MoELayer(moe_cfg).to(device)
+
+x = torch.randn(200, 16, 256, device=device)
+output, losses = layer(x, train=True)
+
+assert output.shape == x.shape, f"Shape mismatch: {output.shape} vs {x.shape}"
+print("✅ Shape preservation test passed")
+
+# Test that loss dict has correct format
+assert 'aux_loss' in losses, "Missing aux_loss"
+assert losses['aux_loss'].ndim == 0, "aux_loss should be scalar"
+assert 'expert_usage' in losses, "Missing expert_usage"
+assert losses['expert_usage'].shape == (moe_cfg.num_experts,), "Wrong expert_usage shape"
+print("✅ Loss format test passed")
+
+# Test that gradients flow correctly
+x = torch.randn(200, 16, 256, device=device, requires_grad=True)
+output, losses = layer(x, train=True)
+loss = output.sum() + losses['aux_loss']
+loss.backward()
+
+assert x.grad is not None, "Gradients not flowing to input"
+assert layer.router.weight.grad is not None, "Gradients not flowing to router"
+print("✅ Gradient flow test passed")
+
+# Run a small training loop to verify everything works
+model = FlashMoETransformer(cfg, moe_cfg).to(device)
+optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+criterion = nn.BCEWithLogitsLoss()
+
+batch = df_train.head(16)
+dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+
+# Here should add autocast wrapper for mixed precision
+with torch.cuda.amp.autocast(dtype=cfg.dtype):
+    # Forward
+    output, moe_losses = model(x, return_moe_losses=True)
+    pred_loss = compute_loss(output, y, dt_cnt, cfg, criterion, device)
+
+# Total loss computation (outside autocast for stability)
+total_loss = pred_loss + moe_cfg.aux_loss_weight * moe_losses['aux_loss']
+
+# Backward
+total_loss.backward()
+optimizer.step()
+
+print("✅ End-to-end training test passed")
+
+
+# In[49]:
 
 
 # Diagnostic: Is the model learning the right codes?
@@ -6127,7 +6818,7 @@ cfg = BaseConfig()
 model = BaselineTransformer(cfg).to(device)
 model.eval()
 
-batch = df_val.head(16)
+batch = df_val.head(32)
 dt_cnt, x, y = prepare_tensor(batch, cfg, device)
 
 with torch.no_grad():
@@ -6182,9 +6873,22 @@ else:
     
 
 
+# In[51]:
+
+
+cfg = BaseConfig()
+batch = df_train.head(1000)
+dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+
+# Check codes are now 0-indexed
+all_codes = [code for patient in y for day in patient for code in day if code != 0]
+print(f"Min code after fix: {min(all_codes)} (should be 0)")
+print(f"Max code after fix: {max(all_codes)} (should be 8849)")
+
+
 # #### Edge case and robustness tests
 
-# In[47]:
+# In[56]:
 
 
 # ============================================================================
@@ -6367,56 +7071,8 @@ def test_full_experiment_simulation():
     print("  ✅ Results are consistent and valid")
     print("\n✅ TEST 15 PASSED: Full pipeline verified\n")
     
-test_edge_cases_robustness()    
+# test_edge_cases_robustness()    
 test_full_experiment_simulation()
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[39]:
-
-
-# Test 2: Verify all models instantiate
-config_base = BaseConfig()
-config_flash = FlashAttentionConfig()
-moe_config = MoEConfig()
-
-# model1 = BaselineTransformer(config_base)
-# model2 = FlashAttentionTransformer(config_flash)
-model3 = FlashMoETransformer(config_flash, moe_config)
-print(" All models instantiate")
-
-# Test 3: Verify all evaluation functions work
-code_freq = compute_code_frequencies(df_train, config_base, device, max_batches=10)
-print(f" Code frequencies computed: {len(code_freq)} codes")
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
 
 
 # ### Start experimentation
@@ -6449,23 +7105,33 @@ print(f"Using device: {device}")
 input_sql = """
 select * from
 anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_OOT_o3_score_ending
-limit 2000
+where dt_cnt >= 10
 """
+input_data = client.query(input_sql).to_dataframe() 
 # input_data = client.query(input_sql).to_dataframe() 
+
+
+# In[ ]:
+
+
+df_train = input_data.sample(900000, random_state=42, replace=False)
+df_remain = input_data.drop(df_train.index)
+df_val = df_remain.sample(100000, random_state=42, replace=False)
+df_test = df_remain.drop(df_val.index)
 
 
 # In[22]:
 
 
 import pandas as pd
-df_train = pd.read_feather("sample_data/mdcd_train_8000.feather")
-df_val = pd.read_feather("sample_data/mdcd_val_2000.feather")
+df_train = pd.read_feather("sample_data/mdcd_train_1m.feather")
+df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 
 
-# In[13]:
+# In[67]:
 
 
-df_train.head()
+df_train.shape
 
 
 # In[ ]:

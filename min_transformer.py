@@ -249,3 +249,70 @@ def load_model_state():
     model = TransformerModel(nhead, nhid, nlayers, 0)
     model.load_state_dict(bestModel['model'])
     model = model.to(device)
+
+
+# Create a function for extracting one's daily embedding and used that for LIME interpretation. 
+def get_daily_embedding(model, data):
+    """ Get member's daily embedding
+    """
+    model.eval()
+    activation = {}
+    
+    def get_activation(name):
+        def hook(model, input, output):
+            activation[name] = output.detach()
+        return hook
+    
+    model.transformer_encoder_dy.register_forward_hook(get_activation('transformer_encoder_dy'))
+ 
+    dsize = data.shape[0]
+    nbatch = int(dsize/batch_size)
+    
+    if dsize-nbatch*batch_size>0:
+        k = batch_size - (dsize-nbatch*batch_size) # fill some records to build last trunk; these will be deleted in the end        
+        data = pd.concat([data, pd.concat([data.head(1)]* k,  ignore_index=True)])  # changed in case k is greater than dsize
+                    
+    data = data.reset_index(drop=True)
+    nbatch = int(data.shape[0]/batch_size)
+    all_embeddings = []
+    ys = []
+    for i in tqdm(range(nbatch)):
+        batch = data.iloc[i*batch_size:i*batch_size+batch_size,:]
+        
+        # get patient IDs before tensor conversion
+        individual_ids = batch['individual_id'].tolist()
+        
+        dt_cnt,x = prepare_tensor(batch)
+        opts = model(x)
+        day_embeddings = activation['transformer_encoder_dy']  
+        day_embeddings = torch.swapaxes(day_embeddings, 0, 1)
+        
+        # collect daily embedding for each member
+        for mbr_idx in range(batch_size):
+            # Skip padding entries
+            if i*batch_size + mbr_idx >= dsize:
+                continue
+                
+            mbr_id = batch[entity_id].iloc[mbr_idx]
+            valid_days = dt_cnt[mbr_idx] + 1 # adjust day by adding 1 
+            
+            # extract embeddings for each day of this patient's history
+            for day_idx in range(1, valid_days):  # from day1 
+                # get embedding for this specific day
+                embedding = day_embeddings[mbr_idx, day_idx, :].cpu().numpy()
+                
+                # create a row with patient ID, day index, and embedding values
+                embedding_dict = {
+                    entity_id: mbr_id,
+                    'day_idx': day_idx,
+                }
+                
+                # add embedding dimensions
+                for j in range(embedding_size):
+                    embedding_dict[f'emb{j}'] = embedding[j]
+                
+                all_embeddings.append(embedding_dict)
+        # clear memory before each batch to avoid memory overflow
+        torch.cuda.empty_cache()
+        gc.collect()
+    return pd.DataFrame(all_embeddings)    
