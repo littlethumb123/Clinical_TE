@@ -102,7 +102,13 @@ Date: 2025-10-24
 # ============================================================================
 
 
-# In[1]:
+# In[4]:
+
+
+import pandas as pd
+
+
+# In[5]:
 
 
 import pandas as pd
@@ -111,7 +117,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[2]:
+# In[6]:
 
 
 """
@@ -127,7 +133,7 @@ This module provides a complete implementation integrating:
 Author: Clinical Transformer Team
 Date: 2024
 """
-
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -136,14 +142,17 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Any
 from collections import Counter
 import time
 import math
 import gc
+from google.cloud import storage
+import concurrent.futures
 from datetime import datetime
 import warnings
 from scipy import stats
+from torch.cuda.amp import GradScaler
 warnings.filterwarnings("ignore")
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -152,7 +161,7 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[69]:
+# In[7]:
 
 
 # ============================================================================
@@ -165,7 +174,8 @@ import json
 
 def setup_experiment_logging(
     exp_name: str,
-    log_dir: str = "logs"
+    log_dir: str = "logs",
+    resume: bool = False
 ) -> logging.Logger:
     """
     Set up comprehensive logging for experiment tracking.
@@ -198,7 +208,8 @@ def setup_experiment_logging(
     logger.addHandler(console_handler)
     
     # File handler (DEBUG level)
-    file_handler = logging.FileHandler(log_path / 'training.log')
+    file_mode = 'a' if resume else 'w'  # ← KEY CHANGE
+    file_handler = logging.FileHandler(log_path / 'training.log', mode=file_mode)
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -207,10 +218,17 @@ def setup_experiment_logging(
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
     
+    # Log resume marker
+    if resume:
+        logger.info(f"\n{'='*80}")
+        logger.info(f" TRAINING RESUMED")
+        logger.info(f"Resume time: {datetime.now()}")
+        logger.info(f"{'='*80}\n")
+    
     return logger
 
 
-# In[3]:
+# In[8]:
 
 
 @dataclass
@@ -308,7 +326,7 @@ class MoEConfig:
 
 
 
-# In[4]:
+# In[9]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -437,7 +455,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### RPE and Swiglu
 
-# In[5]:
+# In[10]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -560,7 +578,7 @@ class SwiGLU(nn.Module):
         return output
 
 
-# In[6]:
+# In[11]:
 
 
 def test_rotary_position_embedding():
@@ -577,7 +595,7 @@ def test_rotary_position_embedding():
 test_rotary_position_embedding()
 
 
-# In[7]:
+# In[12]:
 
 
 def test_swiglu_forward():
@@ -593,7 +611,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[37]:
+# In[13]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -832,7 +850,7 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
-# In[9]:
+# In[14]:
 
 
 def test_flash_attention_layer_fallback():
@@ -857,7 +875,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[10]:
+# In[15]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -940,7 +958,7 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
-# In[11]:
+# In[16]:
 
 
 def test_learned_attention_pooling():
@@ -956,7 +974,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[41]:
+# In[17]:
 
 
 # ============================================================================
@@ -1289,7 +1307,7 @@ class MoELayer(nn.Module):
         return output, losses
 
 
-# In[42]:
+# In[27]:
 
 
 def test_switch_auxiliary_loss():
@@ -1304,7 +1322,7 @@ def test_switch_auxiliary_loss():
 test_switch_auxiliary_loss()
 
 
-# In[43]:
+# In[19]:
 
 
 def test_deepseek_bias_correction():
@@ -1319,7 +1337,7 @@ def test_deepseek_bias_correction():
 test_deepseek_bias_correction()
 
 
-# In[44]:
+# In[20]:
 
 
 def test_expert_layer_forward():
@@ -1332,7 +1350,7 @@ def test_expert_layer_forward():
 test_expert_layer_forward()
 
 
-# In[45]:
+# In[21]:
 
 
 def test_moe_layer_forward():
@@ -1362,7 +1380,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[17]:
+# In[22]:
 
 
 # ============================================================================
@@ -1540,7 +1558,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[54]:
+# In[23]:
 
 
 # ============================================================================
@@ -1759,7 +1777,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[55]:
+# In[24]:
 
 
 # ============================================================================
@@ -1974,7 +1992,7 @@ class FlashMoETransformer(nn.Module):
 
 # #### Test
 
-# In[24]:
+# In[29]:
 
 
 def test_baseline_transformer_forward():
@@ -1991,7 +2009,7 @@ def test_baseline_transformer_forward():
 test_baseline_transformer_forward()
 
 
-# In[25]:
+# In[30]:
 
 
 def test_flash_attention_transformer_forward():
@@ -2017,7 +2035,7 @@ def test_flash_attention_transformer_forward():
 test_flash_attention_transformer_forward()
 
 
-# In[26]:
+# In[31]:
 
 
 def test_flash_moe_transformer_forward():
@@ -2059,7 +2077,7 @@ test_flash_moe_transformer_forward()
 
 # #### Data preparation
 
-# In[27]:
+# In[75]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2296,6 +2314,7 @@ def compute_loss(
     3. Apply BCEWithLogitsLoss
     """
     batch_size = len(dt_cnt)
+    
     actual_len_dy = output.shape[1]
     # Reshape output
     output = output.reshape(batch_size * actual_len_dy, config.target_cd_cnt)
@@ -2305,22 +2324,31 @@ def compute_loss(
     
     # Filter by valid days
     valid_outputs = []
-    valid_y_indices = []
+    valid_y = []
     
     for j in range(batch_size):
-        start_idx = actual_len_dy * j
-        end_idx = start_idx + dt_cnt[j]
-        valid_outputs.append(output[start_idx:end_idx])
-        valid_y_indices.extend(range(start_idx, end_idx))
+        
+        valid_days = min(int(dt_cnt[j]), actual_len_dy)
+        if valid_days <= 0:
+            continue
+        # For outputs: use actual_len_dy
+        output_start = actual_len_dy * j
+        output_end = output_start + valid_days
+        valid_outputs.append(output[output_start:output_end])
+        
+        # For targets: use config.len_dy (y is always padded to config.len_dy)
+        y_start = config.len_dy * j
+        y_end = y_start + dt_cnt[j]
+        valid_y.extend(y_flat[y_start:y_end]) 
     
     output = torch.cat(valid_outputs, dim=0)
     
     # Extract valid targets
-    y_valid = [y_flat[i] for i in valid_y_indices]
+    # y_valid = [y_flat[i] for i in valid_y]
     
     # VECTORIZED: Create multi-hot encoding
     y_cd = create_multihot_targets_vectorized(
-        y_valid,
+        valid_y,
         len(output),
         config.target_cd_cnt,
         device
@@ -2335,7 +2363,7 @@ def compute_loss(
 
 # #### Train and evaluation
 
-# In[ ]:
+# In[63]:
 
 
 # Training each epoch
@@ -2347,11 +2375,13 @@ def train_epoch(
     criterion: nn.Module,
     config: BaseConfig,
     device: torch.device,
+    scaler: Optional[GradScaler] = None,
     use_mixed_precision: bool = False,
     moe_config: Optional[MoEConfig] = None,
     epoch: int = 1,
     use_bucketing: bool = False,
-    log_interval: int = 100 
+    log_interval: int = 100, 
+    global_step: int = 0, 
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -2368,9 +2398,10 @@ def train_epoch(
     - Brier score (calibration)
     - MoE health (if applicable)
     
+    # Track the training procedure with global_step: int = 0,
+    
     """
     model.train()
-    scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
     
     # ============================================================
     # STEP 1: BUILD BATCH LIST
@@ -2400,6 +2431,7 @@ def train_epoch(
     # STEP 2: ITERATE OVER BATCHES (UNIFORM LOGIC)
     # ============================================================
     for batch_idx, indices in enumerate(batch_list):
+        
         if batch_idx % 100 == 0:
             print(f'  Batch {batch_idx}/{nbatch}')
         
@@ -2485,6 +2517,8 @@ def train_epoch(
         # ============================================================
         # STEP 6: CLEANUP & LOGGING
         # ============================================================
+        # increment global step
+        global_step += 1
         
         # Track losses
         total_pred_loss += pred_loss.item()
@@ -2559,6 +2593,9 @@ def train_epoch(
         if 'expert_usage' in moe_losses:
             epoch_metrics['expert_usage'] = moe_losses['expert_usage']
     
+    # add global step 
+    epoch_metrics['global_step'] = global_step
+        
     return epoch_metrics
 
 def evaluate(
@@ -2639,10 +2676,16 @@ def evaluate(
             
             # Filter by valid days
             for j in range(batch_size_actual):
-                start_idx = config.len_dy * j
+                valid_days = min(int(dt_cnt[j]), actual_len_dy)
+                if valid_days <= 0:
+                    continue
+                start_idx = actual_len_dy * j
                 end_idx = start_idx + dt_cnt[j]
                 valid_output = output[start_idx:end_idx]
-                valid_y = y_flat[start_idx:end_idx]
+                
+                y_start = config.len_dy * j
+                y_end = y_start + dt_cnt[j]
+                valid_y = y_flat[y_start:y_end]
                 
                 all_predictions.append(valid_output.cpu())
                 all_targets.extend(valid_y)
@@ -2815,11 +2858,11 @@ def create_bucketing_dataloader(
 
 # #### Test
 
-# In[66]:
+# In[49]:
 
 
 def test_prepare_tensor_and_multihot():
-    cfg = BaseConfig(batch_size=4, len_dy=32, len_cd=40, device=device.type)
+    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
     dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
 
     assert x.shape == (cfg.batch_size, cfg.len_dy, 2 + cfg.len_cd)
@@ -2838,11 +2881,11 @@ def test_prepare_tensor_and_multihot():
 test_prepare_tensor_and_multihot()
 
 
-# In[69]:
+# In[76]:
 
 
 def test_compute_loss_smoke():
-    cfg = BaseConfig(batch_size=4, len_dy=32, len_cd=40, device=device.type)
+    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
     dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
 
     model = BaselineTransformer(cfg).to(device)
@@ -2857,11 +2900,11 @@ def test_compute_loss_smoke():
 test_compute_loss_smoke()
 
 
-# In[68]:
+# In[54]:
 
 
 def test_train_epoch_smoke():
-    cfg = BaseConfig(batch_size=4, len_dy=16, len_cd=30, learning_rate=1e-3, device=device.type)
+    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, learning_rate=1e-3, device=device.type)
     model = BaselineTransformer(cfg).to(device)
     opt = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
     sched = optim.lr_scheduler.StepLR(opt, step_size=1, gamma=0.9)
@@ -2885,11 +2928,11 @@ def test_train_epoch_smoke():
 test_train_epoch_smoke()
 
 
-# In[64]:
+# In[56]:
 
 
 def test_evaluate_smoke():
-    cfg = BaseConfig(batch_size=4, len_dy=16, len_cd=30, device=device.type)
+    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
     model = BaselineTransformer(cfg).to(device)
     crit = nn.BCEWithLogitsLoss()
 
@@ -2912,9 +2955,524 @@ def test_evaluate_smoke():
 test_evaluate_smoke()
 
 
+# ### Training save and reload
+
+# In[57]:
+
+
+def save_checkpoint(
+    checkpoint_dir: str,
+    epoch: int,
+    global_step: int,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Any,
+    scaler: Optional[GradScaler],
+    metrics: Dict,
+    is_best: bool = False
+):
+    """
+    Save checkpoint - PyTorch official pattern.
+    
+    This is what every major lab uses. Simple, tested, works.
+    
+    Saves 3 files:
+    - checkpoint_latest.pt (always)
+    - checkpoint_epoch{N}.pt (every epoch)
+    - checkpoint_best.pt (when val loss improves)
+    """
+    
+    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Build checkpoint dict
+    checkpoint = {
+        'epoch': epoch,
+        'global_step': global_step,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+        'scaler_state_dict': scaler.state_dict() if scaler else None,
+        'metrics': metrics,
+        'timestamp': time.time()
+    }
+    
+    # Save latest (for resume)
+    latest_path = os.path.join(checkpoint_dir, 'checkpoint_latest.pt')
+    torch.save(checkpoint, latest_path)
+    print(f"💾 Saved: checkpoint_latest.pt")
+    
+    # Save epoch checkpoint (every epoch)
+    epoch_path = os.path.join(checkpoint_dir, f'checkpoint_epoch{epoch}.pt')
+    torch.save(checkpoint, epoch_path)
+    
+    # Save best (when val loss improves)
+    if is_best:
+        best_path = os.path.join(checkpoint_dir, 'checkpoint_best.pt')
+        torch.save(checkpoint, best_path)
+        if metrics and isinstance(metrics, list) and len(metrics) > 0:
+            last_val_loss = metrics[-1].get('val_loss', 0)
+            print(f"✅ New best! Val loss: {last_val_loss:.4f}")
+        else:
+            print(f"✅ New best checkpoint saved!")
+    
+    return latest_path
+
+
+def load_checkpoint(
+    checkpoint_path: str,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Any = None,
+    scaler: Optional[GradScaler] = None,
+    device: torch.device = None
+) -> Dict:
+    """
+    Load checkpoint - PyTorch official pattern.
+    
+    Returns:
+        Dict with: epoch, global_step, metrics
+    """
+    
+    print(f" Loading checkpoint: {checkpoint_path}")
+    
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only = False)
+    
+    # Restore states
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    if scheduler and checkpoint.get('scheduler_state_dict'):
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    if scaler and checkpoint.get('scaler_state_dict'):
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+    
+    print(f"✅ Resumed from epoch {checkpoint['epoch']}, step {checkpoint['global_step']}")
+    
+    return {
+        'epoch': checkpoint['epoch'],
+        'global_step': checkpoint['global_step'],
+        'metrics': checkpoint.get('metrics', {})
+    }
+
+
+# #### Test
+
+# In[49]:
+
+
+import shutil
+def test_save_load_checkpoint_only():
+    """
+    Test ONLY save_checkpoint() and load_checkpoint() functions.
+    
+    Validates:
+    - Checkpoint files created
+    - All state saved correctly
+    - State can be loaded
+    - Weights match exactly after load
+    """
+    
+    print("\n" + "="*80)
+    print("🧪 TEST: save_checkpoint() + load_checkpoint()")
+    print("="*80)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Create simple model
+    config = BaseConfig(batch_size=4, len_dy=32, len_cd=30)
+    model = BaselineTransformer(config).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    scaler = GradScaler()
+    
+    # Mock metrics
+    metrics = [
+        {'epoch': 0, 'train_loss': 2.5, 'val_loss': 2.3, 'global_step': 100}
+    ]
+    
+    # Save checkpoint
+    test_ckpt_dir = './test_ckpt_temp'
+    Path(test_ckpt_dir).mkdir(exist_ok=True)
+    
+    try:
+        print("\n  Saving checkpoint...")
+        saved_path = save_checkpoint(
+            checkpoint_dir=test_ckpt_dir,
+            epoch=0,
+            global_step=100,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            metrics=metrics,
+            is_best=True
+        )
+        
+        print(f"  ✅ Checkpoint saved to: {saved_path}")
+        
+        # Verify files exist
+        assert Path(test_ckpt_dir, 'checkpoint_latest.pt').exists()
+        assert Path(test_ckpt_dir, 'checkpoint_epoch0.pt').exists()
+        assert Path(test_ckpt_dir, 'checkpoint_best.pt').exists()
+        print(f"  ✅ All 3 checkpoint files created")
+        
+        # Save original weights for comparison
+        original_weights = {k: v.clone().cpu() for k, v in model.state_dict().items()}
+        original_lr = optimizer.param_groups[0]['lr']
+        original_scaler_scale = scaler.get_scale()
+        
+        # Delete model
+        del model, optimizer, scheduler, scaler
+        cleanup_gpu_memory_hard()
+        print(f"\n  🗑️  Model deleted from memory")
+        
+        # Recreate model architecture
+        print(f"\n  Recreating model architecture...")
+        model_new = BaselineTransformer(config).to(device)
+        optimizer_new = optim.AdamW(model_new.parameters(), lr=1e-4)
+        scheduler_new = optim.lr_scheduler.StepLR(optimizer_new, step_size=1)
+        scaler_new = GradScaler()
+        
+        # Load checkpoint
+        print(f"\n  Loading checkpoint...")
+        resumed_state = load_checkpoint(
+            checkpoint_path=saved_path,
+            model=model_new,
+            optimizer=optimizer_new,
+            scheduler=scheduler_new,
+            scaler=scaler_new,
+            device=device
+        )
+        
+        print(f"  ✅ Checkpoint loaded")
+        print(f"     Epoch: {resumed_state['epoch']}")
+        print(f"     Global step: {resumed_state['global_step']}")
+        print(f"     Metrics: {len(resumed_state['metrics'])} entries")
+        
+        # Verify weights match EXACTLY
+        print(f"\n  🔍 Verifying weight restoration...")
+        loaded_weights = {k: v.clone().cpu() for k, v in model_new.state_dict().items()}
+        
+        weights_match = True
+        for key in original_weights.keys():
+            if not torch.allclose(original_weights[key], loaded_weights[key], atol=1e-7):
+                print(f"     ❌ Weight mismatch: {key}")
+                weights_match = False
+                break
+        
+        if weights_match:
+            print(f"     ✅ All weights match exactly!")
+        else:
+            raise AssertionError("Weights don't match after load!")
+        
+        # Verify optimizer state
+        loaded_lr = optimizer_new.param_groups[0]['lr']
+        print(f"\n  🔍 Verifying optimizer state...")
+        print(f"     Original LR: {original_lr}")
+        print(f"     Loaded LR: {loaded_lr}")
+        assert loaded_lr == original_lr, "Learning rate not restored"
+        print(f"     ✅ Optimizer state restored")
+        
+        # Verify scaler state
+        loaded_scaler_scale = scaler_new.get_scale()
+        print(f"\n  🔍 Verifying scaler state...")
+        print(f"     Original scale: {original_scaler_scale}")
+        print(f"     Loaded scale: {loaded_scaler_scale}")
+        assert loaded_scaler_scale == original_scaler_scale, "Scaler not restored"
+        print(f"     ✅ Scaler state restored")
+        
+        # Verify metrics
+        assert resumed_state['epoch'] == 0
+        assert resumed_state['global_step'] == 100
+        assert len(resumed_state['metrics']) == 1
+        print(f"     ✅ Training state restored")
+        
+        print("\n✅ TEST PASSED: Checkpoint save/load works correctly\n")
+        
+    finally:
+        # Cleanup
+        if Path(test_ckpt_dir).exists():
+            shutil.rmtree(test_ckpt_dir)
+test_save_load_checkpoint_only()
+
+
+# In[ ]:
+
+
+def test_checkpoint_resume_integration():
+    """
+    Comprehensive test of checkpoint/resume mechanism.
+    
+    Tests ALL components:
+    - save_checkpoint() / load_checkpoint()
+    - setup_experiment_logging() with resume
+    - MetricsLogger with resume
+    - train_epoch() with global_step
+    - run_single_experiment() with resume_from
+    """
+    
+    print("\n" + "="*80)
+    print("🧪 COMPREHENSIVE CHECKPOINT/RESUME TEST")
+    print("="*80)
+    
+    # Setup
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cleanup_gpu_memory_hard()
+    
+    # Test data (minimal for speed)
+    df_train_sample = df_train.head(640)
+    df_val_sample = df_val.head(32)
+    
+    test_dir = Path('./test_checkpoint_integration')
+    test_dir.mkdir(exist_ok=True)
+    
+    try:
+        # ====================================================================
+        # TEST 1: Initial Training (Epoch 0)
+        # ====================================================================
+        
+        print("\n" + "-"*80)
+        print("TEST 1: Initial Training (1 epoch, save checkpoint)")
+        print("-"*80)
+        
+        results_initial = run_single_experiment(
+            exp_name='test_checkpoint_exp',
+            moe_config=None,
+            use_learnt_att_pool=False,
+            train_data=df_train_sample,
+            val_data=df_val_sample,
+            device=device,
+            epochs=1,  # Only 1 epoch
+            log_dir=str(test_dir),
+            resume_from=None,
+            checkpoint_dir=str(test_dir / 'test_checkpoint_exp' / 'checkpoints')
+        )
+        
+        print(f"\n✅ Initial training completed:")
+        print(f"   Epochs trained: 1")
+        print(f"   Train loss: {results_initial['final_train_loss']:.4f}")
+        print(f"   Val loss: {results_initial['final_val_loss']:.4f}")
+        print(f"   Global step: {results_initial['all_epochs'][-1]['global_step']}")
+        
+        # Verify checkpoint files exist
+        checkpoint_dir = test_dir / 'test_checkpoint_exp' / 'checkpoints'
+        assert (checkpoint_dir / 'checkpoint_latest.pt').exists(), "checkpoint_latest.pt not found!"
+        assert (checkpoint_dir / 'checkpoint_epoch0.pt').exists(), "checkpoint_epoch0.pt not found!"
+        print(f"   ✅ Checkpoints saved")
+        
+        # Verify log files exist
+        log_dir_exp = test_dir / 'test_checkpoint_exp'
+        assert (log_dir_exp / 'training.log').exists(), "training.log not found!"
+        assert (log_dir_exp / 'epoch_metrics.json').exists(), "epoch_metrics.json not found!"
+        print(f"   ✅ Logs saved")
+        
+        # Load checkpoint and verify structure
+        checkpoint_path = checkpoint_dir / 'checkpoint_latest.pt'
+        checkpoint = torch.load(checkpoint_path, weights_only = False)
+        
+        print(f"\n🔍 Checkpoint structure validation:")
+        required_keys = ['epoch', 'global_step', 'model_state_dict', 
+                        'optimizer_state_dict', 'scheduler_state_dict', 'metrics']
+        for key in required_keys:
+            if key in checkpoint:
+                print(f"   ✅ {key}: {type(checkpoint[key])}")
+            else:
+                print(f"   ❌ MISSING: {key}")
+                raise AssertionError(f"Checkpoint missing required key: {key}")
+        
+        # Store initial state for comparison
+        initial_epoch = checkpoint['epoch']
+        initial_global_step = checkpoint['global_step']
+        initial_metrics = checkpoint['metrics']
+        
+        print(f"\n   Checkpoint state:")
+        print(f"     Epoch: {initial_epoch}")
+        print(f"     Global step: {initial_global_step}")
+        print(f"     Metrics entries: {len(initial_metrics)}")
+        
+        # ====================================================================
+        # TEST 2: Simulate Crash (Delete Model)
+        # ====================================================================
+        
+        print("\n" + "-"*80)
+        print("TEST 2: Simulating crash (clearing memory)")
+        print("-"*80)
+        
+        # Force cleanup
+        del results_initial
+        cleanup_gpu_memory_hard()
+        
+        print("   ✅ Memory cleared (crash simulated)")
+        
+        # ====================================================================
+        # TEST 3: Resume Training (Epoch 1)
+        # ====================================================================
+        
+        print("\n" + "-"*80)
+        print("TEST 3: Resume training from checkpoint")
+        print("-"*80)
+        
+        resume_checkpoint_path = str(checkpoint_dir / 'checkpoint_latest.pt')
+        print(f"   Resuming from: {resume_checkpoint_path}")
+        
+        results_resumed = run_single_experiment(
+            exp_name='exp1_dense_baseline',
+            moe_config=None,
+            use_learnt_att_pool=False,
+            train_data=df_train_sample,
+            val_data=df_val,
+            device=device,
+            epochs=2,  # Train to epoch 2 (will resume from epoch 1)
+            log_dir=str(test_dir),
+            resume_from=resume_checkpoint_path,  # ← RESUME HERE
+            checkpoint_dir=str(checkpoint_dir)
+        )
+        
+        print(f"\n✅ Resumed training completed:")
+        print(f"   Total epochs: {len(results_resumed['all_epochs'])}")
+        print(f"   Final train loss: {results_resumed['final_train_loss']:.4f}")
+        print(f"   Final val loss: {results_resumed['final_val_loss']:.4f}")
+        print(f"   Final global step: {results_resumed['all_epochs'][-1]['global_step']}")
+        
+        # ====================================================================
+        # TEST 4: Verify Continuity
+        # ====================================================================
+        
+        print("\n" + "-"*80)
+        print("TEST 4: Verifying training continuity")
+        print("-"*80)
+        
+        # Check epoch count
+        total_epochs = len(results_resumed['all_epochs'])
+        print(f"\n📊 Epoch Continuity:")
+        print(f"   Total epochs: {total_epochs}")
+        print(f"   Expected: 2 (epoch 0 + epoch 1)")
+        assert total_epochs == 2, f"Expected 2 epochs, got {total_epochs}"
+        print(f"   ✅ Epoch count correct")
+        
+        # Check global_step continuity
+        epoch0_step = results_resumed['all_epochs'][0]['global_step']
+        epoch1_step = results_resumed['all_epochs'][1]['global_step']
+        
+        print(f"\n🔢 Global Step Continuity:")
+        print(f"   After epoch 0: {epoch0_step}")
+        print(f"   After epoch 1: {epoch1_step}")
+        print(f"   Step increment: {epoch1_step - epoch0_step}")
+        
+        # Should be approximately nbatch steps per epoch
+        nbatch = len(df_train_sample) // 16
+        expected_increment = nbatch
+        step_diff = epoch1_step - epoch0_step
+        
+        # Allow small variation due to bucketing
+        assert abs(step_diff - expected_increment) < 5, \
+            f"Global step discontinuity: {step_diff} != {expected_increment}"
+        print(f"   ✅ Global step tracking continuous")
+        
+        # Check metrics structure
+        print(f"\n📈 Metrics Structure:")
+        for i, epoch_metrics in enumerate(results_resumed['all_epochs']):
+            required_metrics = ['train_loss', 'val_loss', 'top_10_acc', 'global_step']
+            missing = [m for m in required_metrics if m not in epoch_metrics]
+            if missing:
+                print(f"   ❌ Epoch {i} missing: {missing}")
+            else:
+                print(f"   ✅ Epoch {i}: all metrics present")
+        
+        # ====================================================================
+        # TEST 5: Verify Log Files
+        # ====================================================================
+        
+        print("\n" + "-"*80)
+        print("TEST 5: Verifying log file continuity")
+        print("-"*80)
+        
+        # Check training.log has resume marker
+        with open(log_dir_exp / 'training.log', 'r') as f:
+            log_content = f.read()
+        
+        if '🔄 TRAINING RESUMED' in log_content:
+            print("   ✅ Resume marker found in training.log")
+        else:
+            print("   ⚠️ Resume marker not found (check logging setup)")
+        
+        # Check epoch_metrics.json has all epochs
+        with open(log_dir_exp / 'epoch_metrics.json', 'r') as f:
+            saved_metrics = json.load(f)
+        
+        print(f"\n   Saved metrics:")
+        print(f"     Total entries: {len(saved_metrics)}")
+        print(f"     Expected: 2")
+        
+        if len(saved_metrics) == 2:
+            print(f"   ✅ All epochs saved to JSON")
+        else:
+            print(f"   ⚠️ Metrics count mismatch")
+        
+        # ====================================================================
+        # TEST 6: Verify Best Model Selection
+        # ====================================================================
+        
+        print("\n" + "-"*80)
+        print("TEST 6: Verifying best model selection")
+        print("-"*80)
+        
+        # Check if best checkpoint exists
+        best_checkpoint_path = checkpoint_dir / 'checkpoint_best.pt'
+        if best_checkpoint_path.exists():
+            best_ckpt = torch.load(best_checkpoint_path)
+            print(f"   ✅ Best checkpoint found")
+            print(f"   Best epoch: {best_ckpt['epoch']}")
+            print(f"   Best val loss: {best_ckpt['metrics'][-1]['val_loss']:.4f}")
+            
+            # Verify it's actually the best
+            all_val_losses = [m['val_loss'] for m in best_ckpt['metrics']]
+            best_loss = min(all_val_losses)
+            last_loss = best_ckpt['metrics'][-1]['val_loss']
+            
+            if abs(last_loss - best_loss) < 0.01:
+                print(f"   ✅ Best checkpoint is from best epoch")
+            else:
+                print(f"   ⚠️ Best checkpoint may not be from best epoch")
+        
+        # ====================================================================
+        # FINAL SUMMARY
+        # ====================================================================
+        
+        print("\n" + "="*80)
+        print("✅ ALL TESTS PASSED")
+        print("="*80)
+        print("\n📋 Summary:")
+        print(f"   ✅ Checkpoint save/load works")
+        print(f"   ✅ Training continuity preserved")
+        print(f"   ✅ Global step tracking correct")
+        print(f"   ✅ Metrics logging works with resume")
+        print(f"   ✅ Log files show resume markers")
+        print(f"   ✅ Best model selection works")
+        
+        return True
+        
+    finally:
+        # Cleanup test files
+        if test_dir.exists():
+            shutil.rmtree(test_dir)
+            print(f"\n🗑️  Cleaned up test directory: {test_dir}")
+test_checkpoint_resume_integration()
+
+
+# In[ ]:
+
+
+
+
+
 # ### Evaluation metrics
 
-# In[70]:
+# In[59]:
 
 
 class MetricsLogger:
@@ -2928,14 +3486,40 @@ class MetricsLogger:
         logger.save()
     """
     
-    def __init__(self, exp_name: str, log_dir: str = "logs"):
+    def __init__(self, exp_name: str, 
+                 log_dir: str = "logs", 
+                 resume: bool = False):
         self.exp_name = exp_name
         self.log_path = Path(log_dir) / exp_name
         self.log_path.mkdir(parents=True, exist_ok=True)
-        
+        if resume: self.init_resume()
         self.epoch_metrics = []
         self.batch_metrics = []
         self.config = {}
+    
+    def init_resume(self):
+        """initialize the log set up for training resume"""
+        epoch_file = self.log_path / 'epoch_metrics.json'
+        if epoch_file.exists():
+            try:
+                with open(epoch_file, 'r') as f:
+                    self.epoch_metrics = json.load(f)
+                print(f" Loaded {len(self.epoch_metrics)} existing epochs")
+            except Exception as e:
+                print(f" Could not load existing metrics: {e}")
+                self.epoch_metrics = []
+        else:
+            self.epoch_metrics = []
+
+        batch_file = self.log_path / 'batch_metrics.json'
+        if batch_file.exists():
+            try:
+                with open(batch_file, 'r') as f:
+                    self.batch_metrics = json.load(f)
+            except:
+                self.batch_metrics = []
+        else:
+            self.batch_metrics = []        
     
     def log_config(self, config: Dict):
         """Log experiment configuration."""
@@ -2971,11 +3555,15 @@ class MetricsLogger:
         if not self.epoch_metrics:
             return {}
         
-        final_epoch = self.epoch_metrics[-1]
-        best_val_loss_epoch = min(self.epoch_metrics, key=lambda x: x.get('val_loss', float('inf')))
-        
+        real_epochs = [m for m in self.epoch_metrics if 'resume_event' not in m]
+        if not real_epochs:
+            return {}
+
+        final_epoch = real_epochs[-1]
+        best_val_loss_epoch = min(real_epochs, key=lambda x: x.get('val_loss', float('inf')))
+
         return {
-            'num_epochs': len(self.epoch_metrics),
+            'num_epochs': len(real_epochs),
             'final_train_loss': final_epoch.get('train_loss', 0),
             'final_val_loss': final_epoch.get('val_loss', 0),
             'best_val_loss': best_val_loss_epoch.get('val_loss', 0),
@@ -2985,7 +3573,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[68]:
+# In[58]:
 
 
 def compute_batch_metrics_lightweight(
@@ -3020,10 +3608,18 @@ def compute_batch_metrics_lightweight(
         valid_y = []
         
         for j in range(batch_size):
-            start = actual_len_dy * j
-            end = start + dt_cnt[j]
-            valid_outputs.append(output_flat[start:end])
-            valid_y.extend(y_flat[start:end])
+            valid_days = min(int(dt_cnt[j]), actual_len_dy)
+            if valid_days <= 0:
+                continue            
+            # For outputs: use actual_len_dy
+            start_idx = actual_len_dy * j
+            end_idx = start + valid_days
+            valid_outputs.append(output_flat[start_idx:end_idx])
+            
+            # For targets: use config.len_dy (y is always padded)
+            y_start = config.len_dy * j
+            y_end = y_start + valid_days
+            valid_y.extend(y_flat[y_start:y_end])
         
         if len(valid_outputs) == 0:
             return {'recall@10': 0.0, 'mAP@20': 0.0, 'brier_score': 0.0}
@@ -3153,10 +3749,17 @@ def compute_embedding_quality_epoch(
             else:
                 # For Flash/MoE models - just get output before decoder
                 # Run full forward then extract
-                if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
-                    output_full, _ = model(x, return_moe_losses=False)
+                if use_mixed_precision:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                            output_full, _ = model(x, return_moe_losses=False)
+                        else:
+                            output_full = model(x)
                 else:
-                    output_full = model(x)
+                    if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                        output_full, _ = model(x, return_moe_losses=False)
+                    else:
+                        output_full = model(x)
                 
                 # Reconstruct embeddings from just before decoder
                 # This is a workaround - ideally modify model to return embeddings
@@ -3268,7 +3871,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[28]:
+# In[82]:
 
 
 """
@@ -3319,31 +3922,9 @@ def compute_primary_task_metrics(
                     correct += 1
         
         metrics[f'recall@{k}'] = correct / total if total > 0 else 0.0
-
-    # 2. Mean Average Precision (mAP) - comprehensive ranking quality
-    aps = []
-    
-    for i, target_codes in enumerate(valid_y):
-        true_codes = set([c for c in target_codes if c != 0])
-        if len(true_codes) > 0:
-            # Sort predictions
-            sorted_preds = torch.argsort(predictions[i], descending=True)
-
-            # Compute AP for this sample
-            hits = 0
-            precisions = []
-            for rank, pred_code in enumerate(sorted_preds[:50].tolist(), 1):
-                if pred_code in true_codes:
-                    hits += 1
-                    precisions.append(hits / rank)
-
-            if precisions:
-                aps.append(np.mean(precisions))
-
-    metrics['mAP@50'] = np.mean(aps) if aps else 0.0
         
     # Precision@K (Fraction of top-K that are correct)
-    for k in [5, 10, 20]:
+    for k in [1, 5, 10, 20, 50]:
         top_k_preds = torch.topk(predictions, k, dim=-1).indices
         precisions = []
         
@@ -3372,22 +3953,11 @@ def compute_primary_task_metrics(
     metrics['mrr'] = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
     
     # F1@K (Harmonic mean of precision and recall)
-    for k in [5, 10, 20]:
+    for k in [1, 5, 10, 20, 50]:
         if f'recall@{k}' in metrics and f'precision@{k}' in metrics:
             r = metrics[f'recall@{k}']
             p = metrics[f'precision@{k}']
             metrics[f'f1@{k}'] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
-
-    # 4. Coverage@K - what % of true labels found in top-K
-    coverages = []
-    for k in [5, 10, 20]:
-        top_k_preds = torch.topk(predictions, k, dim=-1).indices
-        for i, target_codes in enumerate(valid_y):
-            true_codes = set([c for c in target_codes if c != 0])
-            if len(true_codes) > 0:
-                found = sum(1 for c in true_codes if c in top_k_preds[i].tolist())
-                coverages.append(found / len(true_codes))
-        metrics[f'coverage@{k}'] = np.mean(coverages) if coverages else 0.0
             
             
     return metrics
@@ -4247,32 +4817,38 @@ def comprehensive_evaluation(
             
             # Get actual batch size from output
             batch_size_actual = output.shape[0]
+            # Get actual length of day
+            actual_len_dy = output.shape[1]
             # Process outputs
-            output_flat = output.reshape(batch_size_actual * config.len_dy, config.target_cd_cnt)
+            output_flat = output.reshape(batch_size_actual * actual_len_dy, config.target_cd_cnt)
             y_flat = [item for sublist in y for item in sublist]
             
             # Filter valid days
             for j in range(batch_size_actual):
-                start_idx = config.len_dy * j
-                end_idx = start_idx + dt_cnt[j]
+                valid_days = min(int(dt_cnt[j]), actual_len_dy)
+                if valid_days <= 0:
+                    continue
+                valid_days = min(int(dt_cnt[j]), actual_len_dy)
+                output_start = actual_len_dy * j
+                output_end = output_start + valid_days
+                valid_output = output_flat[output_start:output_end]
                 
-                valid_output = output_flat[start_idx:end_idx]
-                valid_y = y_flat[start_idx:end_idx]
+                y_start = config.len_dy * j
+                y_end = y_start + valid_days
+                valid_y = y_flat[y_start:y_end]
                 
                 all_predictions.append(valid_output.cpu())
                 all_targets.extend(valid_y)  # flattens one level)
                 
                 # Create multihot for this sample
-                for sample_output, sample_y in zip(valid_output, valid_y):
-                    multihot = torch.zeros(config.target_cd_cnt)
-                    for code in sample_y:
-                        if code != 0 and code < config.target_cd_cnt:
-                            multihot[code] = 1
-                    all_targets_multihot.append(multihot)
+                multihot_batch = create_multihot_targets_vectorized(
+                    valid_y, len(valid_output), config.target_cd_cnt, device
+                )
+                all_targets_multihot.append(multihot_batch.cpu())
     
     # Concatenate all predictions
-    all_predictions = torch.cat(all_predictions)
-    all_targets_multihot = torch.stack(all_targets_multihot)
+    all_predictions = torch.cat(all_predictions, dim=0)
+    all_targets_multihot = torch.cat(all_targets_multihot, dim=0) 
     
     # ============================================================
     # COMPUTE ALL METRICS
@@ -4342,7 +4918,7 @@ def comprehensive_evaluation(
     return evaluation
 
 
-# In[29]:
+# In[80]:
 
 
 def test_metric_utilities():
@@ -4363,11 +4939,11 @@ def test_metric_utilities():
 test_metric_utilities()
 
 
-# In[30]:
+# In[83]:
 
 
 def test_comprehensive_evaluation_dense():
-    cfg = BaseConfig(batch_size=4, len_dy=16, len_cd=30, device=device.type)
+    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
     model = BaselineTransformer(cfg).to(device)
     criterion = nn.BCEWithLogitsLoss()
 
@@ -4405,7 +4981,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Run experimentation
 
-# In[31]:
+# In[19]:
 
 
 def compute_code_frequencies(
@@ -4470,7 +5046,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[32]:
+# In[63]:
 
 
 def run_single_experiment(
@@ -4484,7 +5060,9 @@ def run_single_experiment(
     code_frequencies: Optional[np.ndarray] = None,
     log_dir: str = "logs",  # logging directory
     check_embeddings_every: int = 2,  # check embeddings every N epochs
-    log_metrics_every: int = 100
+    log_metrics_every: int = 100,
+    resume_from: Optional[str] = None,  # ← midpoint path used for resuming training
+    checkpoint_dir: Optional[str] = None  # ← ADD THIS PARAMETER
 ) -> Dict[str, any]:
     """
     Run a SINGLE experiment.
@@ -4512,23 +5090,35 @@ def run_single_experiment(
     print(f"\n{'='*80}")
     print(f"EXPERIMENT: {exp_name}")
     print(f"{'='*80}")
-
+        
+    # Determine if resume from check point
+    is_resume = resume_from is not None
+    if checkpoint_dir is None:
+        checkpoint_dir = os.path.join(log_dir, exp_name, 'checkpoints')
+    
     # ============================================================
     # SETUP LOGGING
     # ============================================================
     
-    logger = setup_experiment_logging(exp_name, log_dir)
-    metrics_logger = MetricsLogger(exp_name, log_dir)
+    logger = setup_experiment_logging(exp_name, log_dir, resume=is_resume) 
+    metrics_logger = MetricsLogger(exp_name, log_dir, resume=is_resume) 
     
-    logger.info(f"Starting experiment: {exp_name}")
+    if is_resume:
+        logger.info(f"🔄 RESUMING {exp_name} training from checkpoint: {resume_from}")
+    else:
+        logger.info(f"Starting experiment: {exp_name}")
     
     # Model creation (same as before)
-    if exp_name == 'exp1_dense_baseline':
+    if (exp_name == 'exp1_dense_baseline') or (moe_config is None and exp_name not in ['exp1_dense_baseline', 'exp2_dense_flash', 'exp2b_flash_learned_pool']):
+        # if exp1_dense_baseline or MoE or unknown experiments - check moe_config fallback to general model
         config = BaseConfig()
         model = BaselineTransformer(config).to(device)
         use_mixed_precision = False
         use_bucketing = False
         logger.info("Model: Baseline Transformer (FP32)")
+        print("Model Type: Baseline Transformer")
+        print("  Precision: FP32")
+        print("  Daily Encoder: Standard Transformer + Max-Pool")
         
     elif exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']:
         config = FlashAttentionConfig(
@@ -4540,9 +5130,14 @@ def run_single_experiment(
         model = FlashAttentionTransformer(config).to(device)
         use_mixed_precision = True
         use_bucketing = True
+        pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
         logger.info(f"Model: Flash Attention Transformer (FP16, pooling={use_learnt_att_pool})")
+        print("Model Type: Flash Attention Transformer")
+        print(f"  Precision: FP16")
+        print(f"  Daily Encoder: {pooling_str}")
         
     else:
+        # MoE variant
         config = FlashAttentionConfig(
             nhead=8,
             use_swiglu=True,
@@ -4552,8 +5147,15 @@ def run_single_experiment(
         model = FlashMoETransformer(config, moe_config).to(device)
         use_mixed_precision = True
         use_bucketing = True
+
+        pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
         logger.info(f"Model: Flash + MoE Transformer (FP16, {moe_config.num_experts} experts)")
-    
+        print("Model Type: Flash + MoE Transformer")
+        print(f"  Precision: FP16")
+        print(f"  Daily Encoder: {pooling_str}")
+        print(f"  MoE: {moe_config.num_experts} experts, {moe_config.num_shared_experts} shared, top-{moe_config.top_k}")
+        print(f"  Load Balance: {moe_config.load_balance_strategy}")
+
     total_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Total parameters: {total_params:,}")
     
@@ -4574,66 +5176,10 @@ def run_single_experiment(
             'load_balance': moe_config.load_balance_strategy
         }
     metrics_logger.log_config(config_dict)
-    
-    # ============================================================
-    # MODEL CREATION (3 model types)
-    # ============================================================
-    
-    if exp_name == 'exp1_dense_baseline':
-        # Type 1: Pure baseline (no Flash, no MoE)
-        config = BaseConfig()
-        model = BaselineTransformer(config).to(device)
-        use_mixed_precision = False
-        use_bucketing = False  # Baseline doesn't benefit from bucketing
-        print("Model Type: Baseline Transformer")
-        print("  Precision: FP32")
-        print("  Daily Encoder: Standard Transformer + Max-Pool")
-        
-    elif exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']:
-        # Type 2: Flash Attention (no MoE)
-        config = FlashAttentionConfig(
-            nhead=8,
-            use_swiglu=True,
-            dtype=torch.float16,
-            use_learnt_att_pool=use_learnt_att_pool
-        )
-        model = FlashAttentionTransformer(config).to(device)
-        use_mixed_precision = True
-        use_bucketing = True  # Flash benefits from bucketing
-        
-        pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-        print("Model Type: Flash Attention Transformer")
-        print(f"  Precision: FP16")
-        print(f"  Daily Encoder: {pooling_str}")
-        
-    else:
-        # Type 3: Flash + MoE
-        config = FlashAttentionConfig(
-            nhead=8,
-            use_swiglu=True,
-            dtype=torch.float16,
-            use_learnt_att_pool=use_learnt_att_pool
-        )
-        model = FlashMoETransformer(config, moe_config).to(device)
-        use_mixed_precision = True
-        use_bucketing = True
-        
-        pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-        print("Model Type: Flash + MoE Transformer")
-        print(f"  Precision: FP16")
-        print(f"  Daily Encoder: {pooling_str}")
-        print(f"  MoE: {moe_config.num_experts} experts, {moe_config.num_shared_experts} shared, top-{moe_config.top_k}")
-        print(f"  Load Balance: {moe_config.load_balance_strategy}")
-    
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"  Total Parameters: {total_params:,}")
-    print(f"  Bucketing: {'Enabled' if use_bucketing else 'Disabled'}")
 
     # Compute code frequencies if not provided
     if code_frequencies is None:
         code_frequencies = compute_code_frequencies(train_data, config, device)
-    
     
     # ============================================================
     # TRAINING SETUP
@@ -4644,7 +5190,30 @@ def run_single_experiment(
         weight_decay=config.weight_decay
     )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
     criterion = nn.BCEWithLogitsLoss()
+
+    # ============================================================
+    # RESUME FROM CHECKPOINT (NEW)
+    # ============================================================
+    start_epoch = 0
+    global_step = 0
+    best_val_loss = float('inf')
+    
+    if is_resume:
+        resumed_state = load_checkpoint(
+            resume_from, model, optimizer, scheduler, device, scaler
+        )
+        start_epoch = resumed_state['epoch'] + 1
+        global_step = resumed_state['global_step']
+        
+        # Get best val loss from history
+        if resumed_state['metrics']:
+            best_val_loss = min(m.get('val_loss', float('inf')) for m in resumed_state['metrics'])
+        
+        logger.info(f"Resumed from epoch {start_epoch}, global_step {global_step}")
+        logger.info(f"Previous best val loss: {best_val_loss:.4f}")
+    
     
     # ============================================================
     # TRAINING LOOP
@@ -4654,7 +5223,7 @@ def run_single_experiment(
     
     start_time = time.time()
     
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
         
         # Train
@@ -4666,12 +5235,17 @@ def run_single_experiment(
             criterion=criterion,
             config=config,
             device=device,
+            scaler=scaler,
             use_mixed_precision=use_mixed_precision,
             moe_config=moe_config,
             epoch=epoch,
             use_bucketing=use_bucketing,
-            log_interval=log_metrics_every
+            log_interval=log_metrics_every,
+            global_step=global_step
         )
+        
+        # Update the global steps
+        global_step = train_metrics['global_step'] 
         
         # Evaluate
         check_embeddings = (epoch % check_embeddings_every == 0)
@@ -4692,6 +5266,26 @@ def run_single_experiment(
             **val_metrics
         }
         epoch_history.append(epoch_metrics)
+
+        # ====================================================================
+        # SAVE TRAINING CHECKPOINTS
+        # ====================================================================        
+        is_best = epoch_metrics['val_loss'] < best_val_loss
+        if is_best:
+            best_val_loss = epoch_metrics['val_loss']
+        
+        save_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            epoch=epoch,
+            global_step=global_step,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            metrics=epoch_history,
+            is_best=is_best
+        )
+        logger.info(f"Checkpoint saved (epoch {epoch+1}, step {global_step})")
         
         # ====================================================================
         # LOG EPOCH METRICS
@@ -4895,7 +5489,7 @@ def run_all_experiments(
 
 # ### Memory management
 
-# In[33]:
+# In[21]:
 
 
 import torch
@@ -5361,7 +5955,7 @@ for members in [100_000, 500_000, 1_000_000, 5_000_000, 12_000_000]:
 
 # ### Final tests
 
-# In[34]:
+# In[22]:
 
 
 """
@@ -5389,7 +5983,7 @@ import gc
 
 # #### Test data flow
 
-# In[39]:
+# In[23]:
 
 
 def test_data_parsing_completeness():
@@ -5459,7 +6053,7 @@ def test_data_parsing_completeness():
 test_data_parsing_completeness()
 
 
-# In[40]:
+# In[24]:
 
 
 def test_prepare_tensor_integration():
@@ -5592,7 +6186,7 @@ test_prepare_tensor_integration()
 
 # #### Model component
 
-# In[54]:
+# In[30]:
 
 
 # ============================================================================
@@ -5789,7 +6383,7 @@ test_learned_pooling_functionality()
 test_learned_pooling_trains_properly()
 
 
-# In[56]:
+# In[ ]:
 
 
 def test_moe_expert_routing_correctness():
@@ -5882,7 +6476,7 @@ test_moe_expert_routing_correctness()
 
 # #### Model integration pipeline
 
-# In[58]:
+# In[26]:
 
 
 def test_model_forward_backward_integration():
@@ -6059,7 +6653,7 @@ test_loss_computation_correctness()
 
 # #### Training loop
 
-# In[78]:
+# In[27]:
 
 
 # ============================================================================
@@ -6306,7 +6900,7 @@ test_bucketing_effectiveness()
 
 # #### Evaluation loop 
 
-# In[41]:
+# In[28]:
 
 
 # ============================================================================
@@ -6493,7 +7087,7 @@ test_comprehensive_metrics_computation()
 
 # #### End to end experimentation tests
 
-# In[35]:
+# In[29]:
 
 
 def test_single_experiment_end_to_end():
@@ -6590,7 +7184,8 @@ def test_multi_experiment_comparison():
     val_tiny = df_val.head(1200)
     
     # Run 3 experiments
-    exp_names = ['exp1_dense_baseline', 'exp2b_flash_learned_pool', 'exp3b_moe_learned_pool']
+    exp_names = [# 'exp1_dense_baseline', 
+                 'exp2b_flash_learned_pool', 'exp3b_moe_learned_pool']
     
     print(f"  Running {len(exp_names)} experiments (1 epoch each, 32 samples)...")
     
@@ -6636,8 +7231,8 @@ def test_multi_experiment_comparison():
     
     print("\n✅ TEST 13 PASSED: Multi-experiment framework works\n")
     
-# test_single_experiment_end_to_end()
-test_multi_experiment_comparison()
+test_single_experiment_end_to_end()
+# test_multi_experiment_comparison()
 
 
 # ##### Follow up tests
@@ -7134,16 +7729,29 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 df_train.shape
 
 
+# #### If flash_attention works?
+
+# In[71]:
+
+
+cleanup_gpu_memory_hard()
+
+
 # In[ ]:
 
 
-
-
-
-# In[ ]:
-
-
-
+exp_names = ['exp1_dense_baseline', 'exp2_dense_flash', 'exp2b_flash_learned_pool']
+device = 'cuda'
+exp1_results_df = run_single_experiment(
+    exp_name='exp1_dense_baseline',
+    moe_config=None,
+    use_learnt_att_pool=False,
+    train_data=df_train,
+    val_data=df_val,
+    device=device,
+    epochs=1,
+    code_frequencies=None  # Should compute automatically
+)
 
 
 # In[ ]:

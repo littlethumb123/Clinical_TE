@@ -42,6 +42,121 @@ This document describes the **confirmed training strategies** for the hierarchic
    - Both map the SAME medical events at different granularities
 
 ---
+## Walking through an example
+
+That is the perfect follow-up question. It addresses the core mechanism of a sequence-to-sequence task like this. You are asking: "How does an input from one vocabulary (`cd`) result in a prediction for a different vocabulary (`target_cd`)?"
+
+Let me walk you through the precise journey of the data, step-by-step, from input file to final prediction, based on the `BaselineTransformer` in `moe_flashattn_1.py`. This will clarify the transition logic.
+
+---
+
+### The Core Concept: Separate Vocabularies for Input and Output
+
+The key to understanding this is that the model uses **two different vocabularies** that are connected only by the learned weights of the neural network.
+
+1.  **Input Vocabulary (`cd_cnt = 84010`):** This is the large, granular vocabulary of all possible raw medical codes. The model *sees* these codes as input.
+2.  **Output Vocabulary (`target_cd_cnt = 8850`):** This is the smaller, collapsed/grouped vocabulary. The model is *trained to predict* codes from this vocabulary.
+
+The model never sees the `target_cd` as an input during training. It only sees the raw `cd` codes. The transition from the input space to the output space happens at the very last step.
+
+### Step-by-Step Data Transformation Walkthrough
+
+Let's trace a single patient's data through the `BaselineTransformer.forward` method.
+
+**Assumptions for this walkthrough:**
+*   `batch_size = 1`
+*   `embedding_size = 256`
+*   `len_dy = 200`
+*   `len_cd = 80`
+
+#### Step 1: Input Data (`prepare_tensor` or `ClinicalDataset`)
+
+The pipeline prepares an input tensor `x` with the shape `[1, 200, 82]`. This tensor contains raw integer IDs.
+
+*   `x[0, :, 0]` = Age IDs for 200 days
+*   `x[0, :, 1]` = Gender IDs for 200 days
+*   `x[0, :, 2:]` = Medical Code IDs for 200 days, with 80 codes per day. These are from the large **`cd_cnt` (84,010)** vocabulary.
+
+#### Step 2: The Embedding "Translation" Layer (Lines 1495-1497)
+
+This is the first and most important transformation. The model takes the integer IDs and "translates" them into a shared, continuous vector space.
+
+```python
+gender_cd = self.embedding_gender_cd(gender_cd)
+# Shape changes from [1, 200] -> [1, 200, 256]
+
+age_in_months = self.embedding_age_in_months(age_in_months)
+# Shape changes from [1, 200] -> [1, 200, 256]
+
+cd = self.embedding_cd(cd)
+# Shape changes from [1, 200, 80] -> [1, 200, 80, 256]
+```
+*   **What it does:** Each integer ID is used as an index to look up a corresponding 256-dimensional vector in an embedding table.
+*   **Why it's important:** This is where the model moves from discrete "codes" to a rich, continuous "meaning" space. The model will learn, for example, that the vectors for `icd9_dx_401.9` (Hypertension) and `icd9_dx_401.1` are very close to each other in this 256-dimensional space, because they are clinically related. **The concept of separate input/output vocabularies no longer matters after this step. Everything is now just a 256-dimensional vector.**
+
+#### Step 3: Daily Code Encoding (Lines 1506-1515)
+
+The model now needs to summarize the 80 code vectors for each day into a single vector representing that day.
+
+```python
+# Reshape to treat all 200 days as a batch of sequences
+cd = cd.reshape(200, 80, 256) 
+# Transformer expects [seq_len, batch, dim]
+cd = torch.swapaxes(cd, 0, 1) # -> [80, 200, 256]
+# The daily encoder finds relationships between the 80 codes
+cd = self.transformer_encoder_cd(cd) # -> [80, 200, 256]
+# Max pooling collapses the 80 codes into one summary vector per day
+cd = nn.MaxPool1d(80)(cd.permute(1, 2, 0)) # -> [200, 256, 1]
+cd = cd.reshape(1, 200, 256) # -> [1, 200, 256]
+```
+*   **What it does:** The shallow transformer looks for co-occurrence patterns (e.g., "this lab code often appears with this diagnosis code"). The max pooling then aggressively summarizes this information.
+
+#### Step 4: Creating the "Day Vector" (Line 1521)
+
+Now, all the information for each day is combined.
+
+```python
+cd = cd_res + cd + gender_cd + age_in_months
+```
+*   **What it does:** It adds the vectors for the processed codes, the raw code sum (`cd_res`), gender, and age together.
+*   **Result:** We now have a final sequence of 200 vectors, where each vector `cd[0, d, :]` is a rich, 256-dimensional representation of everything that happened on day `d`.
+
+#### Step 5: Temporal Encoding (Line 1541)
+
+This is where the autoregressive, predictive power comes from.
+
+```python
+mth_mask = self._generate_square_subsequent_mask(200).to(x.device)      
+cd = self.transformer_encoder_dy(cd, mth_mask)
+```
+*   **What it does:** The deep temporal transformer processes the sequence of 200 day-vectors. The causal mask is the key. When the model is calculating the output vector for day `d`, the mask forces it to only use information from days `0` to `d`.
+*   **Why this enables next-day prediction:** Because the model's output for day `d` is based *only* on the history up to day `d`, it is a perfect input for predicting what will happen on day `d+1`. The training process (via the shifted loss function) will teach the model to make this output vector `cd[0, d, :]` a representation that is useful for forecasting.
+
+#### Step 6: The Final Transition - The Output Projection (Line 1551)
+
+This is the answer to your core question. This is where the model transitions from its internal "meaning" space back to a specific vocabulary space.
+
+```python
+cd = self.decoder_cd(cd)
+```
+*   **What it is:** `self.decoder_cd` is just a standard `nn.Linear` layer. It is a weight matrix of shape `[embedding_size, target_cd_cnt]`, which is `[256, 8850]`.
+*   **How it works:** It performs a matrix multiplication. For each of the 200 day-vectors in the sequence, it multiplies the `[1, 256]` vector by the `[256, 8850]` weight matrix.
+    *   `[1, 256] @ [256, 8850]  -> [1, 8850]`
+*   **The Result:** The shape of `cd` changes from `[1, 200, 256]` to `[1, 200, 8850]`. The model has now projected its internal, 256-dimensional "meaning vector" into a 8850-dimensional "logit vector" in the **target vocabulary space**. Each of the 8850 values in this final vector corresponds to a specific code in your collapsed `target_cd` vocabulary.
+
+### Summary of the Logic
+
+1.  **Input:** The model sees raw, granular codes (84k vocab).
+2.  **Embedding:** It immediately "translates" these codes into a shared 256-dim meaning space.
+3.  **Encoding:** It processes these vectors hierarchically to build a final representation for each day that summarizes all history up to that day. This entire process happens within the 256-dim space.
+4.  **Projection:** In the very last step, a linear layer acts as a "decoder," projecting the final 256-dim meaning vector into a 8850-dim logit vector. **This is the transition from the input domain to the target domain.**
+5.  **Training:** The loss function compares this 8850-dim logit vector from day `d` with the true (shifted) `target_cd_next` labels from day `d+1`, teaching the model to make its internal representations predictive.
+
+The model is not explicitly aware of the mapping between `cd` and `target_cd`. It simply learns to transform a sequence of input embeddings into a sequence of output logits that minimize the predictive error.
+
+
+
+
 
 ## SQL Data Preparation Pipeline
 

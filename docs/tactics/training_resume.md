@@ -928,4 +928,545 @@ Epoch 3 Summary:
 
 This strategy follows industry best practices from Google (Vertex AI), OpenAI (model training infrastructure), Meta (LLaMA training), and Anthropic (Claude training). You're now equipped to handle multi-hour training runs with confidence! 🎯
 
-Would you like me to create a complete, ready-to-run implementation tailored to your specific codebase structure?
+
+# **Simple checkpoint implementation** 
+## **CURRENT LOGGING SYSTEM ANALYSIS**
+
+Your current system has:
+
+1. **`setup_experiment_logging()`**: Creates Python logger with console + file handler
+   - File handler opens in **'w' mode** (overwrites on each run)
+   - Logs to `logs/{exp_name}/training.log`
+
+2. **`MetricsLogger`**: Stores metrics in memory, saves to JSON at end
+   - `epoch_metrics` list (in memory)
+   - `batch_metrics` list (in memory)
+   - `save()` writes to JSON files
+
+3. **Usage**: Logger for text, MetricsLogger for structured metrics
+
+---
+
+## **MINIMAL INTEGRATION PLAN**
+
+Make these changes to support resume without breaking existing code:
+
+### **1. Modify `setup_experiment_logging()` to support resume**
+
+```python
+def setup_experiment_logging(
+    exp_name: str,
+    log_dir: str = "logs",
+    resume: bool = False  # ← ADD THIS PARAMETER
+) -> logging.Logger:
+    """
+    Set up comprehensive logging for experiment tracking.
+    
+    Args:
+        resume: If True, append to existing log file instead of overwriting
+    
+    Creates:
+    1. Console logger (INFO level)
+    2. File logger (DEBUG level) - saves to logs/{exp_name}/training.log
+    3. Metrics JSON logger - saves metrics to logs/{exp_name}/metrics.json
+    """
+    # Create log directory
+    log_path = Path(log_dir) / exp_name
+    log_path.mkdir(parents=True, exist_ok=True)
+    
+    # Setup logger
+    logger = logging.getLogger(exp_name)
+    logger.setLevel(logging.DEBUG)
+    logger.handlers = []  # Clear existing handlers
+    
+    # Console handler (INFO level)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler (DEBUG level) - CHANGE: Append mode if resuming
+    file_mode = 'a' if resume else 'w'  # ← KEY CHANGE
+    file_handler = logging.FileHandler(log_path / 'training.log', mode=file_mode)
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+    
+    # Log resume marker if resuming
+    if resume:
+        logger.info(f"\n{'='*80}")
+        logger.info(f"🔄 TRAINING RESUMED")
+        logger.info(f"{'='*80}\n")
+    else:
+        logger.info(f"Starting experiment: {exp_name}")
+    
+    return logger
+```
+
+### **2. Enhance `MetricsLogger` to load existing metrics on resume**
+
+```python
+class MetricsLogger:
+    """
+    JSON-based metrics logger for structured experiment tracking.
+    
+    ENHANCED: Now supports resume - loads existing metrics if resuming.
+    """
+    
+    def __init__(self, exp_name: str, log_dir: str = "logs", resume: bool = False):
+        self.exp_name = exp_name
+        self.log_path = Path(log_dir) / exp_name
+        self.log_path.mkdir(parents=True, exist_ok=True)
+        
+        # ENHANCED: Load existing metrics if resuming
+        if resume:
+            # Try to load existing epoch metrics
+            epoch_file = self.log_path / 'epoch_metrics.json'
+            if epoch_file.exists():
+                try:
+                    with open(epoch_file, 'r') as f:
+                        self.epoch_metrics = json.load(f)
+                    print(f"📂 Loaded {len(self.epoch_metrics)} existing epochs from metrics")
+                except:
+                    self.epoch_metrics = []
+            else:
+                self.epoch_metrics = []
+            
+            # Try to load existing batch metrics
+            batch_file = self.log_path / 'batch_metrics.json'
+            if batch_file.exists():
+                try:
+                    with open(batch_file, 'r') as f:
+                        self.batch_metrics = json.load(f)
+                except:
+                    self.batch_metrics = []
+            else:
+                self.batch_metrics = []
+            
+            # Log resume event to metrics
+            self.epoch_metrics.append({
+                'epoch': len(self.epoch_metrics),  # Next epoch number
+                'resume_event': True,
+                'resume_timestamp': time.time(),
+                'previous_epochs': len(self.epoch_metrics) - 1
+            })
+        else:
+            self.epoch_metrics = []
+            self.batch_metrics = []
+        
+        self.config = {}
+    
+    def log_config(self, config: Dict):
+        """Log experiment configuration."""
+        self.config = config
+        # Only save config if new experiment (not resuming)
+        if not self.epoch_metrics or not any('resume_event' in m for m in self.epoch_metrics):
+            config_path = self.log_path / 'config.json'
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+    
+    def log_epoch(self, epoch: int, metrics: Dict[str, float]):
+        """Log epoch-level metrics."""
+        entry = {'epoch': epoch, **metrics}
+        self.epoch_metrics.append(entry)
+    
+    def log_batch(self, epoch: int, batch: int, metrics: Dict[str, float]):
+        """Log batch-level metrics (for real-time monitoring)."""
+        entry = {'epoch': epoch, 'batch': batch, **metrics}
+        self.batch_metrics.append(entry)
+    
+    def save(self):
+        """Save all metrics to JSON files."""
+        # Save epoch metrics
+        with open(self.log_path / 'epoch_metrics.json', 'w') as f:
+            json.dump(self.epoch_metrics, f, indent=2)
+        
+        # Save batch metrics
+        with open(self.log_path / 'batch_metrics.json', 'w') as f:
+            json.dump(self.batch_metrics, f, indent=2)
+        
+        # Save config (only if not already saved)
+        if self.config and not (self.log_path / 'config.json').exists():
+            with open(self.log_path / 'config.json', 'w') as f:
+                json.dump(self.config, f, indent=2)
+    
+    def get_summary(self) -> Dict:
+        """Get summary statistics."""
+        if not self.epoch_metrics:
+            return {}
+        
+        # Filter out resume events for summary
+        real_epochs = [m for m in self.epoch_metrics if 'resume_event' not in m]
+        if not real_epochs:
+            return {}
+        
+        final_epoch = real_epochs[-1]
+        best_val_loss_epoch = min(real_epochs, key=lambda x: x.get('val_loss', float('inf')))
+        
+        # Count resume events
+        resume_count = sum(1 for m in self.epoch_metrics if 'resume_event' in m)
+        
+        return {
+            'num_epochs': len(real_epochs),
+            'final_train_loss': final_epoch.get('train_loss', 0),
+            'final_val_loss': final_epoch.get('val_loss', 0),
+            'best_val_loss': best_val_loss_epoch.get('val_loss', 0),
+            'best_epoch': best_val_loss_epoch.get('epoch', 0),
+            'resume_count': resume_count  # ← NEW: Track how many times resumed
+        }
+```
+
+### **3. Add checkpoint functions (simple, PyTorch standard)**
+
+```python
+# ============================================================================
+# CHECKPOINT FUNCTIONS (Simple PyTorch Standard Pattern)
+# ============================================================================
+
+def save_checkpoint(
+    checkpoint_dir: str,
+    epoch: int,
+    global_step: int,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Any,
+    scaler: Optional[GradScaler],
+    metrics: List[Dict],
+    is_best: bool = False
+) -> str:
+    """
+    Save checkpoint - PyTorch official pattern.
+    
+    Saves:
+    - checkpoint_latest.pt (always, for resume)
+    - checkpoint_epoch{N}.pt (every epoch)
+    - checkpoint_best.pt (when val loss improves)
+    """
+    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    
+    checkpoint = {
+        'epoch': epoch,
+        'global_step': global_step,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+        'scaler_state_dict': scaler.state_dict() if scaler else None,
+        'metrics': metrics,
+        'timestamp': time.time()
+    }
+    
+    # Save latest (for resume)
+    latest_path = os.path.join(checkpoint_dir, 'checkpoint_latest.pt')
+    torch.save(checkpoint, latest_path)
+    
+    # Save epoch checkpoint
+    epoch_path = os.path.join(checkpoint_dir, f'checkpoint_epoch{epoch}.pt')
+    torch.save(checkpoint, epoch_path)
+    
+    # Save best (when val loss improves)
+    if is_best:
+        best_path = os.path.join(checkpoint_dir, 'checkpoint_best.pt')
+        torch.save(checkpoint, best_path)
+    
+    return latest_path
+
+
+def load_checkpoint(
+    checkpoint_path: str,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Any = None,
+    scaler: Optional[GradScaler] = None,
+    device: torch.device = None
+) -> Dict:
+    """
+    Load checkpoint - PyTorch official pattern.
+    
+    Returns:
+        Dict with: epoch, global_step, metrics
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Restore states
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    if scheduler and checkpoint.get('scheduler_state_dict'):
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    if scaler and checkpoint.get('scaler_state_dict'):
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+    
+    return {
+        'epoch': checkpoint['epoch'],
+        'global_step': checkpoint['global_step'],
+        'metrics': checkpoint.get('metrics', [])
+    }
+```
+
+### **4. Modify `train_epoch()` to return `global_step`**
+
+```python
+def train_epoch(
+    model: nn.Module,
+    train_data: pd.DataFrame,
+    optimizer: optim.Optimizer,
+    scheduler: Optional[optim.lr_scheduler._LRScheduler],
+    criterion: nn.Module,
+    config: BaseConfig,
+    device: torch.device,
+    use_mixed_precision: bool = False,
+    moe_config: Optional[MoEConfig] = None,
+    epoch: int = 1,
+    global_step: int = 0,  # ← ADD THIS PARAMETER
+    use_bucketing: bool = False,
+    log_interval: int = 100 
+) -> Dict[str, float]:
+    """
+    Train for one epoch.
+    
+    ENHANCED: Now tracks global_step across epochs for resume support.
+    """
+    # ... existing code ...
+    
+    # In your training loop, increment global_step:
+    for i in range(nbatch):
+        # ... existing training code ...
+        
+        global_step += 1  # ← ADD THIS
+        
+        # ... rest of loop ...
+    
+    # Return global_step in metrics
+    return {
+        'train_loss': total_pred_loss / nbatch,
+        'aux_loss': total_aux_loss / nbatch,
+        'global_step': global_step,  # ← ADD THIS
+        # ... other metrics ...
+    }
+```
+
+### **5. Modify `run_single_experiment()` to support resume**
+
+```python
+def run_single_experiment(
+    exp_name: str,
+    moe_config: Optional[MoEConfig],
+    use_learnt_att_pool: bool,
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    device: torch.device,
+    epochs: int = 4,
+    code_frequencies: Optional[np.ndarray] = None,
+    log_dir: str = "logs",
+    check_embeddings_every: int = 2,
+    log_metrics_every: int = 100,
+    resume_from: Optional[str] = None,  # ← ADD THIS PARAMETER
+    checkpoint_dir: Optional[str] = None  # ← ADD THIS PARAMETER
+) -> Dict[str, any]:
+    """
+    Run a SINGLE experiment.
+    
+    ENHANCED: Now supports checkpoint/resume.
+    
+    Args:
+        resume_from: Path to checkpoint.pt to resume from (e.g., './checkpoints/exp1/checkpoint_latest.pt')
+        checkpoint_dir: Directory to save checkpoints (defaults to log_dir/checkpoints)
+    """
+    
+    # Determine if resuming
+    is_resume = resume_from is not None
+    if checkpoint_dir is None:
+        checkpoint_dir = os.path.join(log_dir, exp_name, 'checkpoints')
+    
+    # ============================================================
+    # SETUP LOGGING (ENHANCED: Pass resume flag)
+    # ============================================================
+    
+    logger = setup_experiment_logging(exp_name, log_dir, resume=is_resume)  # ← CHANGE
+    metrics_logger = MetricsLogger(exp_name, log_dir, resume=is_resume)  # ← CHANGE
+    
+    if is_resume:
+        logger.info(f"🔄 RESUMING from checkpoint: {resume_from}")
+    else:
+        logger.info(f"Starting experiment: {exp_name}")
+    
+    # ... existing model creation code ...
+    
+    # ============================================================
+    # TRAINING SETUP
+    # ============================================================
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay
+    )
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
+    criterion = nn.BCEWithLogitsLoss()
+    
+    # ============================================================
+    # RESUME FROM CHECKPOINT (NEW)
+    # ============================================================
+    start_epoch = 0
+    global_step = 0
+    best_val_loss = float('inf')
+    
+    if is_resume:
+        resumed_state = load_checkpoint(
+            resume_from, model, optimizer, scheduler, scaler, device
+        )
+        start_epoch = resumed_state['epoch'] + 1
+        global_step = resumed_state['global_step']
+        
+        # Get best val loss from history
+        if resumed_state['metrics']:
+            best_val_loss = min(m.get('val_loss', float('inf')) for m in resumed_state['metrics'])
+        
+        logger.info(f"Resumed from epoch {start_epoch}, global_step {global_step}")
+        logger.info(f"Previous best val loss: {best_val_loss:.4f}")
+    
+    # ============================================================
+    # TRAINING LOOP (MODIFIED: Start from start_epoch)
+    # ============================================================
+    logger.info(f"Training for {epochs} epochs...")
+    epoch_history = []
+    
+    start_time = time.time()
+    
+    for epoch in range(start_epoch, epochs):  # ← CHANGE: Start from start_epoch
+        logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
+        
+        # Train (MODIFIED: Pass global_step)
+        train_metrics = train_epoch(
+            model=model,
+            train_data=train_data,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            config=config,
+            device=device,
+            use_mixed_precision=use_mixed_precision,
+            moe_config=moe_config,
+            epoch=epoch,
+            global_step=global_step,  # ← ADD THIS
+            use_bucketing=use_bucketing,
+            log_interval=log_metrics_every
+        )
+        
+        # Update global_step
+        global_step = train_metrics['global_step']  # ← ADD THIS
+        
+        # ... rest of existing code ...
+        
+        # Save checkpoint (NEW)
+        is_best = epoch_metrics['val_loss'] < best_val_loss
+        if is_best:
+            best_val_loss = epoch_metrics['val_loss']
+        
+        save_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            epoch=epoch,
+            global_step=global_step,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            metrics=epoch_history,
+            is_best=is_best
+        )
+        logger.info(f"💾 Checkpoint saved (epoch {epoch+1}, step {global_step})")
+    
+    # ... rest of existing code ...
+```
+
+---
+
+## **WHAT THIS INTEGRATION PROVIDES**
+
+### **Backward Compatible:**
+- Existing code works unchanged (resume_from=None by default)
+- No breaking changes to function signatures (only adds optional params)
+- Existing logs/metrics format unchanged
+
+### **Resume Support:**
+- Log file appends (doesn't overwrite) when resuming
+- Metrics load from existing JSON files
+- Resume events tracked in metrics
+- Checkpoint saves all training state
+
+### **What Gets Logged:**
+
+**Text Log (`training.log`):**
+```
+2025-01-10 14:23:15 - exp1 - INFO - Starting experiment: exp1
+2025-01-10 14:24:10 - exp1 - INFO - Epoch 1: Train Loss: 2.5
+<crash>
+
+2025-01-10 15:00:00 - exp1 - INFO - ================================================================================
+2025-01-10 15:00:00 - exp1 - INFO - 🔄 TRAINING RESUMED
+2025-01-10 15:00:00 - exp1 - INFO - ================================================================================
+2025-01-10 15:00:01 - exp1 - INFO - Resumed from epoch 1, global_step 1250
+2025-01-10 15:00:50 - exp1 - INFO - Epoch 2: Train Loss: 2.2
+```
+
+**Metrics JSON (`epoch_metrics.json`):**
+```json
+[
+  {"epoch": 0, "train_loss": 2.5, "val_loss": 2.3, ...},
+  {"epoch": 1, "resume_event": true, "resume_timestamp": 1736532000, "previous_epochs": 1},
+  {"epoch": 2, "train_loss": 2.2, "val_loss": 2.1, ...}
+]
+```
+
+---
+
+## **USAGE EXAMPLE**
+
+```python
+# Start fresh
+results = run_single_experiment(
+    exp_name='exp1',
+    moe_config=None,
+    use_learnt_att_pool=False,
+    train_data=df_train,
+    val_data=df_val,
+    device=device,
+    epochs=10
+)
+
+# Resume after crash
+results = run_single_experiment(
+    exp_name='exp1',
+    moe_config=None,
+    use_learnt_att_pool=False,
+    train_data=df_train,
+    val_data=df_val,
+    device=device,
+    epochs=10,
+    resume_from='./logs/exp1/checkpoints/checkpoint_latest.pt'  # ← Just add this
+)
+```
+
+---
+
+## **SUMMARY**
+
+- Minimal changes: only 3 functions modified, 2 new functions added
+- Backward compatible: existing code works unchanged
+- Industry standard: PyTorch checkpoint pattern
+- Integrated logging: resume events visible in logs and metrics
+- No complexity: simple, maintainable code
+
+Should I switch to agent mode and implement these changes directly in your `moe_flashattn_1.py`?
