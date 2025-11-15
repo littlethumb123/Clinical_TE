@@ -108,7 +108,7 @@ Date: 2025-10-24
 import pandas as pd
 
 
-# In[2]:
+# In[1]:
 
 
 import pandas as pd
@@ -117,7 +117,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[93]:
+# In[2]:
 
 
 """
@@ -162,7 +162,7 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[4]:
+# In[3]:
 
 
 # ============================================================================
@@ -229,7 +229,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[5]:
+# In[4]:
 
 
 @dataclass
@@ -327,7 +327,7 @@ class MoEConfig:
 
 
 
-# In[6]:
+# In[5]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -456,7 +456,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### RPE and Swiglu
 
-# In[7]:
+# In[6]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -579,7 +579,7 @@ class SwiGLU(nn.Module):
         return output
 
 
-# In[8]:
+# In[7]:
 
 
 def test_rotary_position_embedding():
@@ -596,7 +596,7 @@ def test_rotary_position_embedding():
 test_rotary_position_embedding()
 
 
-# In[9]:
+# In[8]:
 
 
 def test_swiglu_forward():
@@ -612,7 +612,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[11]:
+# In[9]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -851,7 +851,7 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
-# In[12]:
+# In[10]:
 
 
 def test_flash_attention_layer_fallback():
@@ -876,7 +876,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[13]:
+# In[11]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -959,7 +959,7 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
-# In[14]:
+# In[12]:
 
 
 def test_learned_attention_pooling():
@@ -975,7 +975,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[15]:
+# In[13]:
 
 
 # ============================================================================
@@ -1308,7 +1308,7 @@ class MoELayer(nn.Module):
         return output, losses
 
 
-# In[16]:
+# In[14]:
 
 
 def test_switch_auxiliary_loss():
@@ -1323,7 +1323,7 @@ def test_switch_auxiliary_loss():
 test_switch_auxiliary_loss()
 
 
-# In[17]:
+# In[15]:
 
 
 def test_deepseek_bias_correction():
@@ -1338,7 +1338,7 @@ def test_deepseek_bias_correction():
 test_deepseek_bias_correction()
 
 
-# In[18]:
+# In[16]:
 
 
 def test_expert_layer_forward():
@@ -1351,7 +1351,7 @@ def test_expert_layer_forward():
 test_expert_layer_forward()
 
 
-# In[19]:
+# In[17]:
 
 
 def test_moe_layer_forward():
@@ -1381,7 +1381,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[20]:
+# In[24]:
 
 
 # ============================================================================
@@ -1559,7 +1559,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[21]:
+# In[25]:
 
 
 # ============================================================================
@@ -1778,7 +1778,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[22]:
+# In[26]:
 
 
 # ============================================================================
@@ -1993,13 +1993,13 @@ class FlashMoETransformer(nn.Module):
 
 # #### Test
 
-# In[79]:
+# In[27]:
 
 
 def test_baseline_transformer_forward():
     cfg = BaseConfig(len_dy=200, len_cd=80, batch_size=4, device=device.type)
     dataset = ClinicalDataset(df_train.head(cfg.batch_size), cfg)
-    loader = DataLoader(dataset, batch_size=cfg.batch_size)
+    loader = DataLoader(dataset, batch_size=cfg.batch_size, collate_fn=clinical_collate_fn)
     batch = next(iter(loader))
     
     age = batch['age'].to(device).unsqueeze(-1)
@@ -2016,7 +2016,7 @@ def test_baseline_transformer_forward():
 test_baseline_transformer_forward()
 
 
-# In[30]:
+# In[28]:
 
 
 def test_flash_attention_transformer_forward():
@@ -2084,7 +2084,7 @@ test_flash_moe_transformer_forward()
 
 # #### Preprocess data with data loader
 
-# In[83]:
+# In[29]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2141,15 +2141,44 @@ class ClinicalDataset(Dataset):
         }
 
 
-# In[ ]:
+# In[30]:
 
 
-
+def clinical_collate_fn(batch):
+    """
+    Custom collate function for clinical data.
+    
+    Handles the special case of 'target' which is a nested list with variable-length sublists.
+    PyTorch's default_collate cannot handle this, so we keep it as a Python list.
+    
+    Args:
+        batch: List of dictionaries from ClinicalDataset.__getitem__
+    
+    Returns:
+        Batched dictionary with:
+        - age, gender, codes: Stacked tensors
+        - dt_cnt: List of integers
+        - target: List of nested lists (NOT converted to tensor)
+    """
+    # Extract each field
+    ages = torch.stack([item['age'] for item in batch])
+    genders = torch.stack([item['gender'] for item in batch])
+    codes = torch.stack([item['codes'] for item in batch])
+    dt_cnts = [item['dt_cnt'] for item in batch]  # Keep as list
+    targets = [item['target'] for item in batch]  # Keep as list of lists
+    
+    return {
+        'age': ages,
+        'gender': genders,
+        'codes': codes,
+        'dt_cnt': dt_cnts,
+        'target': targets
+    }
 
 
 # #### Data preparation
 
-# In[68]:
+# In[31]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2370,6 +2399,14 @@ def create_multihot_targets_vectorized(
     return y_cd
 
 
+
+
+
+# #### Loss function
+
+# In[51]:
+
+
 def compute_loss(
     output: torch.Tensor,
     y: List[List[List[int]]],
@@ -2410,8 +2447,8 @@ def compute_loss(
         valid_outputs.append(output[output_start:output_end])
         
         # For targets: Slice targets using the config.len_dy stride
-        y_start = actual_len_dy * j
-        y_end = y_start + dt_cnt[j]
+        y_start = config.len_dy * j
+        y_end = y_start + valid_days
         valid_y.extend(y_flat[y_start:y_end]) 
     if not valid_outputs:
         return torch.tensor(0.0, device=device, requires_grad=True)
@@ -2435,10 +2472,9 @@ def compute_loss(
     return loss
 
 
-
 # #### Train and evaluation
 
-# In[84]:
+# In[110]:
 
 
 # Training each epoch
@@ -2467,11 +2503,12 @@ def train_epoch(
     - Step 3: Dynamic truncation for bucketed batches
     
     Logs metrics every `log_interval` batches:
-    - Loss (BCE + aux loss if MoE)
-    - Recall@10 (primary clinical metric)
-    - mAP@20 (ranking quality)
-    - Brier score (calibration)
-    - MoE health (if applicable)
+    0. Loss (BCE + aux loss if MoE)
+    1. Recall@5, 10, 20, 50 - Clinical utility at different cutoffs
+    2. Precision@5, 10, 20, 50 - How many predictions are correct
+    3. mAP@20, mAP@50 - Ranking quality
+    4. Brier score - Calibration quality (critical for embeddings)
+    5 MoE health (if applicable)
     
     # Track the training procedure with global_step: int = 0,
     
@@ -2609,7 +2646,11 @@ def train_epoch(
                 # Log to console
                 print(f"    Loss: {pred_loss.item():.4f} | "
                       f"R@10: {batch_metrics['recall@10']:.3f} | "
-                      f"mAP: {batch_metrics['mAP@20']:.3f} | "
+                      f"R@20: {batch_metrics['recall@20']:.3f} | "
+                      f"P@10: {batch_metrics['precision@10']:.3f} | "
+                      f"P@20: {batch_metrics['precision@20']:.3f} | "
+                      f"mAP20: {batch_metrics['mAP@20']:.3f} | "
+                      f"mAP50: {batch_metrics['mAP@50']:.3f} | "
                       f"Brier: {batch_metrics['brier_score']:.4f}")
                 
                 # MoE metrics if applicable
@@ -2676,7 +2717,6 @@ def evaluate(
     config: BaseConfig,
     device: torch.device,
     use_mixed_precision: bool = False,
-    compute_embeddings: bool = False
 ) -> Dict[str, float]:
     """
     Evaluate model on validation set.
@@ -2761,11 +2801,11 @@ def evaluate(
                 if valid_days <= 0:
                     continue
                 start_idx = actual_len_dy * j
-                end_idx = start_idx + dt_cnt[j]
-                valid_output = output[start_idx:end_idx]
+                end_idx = start_idx + valid_days
+                valid_output = output_flat[start_idx:end_idx]
                 
-                y_start = actual_len_dy * j
-                y_end = y_start + dt_cnt[j]
+                y_start = config.len_dy * j
+                y_end = y_start + valid_days
                 valid_y = y_flat[y_start:y_end]
                 
                 all_predictions.append(valid_output.cpu())
@@ -2805,20 +2845,6 @@ def evaluate(
         'val_loss': val_loss,
         **top_k_results
     }
-    
-    # ========================================================================
-    # NEW: OPTIONAL EMBEDDING QUALITY CHECK (expensive!)
-    # ========================================================================
-    if compute_embeddings:
-        print("    Computing embedding quality metrics...")
-        emb_metrics = compute_embedding_quality_epoch(
-            model, val_data, config, device, num_samples=200
-        )
-        results.update(emb_metrics)
-        
-        # Log embedding health
-        print(f"    Embedding std: {emb_metrics['embedding_std_mean']:.4f} | "
-              f"NN overlap: {emb_metrics['nn_target_overlap']:.3f}")
     
     return results
 
@@ -2939,7 +2965,7 @@ def create_bucketing_dataloader(
 
 # #### Test
 
-# In[52]:
+# In[33]:
 
 
 def test_prepare_tensor_and_multihot():
@@ -2962,7 +2988,7 @@ def test_prepare_tensor_and_multihot():
 test_prepare_tensor_and_multihot()
 
 
-# In[53]:
+# In[34]:
 
 
 def test_compute_loss_smoke():
@@ -2981,7 +3007,7 @@ def test_compute_loss_smoke():
 test_compute_loss_smoke()
 
 
-# In[85]:
+# In[39]:
 
 
 def test_train_epoch_smoke():
@@ -2993,7 +3019,8 @@ def test_train_epoch_smoke():
 
     train_subset = df_train.head(cfg.batch_size * 2)  # Make sure we have at least one full batch
     train_dataset = ClinicalDataset(train_subset, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, drop_last=True)
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, 
+                              collate_fn=clinical_collate_fn, drop_last=True)
     metrics = train_epoch(
         model=model,
         dataloader=train_loader,
@@ -3011,7 +3038,7 @@ def test_train_epoch_smoke():
 test_train_epoch_smoke()
 
 
-# In[86]:
+# In[53]:
 
 
 def test_evaluate_smoke():
@@ -3028,7 +3055,7 @@ def test_evaluate_smoke():
     # --- NEW: Create Dataset and DataLoader for the test ---
     val_subset = df_val.head(cfg.batch_size)
     val_dataset = ClinicalDataset(val_subset, cfg)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size, collate_fn=clinical_collate_fn)
 
     val_metrics = evaluate(
         model=model,
@@ -3046,7 +3073,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[44]:
+# In[103]:
 
 
 def save_checkpoint(
@@ -3561,7 +3588,7 @@ test_checkpoint_resume_integration()
 
 # ### Evaluation metrics
 
-# In[33]:
+# In[105]:
 
 
 class MetricsLogger:
@@ -3626,18 +3653,38 @@ class MetricsLogger:
     
     def save(self):
         """Save all metrics to JSON files."""
+        def convert_to_serializable(obj):
+            """Recursively convert numpy/torch types to 
+            native Python types for JSON serialization."""
+            if isinstance(obj, dict):
+                return {k: convert_to_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_serializable(item) for item in obj]
+            elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                return int(obj)
+            elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif torch.is_tensor(obj):
+                return obj.item() if obj.numel() == 1 else obj.cpu().tolist()
+            elif isinstance(obj, (np.bool_, bool)):
+                return bool(obj)
+            else:
+                return obj
+
         # Save epoch metrics
         with open(self.log_path / 'epoch_metrics.json', 'w') as f:
-            json.dump(self.epoch_metrics, f, indent=2)
-        
+            json.dump(convert_to_serializable(self.epoch_metrics), f, indent=2)
+
         # Save batch metrics
         with open(self.log_path / 'batch_metrics.json', 'w') as f:
-            json.dump(self.batch_metrics, f, indent=2)
-        
+            json.dump(convert_to_serializable(self.batch_metrics), f, indent=2)
+
         # Save config
         if self.config:
             with open(self.log_path / 'config.json', 'w') as f:
-                json.dump(self.config, f, indent=2)
+                json.dump(convert_to_serializable(self.config), f, indent=2)
     
     def get_summary(self) -> Dict:
         """Get summary statistics."""
@@ -3662,7 +3709,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[64]:
+# In[112]:
 
 
 def compute_batch_metrics_lightweight(
@@ -3679,12 +3726,15 @@ def compute_batch_metrics_lightweight(
     Full comprehensive metrics are computed at epoch end via evaluate().
     
     Why these metrics:
-    1. Recall@10 - Primary clinical utility metric (cheapest to compute)
-    2. mAP@20 - Ranking quality (faster than mAP@50)
-    3. Brier score - Calibration quality (critical for embeddings)
+    1. Recall@5, 10, 20, 50 - Clinical utility at different cutoffs
+    2. Precision@5, 10, 20, 50 - How many predictions are correct
+    3. mAP@20, mAP@50 - Ranking quality
     
     Returns:
-        Dict with 'recall@10', 'mAP@20', 'brier_score'
+        Dict with 'recall@5', 'recall@10', 'recall@20', 'recall@50',
+                    'precision@5', 'precision@10', 'precision@20', 'precision@50',
+                    'mAP@20', 'mAP@50',
+                    'brier_score'
     """
     with torch.no_grad():
         batch_size = len(dt_cnt)
@@ -3706,52 +3756,83 @@ def compute_batch_metrics_lightweight(
             valid_outputs.append(output_flat[start_idx:end_idx])
             
             # For targets: use config.len_dy (y is always padded)
-            y_start = actual_len_dy * j
-            y_end = y_start + valid_days
+            y_start = config.len_dy * j
+            y_end = y_start + valid_days  # use same valid_days as model output
             valid_y.extend(y_flat[y_start:y_end])
         
         if len(valid_outputs) == 0:
-            return {'recall@10': 0.0, 'mAP@20': 0.0, 'brier_score': 0.0}
+            return {
+                'recall@5': 0.0, 'recall@10': 0.0, 'recall@20': 0.0, 'recall@50': 0.0,
+                'precision@5': 0.0, 'precision@10': 0.0, 'precision@20': 0.0, 'precision@50': 0.0,
+                'mAP@20': 0.0, 'mAP@50': 0.0,
+                'brier_score': 0.0
+            }
         
         predictions = torch.cat(valid_outputs)  # [num_valid_samples, vocab_size]
         num_samples = len(predictions)
         
         metrics = {}
-        
-        # 1. Recall@10 (FAST - single topk operation)
-        top_10_preds = torch.topk(predictions, 10, dim=-1).indices
-        correct = 0
-        total = 0
-        
-        for i, target_codes in enumerate(valid_y):
-            true_codes = [c for c in target_codes if c != 0]
-            if len(true_codes) > 0:
-                total += 1
-                if any(code in top_10_preds[i].tolist() for code in true_codes):
-                    correct += 1
-        
-        metrics['recall@10'] = correct / total if total > 0 else 0.0
-        
-        # 2. mAP@20 (FAST - truncated to 20 instead of 50)
-        aps = []
         sorted_indices = torch.argsort(predictions, dim=-1, descending=True)
+        # ============================================================
+        # 1. RECALL @ K (for K=5, 10, 20, 50)
+        # ============================================================
+        # Recall: "Was ANY true code in top-K predictions?"
+        for k in [5, 10, 20, 50]:
+            top_k_preds = sorted_indices[:, :k]
+            correct = 0
+            total = 0
+            
+            for i, target_codes in enumerate(valid_y):
+                true_codes = [c for c in target_codes if c != 0]
+                if len(true_codes) > 0:
+                    total += 1
+                    if any(code in top_k_preds[i].tolist() for code in true_codes):
+                        correct += 1
+            
+            metrics[f'recall@{k}'] = correct / total if total > 0 else 0.0
         
-        for i, target_codes in enumerate(valid_y):
-            true_codes = set([c for c in target_codes if c != 0])
-            if len(true_codes) > 0:
-                hits = 0
-                precisions = []
-                for rank, pred_code in enumerate(sorted_indices[i, :20].tolist(), 1):
-                    if pred_code in true_codes:
-                        hits += 1
-                        precisions.append(hits / rank)
-                
-                if precisions:
-                    aps.append(np.mean(precisions))
+        # ============================================================
+        # 2. PRECISION @ K (for K=5, 10, 20, 50)
+        # ============================================================
+        # Precision: "Of top-K predictions, how many were correct?"
+        for k in [5, 10, 20, 50]:
+            top_k_preds = sorted_indices[:, :k]
+            precisions = []
+            
+            for i, target_codes in enumerate(valid_y):
+                true_codes = set([c for c in target_codes if c != 0])
+                if len(true_codes) > 0:
+                    pred_codes = top_k_preds[i].tolist()
+                    hits = sum(1 for code in pred_codes if code in true_codes)
+                    precisions.append(hits / k)
+            
+            metrics[f'precision@{k}'] = np.mean(precisions) if precisions else 0.0
         
-        metrics['mAP@20'] = np.mean(aps) if aps else 0.0
+        # ============================================================
+        # 3. mAP @ K (for K=20, 50)
+        # ============================================================
+        # Mean Average Precision: Average of precision at each relevant item
+        for k in [20, 50]:
+            aps = []
+            
+            for i, target_codes in enumerate(valid_y):
+                true_codes = set([c for c in target_codes if c != 0])
+                if len(true_codes) > 0:
+                    hits = 0
+                    precisions_at_k = []
+                    for rank, pred_code in enumerate(sorted_indices[i, :k].tolist(), 1):
+                        if pred_code in true_codes:
+                            hits += 1
+                            precisions_at_k.append(hits / rank)
+                    
+                    if precisions_at_k:
+                        aps.append(np.mean(precisions_at_k))
+            
+            metrics[f'mAP@{k}'] = np.mean(aps) if aps else 0.0
         
-        # 3. Brier Score (FAST - calibration quality)
+        # ============================================================
+        # 4. BRIER SCORE (calibration quality)
+        # ============================================================
         probs = torch.sigmoid(predictions)
         targets_binary = torch.zeros_like(predictions)
         
@@ -3771,7 +3852,8 @@ def compute_embedding_quality_epoch(
     val_data: pd.DataFrame,
     config: BaseConfig,
     device: torch.device,
-    num_samples: int = 200
+    num_samples: int = 200,
+    use_mixed_precision: bool = False
 ) -> Dict[str, float]:
     """
     Evaluate embedding quality at epoch end.
@@ -3796,16 +3878,33 @@ def compute_embedding_quality_epoch(
     # Sample validation data
     sample_size = min(num_samples, len(val_data))
     val_sample = val_data.sample(sample_size, random_state=42)
-    
+    val_dataset = ClinicalDataset(val_sample, config)
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=config.batch_size, 
+        shuffle=False,
+        collate_fn=clinical_collate_fn
+    )    
     all_embeddings = []
     all_targets = []
     
     with torch.no_grad():
-        nbatch = len(val_sample) // config.batch_size
         
-        for i in range(nbatch):
-            batch = val_sample.iloc[i*config.batch_size:(i+1)*config.batch_size]
-            dt_cnt, x, y = prepare_tensor(batch, config, device)
+        for batch in val_loader:  # ← Use DataLoader instead of manual iteration
+            age = batch['age'].to(device)
+            gender = batch['gender'].to(device)
+            codes = batch['codes'].to(device)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            
+            x = torch.cat([
+                age.unsqueeze(-1),
+                gender.unsqueeze(-1),
+                codes
+            ], dim=-1)
+            
+            # Get ACTUAL batch size (might be smaller in last batch)
+            batch_size_actual = x.shape[0]
             
             # Extract embeddings (last temporal layer output, before classifier)
             # Works for all model types
@@ -3822,7 +3921,7 @@ def compute_embedding_quality_epoch(
                 cd = model.transformer_encoder_cd(cd)
                 cd = cd.permute(1, 2, 0)
                 cd = nn.MaxPool1d(config.len_cd)(cd)
-                cd = cd.reshape(config.batch_size, config.len_dy, config.embedding_size)
+                cd = cd.reshape(batch_size_actual, config.len_dy, config.embedding_size)
                 
                 # Combine
                 cd = cd_res + cd + gender_cd + age_in_months
@@ -3839,7 +3938,8 @@ def compute_embedding_quality_epoch(
                 # For Flash/MoE models - just get output before decoder
                 # Run full forward then extract
                 if use_mixed_precision:
-                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                    dtype = getattr(config, 'dtype', torch.float16)
+                    with torch.cuda.amp.autocast(dtype=dtype):
                         if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
                             output_full, _ = model(x, return_moe_losses=False)
                         else:
@@ -3960,7 +4060,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[63]:
+# In[107]:
 
 
 """
@@ -4854,14 +4954,15 @@ def comprehensive_evaluation(
     print("="*80)
     
     model.eval()
+
+    
     all_predictions = []
     all_targets = []
     all_targets_multihot = []
     
     criterion = nn.BCEWithLogitsLoss()
-    val_dataset = ClinicalDataset(val_data, config)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
-    nbatch = len(val_loader)
+
+    nbatch = len(val_dataloader)
     if nbatch == 0:
         print(" Validation set too small, skipping detailed metrics")
         return {
@@ -4870,9 +4971,8 @@ def comprehensive_evaluation(
             'resources': {},
         }     
     with torch.no_grad():
-        nbatch = len(val_data) // config.batch_size
         
-        for batch in val_loader:  # Iterate over DataLoader
+        for batch in val_dataloader:  # ← Iterate over DataLoader
             age = batch['age'].to(device)
             gender = batch['gender'].to(device)
             codes = batch['codes'].to(device)
@@ -4915,7 +5015,7 @@ def comprehensive_evaluation(
                 output_end = output_start + valid_days
                 valid_output = output_flat[output_start:output_end]
                 
-                y_start = actual_len_dy * j
+                y_start = config.len_dy * j
                 y_end = y_start + valid_days
                 valid_y = y_flat[y_start:y_end]
                 
@@ -5000,7 +5100,7 @@ def comprehensive_evaluation(
     return evaluation
 
 
-# In[31]:
+# In[58]:
 
 
 def test_metric_utilities():
@@ -5021,7 +5121,7 @@ def test_metric_utilities():
 test_metric_utilities()
 
 
-# In[92]:
+# In[64]:
 
 
 def test_comprehensive_evaluation_dense():
@@ -5029,18 +5129,25 @@ def test_comprehensive_evaluation_dense():
     model = BaselineTransformer(cfg).to(device)
     criterion = nn.BCEWithLogitsLoss()
 
-    train_subset = df_train.head(cfg.batch_size)
+    train_subset = df_train.head(cfg.batch_size*2)
     val_subset = df_val.head(cfg.batch_size)
     epoch_history = [{'val_loss': 1.0, 'top_10_acc': 0.1}]
     code_freq = np.ones(cfg.target_cd_cnt, dtype=np.int32)
+
+    # Create DataLoader for validation
+    val_dataset = ClinicalDataset(val_subset, cfg)
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=cfg.batch_size,
+        collate_fn=clinical_collate_fn
+    )
 
     previous = globals().get('config')
     globals()['config'] = cfg  # required by compute_training_time_metrics
 
     evaluation = comprehensive_evaluation(
         model=model,
-        train_data=train_subset,
-        val_data=val_subset,
+        val_dataloader=val_loader,  # ← Pass DataLoader instead of DataFrame
         config=cfg,
         device=device,
         training_time_sec=1.0,
@@ -5063,7 +5170,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Run experimentation
 
-# In[91]:
+# In[90]:
 
 
 def compute_code_frequencies(
@@ -5098,7 +5205,7 @@ def compute_code_frequencies(
     # Create a small dataset for sampling
     sample_data = train_data.head(nbatch * config.batch_size)
     sample_dataset = ClinicalDataset(sample_data, config)
-    sample_loader = DataLoader(sample_dataset, batch_size=config.batch_size, shuffle=False)
+    sample_loader = DataLoader(sample_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=clinical_collate_fn)
     
     for batch in sample_loader:  # ✅ Iterate over DataLoader
         y = batch['target']
@@ -5125,7 +5232,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[81]:
+# In[113]:
 
 
 def run_single_experiment(
@@ -5279,7 +5386,8 @@ def run_single_experiment(
             train_dataset,
             batch_sampler=train_batch_sampler,
             num_workers=max(1, os.cpu_count() // 2),
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=clinical_collate_fn
         )
     else: # For the baseline, we use a standard DataLoader
         logger.info("Using standard DataLoader (no bucketing).")
@@ -5289,14 +5397,16 @@ def run_single_experiment(
             shuffle=True,
             num_workers=max(1, os.cpu_count() // 2),
             pin_memory=True,
-            drop_last=True
+            drop_last=True,
+            collate_fn=clinical_collate_fn
         )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
         shuffle=False, # No need to bucket or shuffle validation data
         num_workers=max(1, os.cpu_count() // 2),
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=clinical_collate_fn
     )
     logger.info(f"Using high-performance DataLoader with {train_loader.num_workers} workers.")
         
@@ -5373,8 +5483,22 @@ def run_single_experiment(
             config=config,
             device=device,
             use_mixed_precision=use_mixed_precision,
-            compute_embeddings=check_embeddings
         )
+
+        if epoch % check_embeddings_every == 0:
+            logger.info("Computing embedding quality...")
+            emb_metrics = compute_embedding_quality_epoch(
+                model, 
+                val_data,  # ← Original DataFrame is available here
+                config, 
+                device, 
+                num_samples=200,
+                use_mixed_precision=use_mixed_precision 
+            )
+            val_metrics.update(emb_metrics)  # Add to val_metrics
+
+            logger.info(f"    Embedding std: {emb_metrics['embedding_std_mean']:.4f}")
+            logger.info(f"    NN overlap: {emb_metrics['nn_target_overlap']:.3f}")
         
         # Combine metrics
         epoch_metrics = {
@@ -5383,7 +5507,8 @@ def run_single_experiment(
             **val_metrics
         }
         epoch_history.append(epoch_metrics)
-
+        
+        
         # ====================================================================
         # SAVE TRAINING CHECKPOINTS
         # ====================================================================        
@@ -5403,7 +5528,7 @@ def run_single_experiment(
             is_best=is_best
         )
         logger.info(f"Checkpoint saved (epoch {epoch+1}, step {global_step})")
-        
+
         # ====================================================================
         # LOG EPOCH METRICS
         # ====================================================================
@@ -5435,7 +5560,6 @@ def run_single_experiment(
     evaluation = comprehensive_evaluation(
         model=model,
         val_dataloader=val_loader,
-        val_data=val_data,
         config=config,
         device=device,
         training_time_sec=total_time,
@@ -5460,7 +5584,10 @@ def run_single_experiment(
         'final_top_10_acc': final_metrics['top_10_acc'],
         'final_top_5_acc': final_metrics['top_5_acc'],
         'training_time_sec': total_time,
+        'precision@10': evaluation['performance']['precision@10'],
         'recall@10': evaluation['performance']['recall@10'],
+        'f1@10': evaluation['performance']['f1@10'],
+        'balanced_top10_acc': evaluation['performance']['balanced_top10_acc'],
         'tail_top10_acc': evaluation['performance']['tail_top10_acc'],
         'cost_usd': evaluation['resources']['cost_usd'],
         'peak_memory_gb': evaluation['resources']['total_peak_gb'],
@@ -5606,7 +5733,7 @@ def run_all_experiments(
 
 # ### Memory management
 
-# In[43]:
+# In[67]:
 
 
 import torch
@@ -6413,7 +6540,7 @@ def test_learned_pooling_trains_properly():
     # Use REAL data (has actual patterns)
     train_real = df_train.head(64)  # 8 batches with real medical codes
     train_dataset = ClinicalDataset(train_real, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=False)    
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=False, collate_fn=clinical_collate_fn)    
     print(f"  Training on {len(train_real)} real patient records...")
     
     # Get initial attention entropy
@@ -6594,7 +6721,7 @@ test_moe_expert_routing_correctness()
 
 # #### Model integration pipeline
 
-# In[61]:
+# In[ ]:
 
 
 def test_model_forward_backward_integration():
@@ -6771,7 +6898,7 @@ test_loss_computation_correctness()
 
 # #### Training loop
 
-# In[88]:
+# In[ ]:
 
 
 # ============================================================================
@@ -6799,7 +6926,7 @@ def test_train_epoch_full_integration():
     # Use small subset for speed
     train_subset = df_train.head(64) # 4 batches
     train_dataset = ClinicalDataset(train_subset, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=False, collate_fn=clinical_collate_fn)
     
     models_to_test = [
         ("Baseline", BaselineTransformer(cfg).to(device), False, False, None),
@@ -6940,8 +7067,8 @@ def test_bucketing_effectiveness():
     
     cfg = BaseConfig(
         batch_size=16, 
-        len_dy=200,  # ← CHANGED from 32 to 200 (match real data max)
-        len_cd=80,   # ← CHANGED from 40 to 80 (match real data max)
+        len_dy=200, 
+        len_cd=80,  
         learning_rate=1e-3
     )
     train_subset = df_train.head(256)  # 16 batches
@@ -7177,7 +7304,7 @@ def test_train_epoch_learning_happens():
     # Small dataset for overfitting test
     train_tiny = df_train.head(32)  # 4 batches
     train_dataset = ClinicalDataset(train_tiny, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size)
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, collate_fn=clinical_collate_fn)
     
     optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
     criterion = nn.BCEWithLogitsLoss()
@@ -7213,7 +7340,7 @@ test_train_epoch_learning_happens()
 
 # #### End to end experimentation tests
 
-# In[66]:
+# In[108]:
 
 
 def test_single_experiment_end_to_end():
@@ -7235,8 +7362,8 @@ def test_single_experiment_end_to_end():
     cleanup_gpu_memory_hard()
     
     # Small dataset for fast test
-    train_tiny = df_train.head(10000)
-    val_tiny = df_val.head(1000)
+    train_tiny = df_train.head(100)
+    val_tiny = df_val.head(10)
     
     print("  Running exp1_dense_baseline (1 epoch, 64 samples)...")
     
@@ -7306,8 +7433,8 @@ def test_multi_experiment_comparison():
     cleanup_gpu_memory_hard()
     
     # Minimal dataset
-    train_tiny = df_train.head(12000)
-    val_tiny = df_val.head(1200)
+    train_tiny = df_train.head(120)
+    val_tiny = df_val.head(12)
     
     # Run 3 experiments
     exp_names = [# 'exp1_dense_baseline', 
@@ -7357,8 +7484,8 @@ def test_multi_experiment_comparison():
     
     print("\n✅ TEST 13 PASSED: Multi-experiment framework works\n")
     
-test_single_experiment_end_to_end()
-# test_multi_experiment_comparison()
+# test_single_experiment_end_to_end()
+test_multi_experiment_comparison()
 
 
 # ##### Follow up tests
@@ -7880,16 +8007,41 @@ exp1_results_df = run_single_experiment(
 )
 
 
-# In[ ]:
+# In[120]:
 
 
+# Clean up GPU memory everytime before running the test
+cleanup_gpu_memory_hard()
+
+# Minimal dataset
+train_tiny = df_train.sample(128000)
+val_tiny = df_val.sample(12800)
+
+# Run 3 experiments
+exp_names = ['exp1_dense_baseline', 
+             'exp2_dense_flash',
+             'exp2b_flash_learned_pool'
+             'exp3_standard_moe',
+             'exp3b_moe_learned_pool'
+             'exp4_shared_expert',
+             # 'exp5_fine_grained'
+            ]
+
+print(f"  Running {len(exp_names)} experiments (1 epoch each, 32 samples)...")
+
+results_df = run_selected_experiments(
+    experiment_names=exp_names,
+    train_data=train_tiny,
+    val_data=val_tiny,
+    device=device,
+    epochs=1
+)
 
 
-
-# In[ ]:
-
+# In[124]:
 
 
+results_df.iloc[:-3, :].to_json()
 
 
 # In[ ]:
