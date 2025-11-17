@@ -26,8 +26,11 @@ Experiment Overview:
         - Mixed precision: FP16 (use_mixed_precision=True)
         - Daily encoder: Flash Attention
 - Exp 3: Standard Top-K MoE (8 experts, top-2)
+        - Similar to Exp2
 - Exp 4: Shared Expert MoE (1 shared + 7 routed)
+        - Similar to Exp2
 - Exp 5: Fine-Grained MoE (1 shared + 15 routed, smaller experts)
+        - Similar to Exp2
 - Exp 6: Auxiliary-Free MoE (DeepSeek bias-based load balancing)
     - Model: FlashMoETransformer
         - Head config: nhead=8, head_dim=32
@@ -108,7 +111,7 @@ Date: 2025-10-24
 import pandas as pd
 
 
-# In[1]:
+# In[2]:
 
 
 import pandas as pd
@@ -117,7 +120,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[2]:
+# In[21]:
 
 
 """
@@ -146,6 +149,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List, Any
 from collections import Counter
 import time
+from datetime import datetime
 import math
 import gc
 from google.cloud import storage
@@ -162,7 +166,7 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[3]:
+# In[38]:
 
 
 # ============================================================================
@@ -229,7 +233,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[4]:
+# In[39]:
 
 
 @dataclass
@@ -308,7 +312,7 @@ class MoEConfig:
     # Model dimensions
     d_model: int = 256
     d_ff: int = 512
-    
+
     # Expert configuration
     num_experts: int = 8
     num_shared_experts: int = 0
@@ -324,10 +328,12 @@ class MoEConfig:
     # Optional
     z_loss_weight: float = 0.0
     use_moe_from_layer: int = 2  # Start MoE from layer 2
+    use_swiglu_experts: bool = False
 
 
 
-# In[5]:
+
+# In[40]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -380,13 +386,12 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             load_balance_strategy='switch',
             aux_loss_weight=0.01,
             expert_dropout=0.05,
-            use_moe_from_layer=2
+            use_moe_from_layer=2,
+            use_swiglu_experts = False
         ),
         False  # Flash Attention + Max-Pool (baseline)
     )
-    
-    # Exp 3b: Standard MoE with learned pooling
-    configs['exp3b_moe_learned_pool'] = (
+    configs['exp3a_moe_swiglu'] = (
         MoEConfig(
             d_model=256,
             d_ff=512,
@@ -396,10 +401,61 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             load_balance_strategy='switch',
             aux_loss_weight=0.01,
             expert_dropout=0.05,
-            use_moe_from_layer=2
-        ),
-        True  # Learned Attention Pooling (test with MoE)
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),   
+        False  # Flash Attention + Max-Pool (Baseline GELU vs. Swiglu)
     )
+    # Exp 3b: Standard MoE with learned pooling and Swiglu
+    configs['exp3b_moe_swiglu_learned_pool'] = (
+        MoEConfig(
+            d_model=256,
+            d_ff=512,
+            num_experts=8,
+            num_shared_experts=0,
+            top_k=2,
+            load_balance_strategy='switch',
+            aux_loss_weight=0.01,
+            expert_dropout=0.05,
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),
+        True  # Learned Attention Pooling (test with standard MoE)
+    )
+    # Exp 3c: Standard MoE with learned pooling and Swiglu but set MOE from the 4th layer, not the 2nd
+    # Reason being that the first 0-3 layers may still learning new stuff and the last two layers are 
+    # Starting to pick up specialized knowledge
+    configs['exp3c_moe_swiglu_learned_pool_layer4'] = (
+        MoEConfig(
+            d_model=256,
+            d_ff=512,
+            num_experts=8,
+            num_shared_experts=0,
+            top_k=2,
+            load_balance_strategy='switch',
+            aux_loss_weight=0.01,
+            expert_dropout=0.05,
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),
+        True  # Learned Attention Pooling (test with standard MoE)
+    )    
+    # Exp 3d: lower the aux_loss to 0.001 not 0.01 to reduce the impact of the auxilary loss 
+    configs['exp3d_moe_swiglu_learned_pool_layer4_aux001'] = (
+        MoEConfig(
+            d_model=256,
+            d_ff=512,
+            num_experts=8,
+            num_shared_experts=0,
+            top_k=2,
+            load_balance_strategy='switch',
+            aux_loss_weight=0.001,
+            expert_dropout=0.05,
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),
+        True  # Learned Attention Pooling (test with standard MoE)
+    )  
     
     # Exp 4: Shared Expert MoE (with learned pooling)
     configs['exp4_shared_expert'] = (
@@ -412,7 +468,8 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             load_balance_strategy='switch',
             aux_loss_weight=0.01,
             expert_dropout=0.05,
-            use_moe_from_layer=2
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
         ),
         True  # Use learned pooling (recommended for MoE)
     )
@@ -428,7 +485,8 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             load_balance_strategy='switch',
             aux_loss_weight=0.01,
             expert_dropout=0.05,
-            use_moe_from_layer=2
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
         ),
         True  # Use learned pooling
     )
@@ -446,7 +504,8 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             bias_lr=1e-5,
             bias_momentum=0.9,
             expert_dropout=0.05,
-            use_moe_from_layer=2
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
         ),
         True  # Use learned pooling
     )
@@ -456,7 +515,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### RPE and Swiglu
 
-# In[6]:
+# In[9]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -579,7 +638,7 @@ class SwiGLU(nn.Module):
         return output
 
 
-# In[7]:
+# In[8]:
 
 
 def test_rotary_position_embedding():
@@ -596,7 +655,7 @@ def test_rotary_position_embedding():
 test_rotary_position_embedding()
 
 
-# In[8]:
+# In[9]:
 
 
 def test_swiglu_forward():
@@ -612,7 +671,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[9]:
+# In[10]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -851,7 +910,7 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
-# In[10]:
+# In[11]:
 
 
 def test_flash_attention_layer_fallback():
@@ -876,7 +935,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[11]:
+# In[12]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -959,7 +1018,7 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
-# In[12]:
+# In[13]:
 
 
 def test_learned_attention_pooling():
@@ -1166,7 +1225,7 @@ class MoELayer(nn.Module):
                 config.d_model,
                 config.d_ff,
                 config.expert_dropout,
-                use_swiglu=False  # Can be configured
+                use_swiglu=config.use_swiglu_experts
             )
             for _ in range(self.num_routed_experts)
         ])
@@ -1178,7 +1237,7 @@ class MoELayer(nn.Module):
                     config.d_model,
                     config.d_ff,
                     config.expert_dropout,
-                    use_swiglu=False
+                    use_swiglu=config.use_swiglu_experts
                 )
                 for _ in range(self.num_shared_experts)
             ])
@@ -1308,7 +1367,7 @@ class MoELayer(nn.Module):
         return output, losses
 
 
-# In[14]:
+# In[15]:
 
 
 def test_switch_auxiliary_loss():
@@ -1323,7 +1382,7 @@ def test_switch_auxiliary_loss():
 test_switch_auxiliary_loss()
 
 
-# In[15]:
+# In[16]:
 
 
 def test_deepseek_bias_correction():
@@ -1338,7 +1397,7 @@ def test_deepseek_bias_correction():
 test_deepseek_bias_correction()
 
 
-# In[16]:
+# In[17]:
 
 
 def test_expert_layer_forward():
@@ -1351,7 +1410,7 @@ def test_expert_layer_forward():
 test_expert_layer_forward()
 
 
-# In[17]:
+# In[18]:
 
 
 def test_moe_layer_forward():
@@ -1381,7 +1440,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[24]:
+# In[14]:
 
 
 # ============================================================================
@@ -1559,7 +1618,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[25]:
+# In[15]:
 
 
 # ============================================================================
@@ -1778,7 +1837,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[26]:
+# In[16]:
 
 
 # ============================================================================
@@ -2084,7 +2143,7 @@ test_flash_moe_transformer_forward()
 
 # #### Preprocess data with data loader
 
-# In[29]:
+# In[24]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2141,7 +2200,7 @@ class ClinicalDataset(Dataset):
         }
 
 
-# In[30]:
+# In[25]:
 
 
 def clinical_collate_fn(batch):
@@ -2178,7 +2237,7 @@ def clinical_collate_fn(batch):
 
 # #### Data preparation
 
-# In[31]:
+# In[26]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2404,7 +2463,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function
 
-# In[51]:
+# In[27]:
 
 
 def compute_loss(
@@ -2472,9 +2531,529 @@ def compute_loss(
     return loss
 
 
+# ##### Test
+
+# In[133]:
+
+
+def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, config, device):
+    """
+    CORRECTED VERSION: Tests loss in training mode vs eval mode.
+    This diagnoses the ACTUAL discrepancy you're seeing.
+    """
+    import numpy as np
+    
+    print("="*80)
+    print("LOSS DISCREPANCY DIAGNOSIS V2 (Training vs Eval Mode)")
+    print("="*80)
+    
+    # ============================================================
+    # TEST 1: Training Mode Loss (with dropout)
+    # ============================================================
+    print("\n=== TEST 1: TRAINING MODE (dropout ON) ===")
+    model.train()  # ← KEY: Training mode
+    
+    train_losses_training_mode = []
+    train_predictions_count = []
+    train_dt_cnts = []
+    
+    with torch.no_grad():  # No gradients for speed
+        for i, batch in enumerate(train_loader):
+            if i >= 20:
+                break
+            
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            
+            x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
+            
+            # Forward in TRAINING mode
+            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                output, _ = model(x, return_moe_losses=False)
+            else:
+                output = model(x)
+            
+            # Compute loss
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+            train_losses_training_mode.append(loss.item())
+            
+            # Count predictions
+            batch_size = len(dt_cnt)
+            actual_len_dy = output.shape[1]
+            num_valid_days = sum(min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size))
+            train_predictions_count.append(num_valid_days * config.target_cd_cnt)
+            train_dt_cnts.extend([min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size)])
+    
+    train_loss_training = np.mean(train_losses_training_mode)
+    
+    # ============================================================
+    # TEST 2: Eval Mode Loss (dropout OFF)
+    # ============================================================
+    print("=== TEST 2: EVAL MODE (dropout OFF) ===")
+    model.eval()  # ← KEY: Eval mode
+    
+    train_losses_eval_mode = []
+    val_losses_eval_mode = []
+    val_predictions_count = []
+    val_dt_cnts = []
+    
+    with torch.no_grad():
+        # Test on SAME training batches in eval mode
+        for i, batch in enumerate(train_loader):
+            if i >= 20:
+                break
+            
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            
+            x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
+            
+            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                output, _ = model(x, return_moe_losses=False)
+            else:
+                output = model(x)
+            
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+            train_losses_eval_mode.append(loss.item())
+        
+        # Test on validation batches
+        for i, batch in enumerate(val_loader):
+            if i >= 20:
+                break
+            
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            
+            x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
+            
+            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                output, _ = model(x, return_moe_losses=False)
+            else:
+                output = model(x)
+            
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+            val_losses_eval_mode.append(loss.item())
+            
+            # Count predictions
+            batch_size = len(dt_cnt)
+            actual_len_dy = output.shape[1]
+            num_valid_days = sum(min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size))
+            val_predictions_count.append(num_valid_days * config.target_cd_cnt)
+            val_dt_cnts.extend([min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size)])
+    
+    train_loss_eval = np.mean(train_losses_eval_mode)
+    val_loss_eval = np.mean(val_losses_eval_mode)
+    
+    # ============================================================
+    # SUMMARY
+    # ============================================================
+    print("\n" + "="*80)
+    print("SUMMARY: Training Mode vs Eval Mode")
+    print("="*80)
+    
+    print(f"\n📊 SAME DATA, DIFFERENT MODE:")
+    print(f"  Train data (train mode): {train_loss_training:.6f}")
+    print(f"  Train data (eval mode):  {train_loss_eval:.6f}")
+    print(f"  Difference: {abs(train_loss_training - train_loss_eval):.6f}")
+    
+    print(f"\n📊 EVAL MODE (standard validation):")
+    print(f"  Train data: {train_loss_eval:.6f}")
+    print(f"  Val data:   {val_loss_eval:.6f}")
+    print(f"  Ratio:      {train_loss_eval / val_loss_eval:.2f}x")
+    
+    print(f"\n📈 PREDICTION STATISTICS:")
+    print(f"  Train avg predictions/batch: {np.mean(train_predictions_count):,.0f}")
+    print(f"  Val avg predictions/batch:   {np.mean(val_predictions_count):,.0f}")
+    print(f"  Ratio: {np.mean(train_predictions_count) / np.mean(val_predictions_count):.2f}x")
+    
+    print(f"\n📏 SEQUENCE LENGTH COMPARISON:")
+    print(f"  Train dt_cnt: mean={np.mean(train_dt_cnts):.1f}, min={min(train_dt_cnts)}, max={max(train_dt_cnts)}")
+    print(f"  Val dt_cnt:   mean={np.mean(val_dt_cnts):.1f}, min={min(val_dt_cnts)}, max={max(val_dt_cnts)}")
+    
+    # ============================================================
+    # CRITICAL DIAGNOSTIC
+    # ============================================================
+    print("\n" + "="*80)
+    print("🔍 ROOT CAUSE ANALYSIS")
+    print("="*80)
+    
+    if abs(train_loss_training - train_loss_eval) > 0.01:
+        print("  🔴 ISSUE FOUND: Training mode produces different loss than eval mode")
+        print("     Likely cause: Dropout or BatchNorm affecting loss calculation")
+        print(f"     Difference: {train_loss_training - train_loss_eval:.6f}")
+    else:
+        print("  ✅ Training mode and eval mode produce same loss")
+    
+    if abs(train_loss_eval / val_loss_eval - 1.0) > 0.1:
+        print(f"  🔴 ISSUE FOUND: Train and val data have different loss characteristics")
+        print(f"     Ratio: {train_loss_eval / val_loss_eval:.2f}x")
+        print("     Likely cause: Different data distributions or sample characteristics")
+    else:
+        print("  ✅ Train and val data have similar loss (calculation is consistent)")
+    
+    print("\n" + "="*80)
+    print("🎯 NEXT STEPS")
+    print("="*80)
+    print("\nSince untrained losses are similar (0.789), but trained losses differ (0.060 vs 0.0056),")
+    print("the issue is NOT in loss calculation. Instead, check:")
+    print("\n1. Are you reporting the CORRECT metrics?")
+    print("   - Check where 'train_loss' comes from in your results")
+    print("   - Check where 'val_loss' comes from")
+    print("\n2. Are train_loss and val_loss computed on different data?")
+    print("   - train_loss might be from BATCH metrics, not EPOCH metrics")
+    print("   - val_loss might be from full validation set")
+    
+    return {
+        'train_loss_training_mode': train_loss_training,
+        'train_loss_eval_mode': train_loss_eval,
+        'val_loss_eval_mode': val_loss_eval
+    }
+
+
+# In[135]:
+
+
+config = BaseConfig()
+model = BaselineTransformer(config).to(device)
+criterion = nn.BCEWithLogitsLoss()
+
+# Create datasets and loaders
+train_data = df_train.sample(3200)
+val_data = df_val.sample(320)
+train_dataset = ClinicalDataset(train_data, config)
+val_dataset = ClinicalDataset(val_data, config)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=config.batch_size,
+    shuffle=False,  # Don't shuffle for consistent testing
+    num_workers=0,  # Set to 0 for debugging
+    collate_fn=clinical_collate_fn
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=config.batch_size,
+    shuffle=False,
+    num_workers=0,
+    collate_fn=clinical_collate_fn
+)
+
+# Run diagnosis
+diagnose_loss_discrepancy_v2(
+    train_loader=train_loader,
+    val_loader=val_loader,
+    model=model,
+    criterion=criterion,
+    config=config,
+    device=device
+)
+
+
+# In[136]:
+
+
+def diagnose_with_trained_checkpoint():
+    """
+    Test using the ACTUAL trained model from your experiment.
+    This will show if the 10x discrepancy is real or a reporting bug.
+    """
+    import torch
+    import torch.nn as nn
+    import numpy as np
+    from torch.utils.data import DataLoader
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Load your TRAINED model
+    checkpoint_path = 'logs/exp1_dense_baseline/checkpoints/checkpoint_epoch0.pt'
+    
+    config = BaseConfig()
+    model = BaselineTransformer(config).to(device)
+    
+    # Load trained weights
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    print(f"✅ Loaded trained model from epoch {checkpoint['epoch']}")
+    print(f"   Checkpoint metrics: {checkpoint['metrics'][-1] if checkpoint['metrics'] else 'None'}")
+    
+    # Create loaders
+    train_subset = df_train.head(320)
+    val_subset = df_val.head(320)
+    
+    train_dataset = ClinicalDataset(train_subset, config)
+    val_dataset = ClinicalDataset(val_subset, config)
+    
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=False, 
+                              collate_fn=clinical_collate_fn, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False,
+                            collate_fn=clinical_collate_fn, num_workers=0)
+    
+    criterion = nn.BCEWithLogitsLoss()
+    
+    # ============================================================
+    # TEST: Compute losses exactly as train_epoch and evaluate do
+    # ============================================================
+    print("\n" + "="*80)
+    print("TESTING TRAINED MODEL")
+    print("="*80)
+    
+    # Training data in TRAINING mode (replicates train_epoch)
+    print("\n=== TRAIN DATA, TRAIN MODE (dropout ON) ===")
+    model.train()
+    total_pred_loss = 0.0
+    nbatch = 0
+    
+    with torch.no_grad():
+        for batch in train_loader:
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
+            
+            output = model(x)
+            pred_loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+            total_pred_loss += pred_loss.item()
+            nbatch += 1
+    
+    train_loss_train_mode = total_pred_loss / nbatch
+    print(f"  Loss: {train_loss_train_mode:.6f}")
+    
+    # Validation data in EVAL mode (replicates evaluate)
+    print("\n=== VAL DATA, EVAL MODE (dropout OFF) ===")
+    model.eval()
+    total_loss = 0.0
+    nbatch = len(val_loader)
+    
+    with torch.no_grad():
+        for batch in val_loader:
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
+            
+            output = model(x)
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+            total_loss += loss.item()
+    
+    val_loss_eval_mode = total_loss / nbatch
+    print(f"  Loss: {val_loss_eval_mode:.6f}")
+    
+    # Also test train data in EVAL mode for comparison
+    print("\n=== TRAIN DATA, EVAL MODE (dropout OFF) ===")
+    model.eval()
+    total_loss_train_eval = 0.0
+    nbatch_train = len(train_loader)
+    
+    with torch.no_grad():
+        for batch in train_loader:
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            dt_cnt = batch['dt_cnt']
+            y = batch['target']
+            x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
+            
+            output = model(x)
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+            total_loss_train_eval += loss.item()
+    
+    train_loss_eval_mode = total_loss_train_eval / nbatch_train
+    print(f"  Loss: {train_loss_eval_mode:.6f}")
+    
+    # ============================================================
+    # ANALYSIS
+    # ============================================================
+    print("\n" + "="*80)
+    print("🔍 ANALYSIS OF TRAINED MODEL")
+    print("="*80)
+    
+    print(f"\nExpected from your results:")
+    print(f"  Train loss: 0.0599")
+    print(f"  Val loss:   0.0056")
+    print(f"  Ratio:      10.7x")
+    
+    print(f"\nActual from trained checkpoint:")
+    print(f"  Train loss (train mode): {train_loss_train_mode:.6f}")
+    print(f"  Train loss (eval mode):  {train_loss_eval_mode:.6f}")
+    print(f"  Val loss (eval mode):    {val_loss_eval_mode:.6f}")
+    print(f"  Ratio (train mode):      {train_loss_train_mode / val_loss_eval_mode:.2f}x")
+    print(f"  Ratio (eval mode):       {train_loss_eval_mode / val_loss_eval_mode:.2f}x")
+    
+    print(f"\n🔍 DIAGNOSIS:")
+    if abs(train_loss_train_mode - 0.0599) < 0.01:
+        print("  ✅ Train loss matches reported (0.0599)")
+    else:
+        print(f"  ⚠️  Train loss DOES NOT match reported")
+        print(f"      Expected: 0.0599, Got: {train_loss_train_mode:.6f}")
+        print(f"      Difference: {abs(train_loss_train_mode - 0.0599):.6f}")
+    
+    if abs(val_loss_eval_mode - 0.0056) < 0.01:
+        print("  ✅ Val loss matches reported (0.0056)")
+    else:
+        print(f"  ⚠️  Val loss DOES NOT match reported")
+        print(f"      Expected: 0.0056, Got: {val_loss_eval_mode:.6f}")
+        print(f"      Difference: {abs(val_loss_eval_mode - 0.0056):.6f}")
+    
+    if train_loss_train_mode / val_loss_eval_mode > 5.0:
+        print("\n🔴 10x DISCREPANCY CONFIRMED on trained model!")
+        print("   This is a REAL issue, not a calculation bug.")
+    elif abs(train_loss_train_mode - val_loss_eval_mode) < 0.01:
+        print("\n✅ No discrepancy found with trained model")
+        print("   The reported metrics might be from a different source!")
+    
+    return {
+        'train_loss_train_mode': train_loss_train_mode,
+        'train_loss_eval_mode': train_loss_eval_mode,
+        'val_loss_eval_mode': val_loss_eval_mode
+    }
+
+# RUN THIS:
+results = diagnose_with_trained_checkpoint()
+
+
+# #### Loss logger
+
+# In[28]:
+
+
+class LossTracker:
+    """
+    Track training loss trajectory for learning curve analysis.
+    
+    Similar to HuggingFace TrainerState - tracks:
+    1. Per-batch losses (for learning curves)
+    2. Per-epoch statistics (mean, std, min, max)
+    3. Convergence diagnostics
+    
+    Design:
+    - Lightweight: Only stores statistics, not all values
+    - Efficient: Rolling statistics for large epochs
+    - Compatible: Works with existing metrics system
+    """
+    
+    def __init__(self, window_size: int = 100):
+        """
+        Args:
+            window_size: How many recent batches to keep for rolling stats
+        """
+        self.window_size = window_size
+        self.reset_epoch()
+        
+        # Cross-epoch tracking
+        self.epoch_summaries = []  # Summary per epoch
+    
+    def reset_epoch(self):
+        """Reset for new epoch"""
+        self.batch_losses = []        # All batch losses this epoch
+        self.batch_steps = []         # Global step for each batch
+        self.running_sum = 0.0        # For efficient mean calculation
+        self.running_count = 0
+    
+    def log_batch(self, loss: float, step: int):
+        """
+        Log a single batch loss.
+        
+        Args:
+            loss: Loss value from this batch
+            step: Global training step
+        """
+        self.batch_losses.append(loss)
+        self.batch_steps.append(step)
+        self.running_sum += loss
+        self.running_count += 1
+    
+    def get_recent_losses(self, n: int = None) -> List[float]:
+        """Get last N losses (for smoothing)"""
+        if n is None:
+            n = self.window_size
+        return self.batch_losses[-n:] if len(self.batch_losses) >= n else self.batch_losses
+    
+    def get_epoch_summary(self) -> Dict[str, float]:
+        """
+        Get statistical summary of this epoch.
+        
+        Returns comprehensive statistics for monitoring:
+        - Mean, std, min, max
+        - First batch vs last batch (learning delta)
+        - Convergence indicators
+        """
+        if len(self.batch_losses) == 0:
+            return {}
+        
+        losses_array = np.array(self.batch_losses)
+        
+        summary = {
+            'train_loss_mean': float(np.mean(losses_array)),      # Average over epoch
+            'train_loss_std': float(np.std(losses_array)),        # Variance (stability)
+            'train_loss_min': float(np.min(losses_array)),        # Best batch
+            'train_loss_max': float(np.max(losses_array)),        # Worst batch
+            'train_loss_first': float(losses_array[0]),           # Epoch start
+            'train_loss_last': float(losses_array[-1]),           # Epoch end (final model)
+            'train_loss_improvement': float(losses_array[0] - losses_array[-1]),  # Learning delta
+        }
+        
+        # Smoothed loss (last 100 batches)
+        if len(losses_array) >= 100:
+            smoothed = np.convolve(losses_array, np.ones(100)/100, mode='valid')
+            summary['train_loss_smoothed'] = float(smoothed[-1])
+        
+        # Store for cross-epoch analysis
+        self.epoch_summaries.append(summary)
+        
+        return summary
+    
+    def save_trajectory(self, filepath: str):
+        """Save full loss trajectory for plotting"""
+        trajectory = {
+            'steps': self.batch_steps,
+            'losses': self.batch_losses,
+            'epoch_summaries': self.epoch_summaries
+        }
+        
+        import json
+        with open(filepath, 'w') as f:
+            json.dump(trajectory, f, indent=2)
+    
+    def should_stop_early(self, patience: int = 3) -> bool:
+        """
+        Check if training should stop (loss not improving).
+        
+        Args:
+            patience: Number of epochs without improvement
+        
+        Returns:
+            True if should stop early
+        """
+        if len(self.epoch_summaries) < patience + 1:
+            return False
+        
+        # Check if loss increased for 'patience' consecutive epochs
+        recent_means = [s['train_loss_mean'] for s in self.epoch_summaries[-patience-1:]]
+        
+        # If all recent epochs have higher loss than the best, stop
+        best_loss = min(s['train_loss_mean'] for s in self.epoch_summaries)
+        recent_worse = all(loss > best_loss * 1.05 for loss in recent_means[-patience:])
+        
+        return recent_worse
+
+
 # #### Train and evaluation
 
-# In[110]:
+# In[29]:
 
 
 # Training each epoch
@@ -2493,6 +3072,7 @@ def train_epoch(
     use_bucketing: bool = False,
     log_interval: int = 100, 
     global_step: int = 0, 
+    loss_tracker: Optional[LossTracker] = None
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -2515,31 +3095,14 @@ def train_epoch(
     """
     model.train()
     
-    # # ============================================================
-    # # STEP 1: BUILD BATCH LIST
-    # # ============================================================
-    # if use_bucketing:
-    #     # Create bucketed batches (groups similar lengths)
-    #     batch_sampler, nbatch = create_bucketing_dataloader(
-    #         train_data, config.batch_size, shuffle=True
-    #     )
-    #     batch_list = list(batch_sampler)  # List of index arrays
-    #     print(f"  Using bucketing: {nbatch} batches")
-    # else:
-    #     # Create sequential batches with last partial batch to keep the last elements
-    #     nbatch = len(train_data) // config.batch_size
-    #     batch_list = [
-    #         list(range(i * config.batch_size, (i + 1) * config.batch_size))
-    #         for i in range(nbatch)
-    #     ]
-    #     print(f"  Using sequential batching: {nbatch} batches")
-    
     nbatch = len(dataloader)
     total_pred_loss = 0.0
     total_aux_loss = 0.0
     batch_metrics_buffer = []  
     moe_metrics_buffer = []
     
+    if loss_tracker is None:
+        loss_tracker = LossTracker()    
     # ============================================================
     # STEP 2: ITERATE OVER BATCHES (UNIFORM LOGIC)
     # ============================================================
@@ -2631,6 +3194,7 @@ def train_epoch(
         # Track losses
         total_pred_loss += pred_loss.item()
         total_aux_loss += aux_loss.item()
+        loss_tracker.log_batch(pred_loss.item(), global_step)
         
         # ========================================================================
         # STEP 6a: COMPUTE & LOG REAL-TIME METRICS (every log_interval batches)
@@ -2686,8 +3250,10 @@ def train_epoch(
     # ========================================================================
     # AGGREGATE EPOCH METRICS
     # ========================================================================
+    loss_summary = loss_tracker.get_epoch_summary()
     epoch_metrics = {
         'train_loss': total_pred_loss / nbatch,
+        **loss_summary, 
         'aux_loss': total_aux_loss / nbatch
     }
     
@@ -2717,6 +3283,8 @@ def evaluate(
     config: BaseConfig,
     device: torch.device,
     use_mixed_precision: bool = False,
+    max_batches: Optional[int] = None,
+    verbose: bool = False 
 ) -> Dict[str, float]:
     """
     Evaluate model on validation set.
@@ -2726,9 +3294,13 @@ def evaluate(
     2. Top-K accuracy (1, 5, 10, 20)
     3. Mean Reciprocal Rank
     4. Embedding quality (if compute_embeddings=True, this will be expensive)
+    
+    max_batches: If provided, only evaluate first N batches (for train set efficiency)
+    The goal is to have in-parallel training and validation loss
     """
     model.eval()
     nbatch = len(dataloader)
+    batches_to_process = min(nbatch, max_batches) if max_batches else nbatch
     # # Handle small validation sets
     # if len(val_data) < config.batch_size:
     #     # Special case for small validation sets (testing only)
@@ -2743,7 +3315,7 @@ def evaluate(
     #         for i in range(nbatch)
     #     ]
     
-    if nbatch == 0:
+    if batches_to_process == 0:
         # Dataset too small, no evaluation possible
         return {'val_loss': 0.0, 
                 'top_1_acc': 0.0, 
@@ -2757,7 +3329,14 @@ def evaluate(
     all_targets = []
     
     with torch.no_grad():
-        for batch in dataloader:
+        for batch_idx, batch in enumerate(dataloader):
+            
+            # Early exist for simple check model generalizability
+            if batch_idx >= batches_to_process:
+                if verbose:
+                    print(f"    Early exit at batch {batch_idx}/{nbatch} (max_batches={max_batches})")
+                break
+                
             age = batch['age'].to(device, non_blocking=True)
             gender = batch['gender'].to(device, non_blocking=True)
             codes = batch['codes'].to(device, non_blocking=True)
@@ -2811,7 +3390,7 @@ def evaluate(
                 all_predictions.append(valid_output.cpu())
                 all_targets.extend(valid_y)
      
-    val_loss = total_loss / nbatch if nbatch > 0 else 0.0
+    val_loss = total_loss / batches_to_process if batches_to_process > 0 else 0.0
     
     # Compute metrics
     if len(all_predictions) == 0:
@@ -2963,7 +3542,7 @@ def create_bucketing_dataloader(
     return sampler, len(sampler)
 
 
-# #### Test
+# ##### Test
 
 # In[33]:
 
@@ -3073,7 +3652,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[103]:
+# In[30]:
 
 
 def save_checkpoint(
@@ -3588,7 +4167,9 @@ test_checkpoint_resume_integration()
 
 # ### Evaluation metrics
 
-# In[105]:
+# #### Metrics Logger
+
+# In[31]:
 
 
 class MetricsLogger:
@@ -3707,9 +4288,15 @@ class MetricsLogger:
         }
 
 
+# In[145]:
+
+
+
+
+
 # #### Batch-based metrics
 
-# In[112]:
+# In[32]:
 
 
 def compute_batch_metrics_lightweight(
@@ -4060,7 +4647,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[107]:
+# In[33]:
 
 
 """
@@ -5100,7 +5687,9 @@ def comprehensive_evaluation(
     return evaluation
 
 
-# In[58]:
+# #### Test
+
+# In[33]:
 
 
 def test_metric_utilities():
@@ -5121,7 +5710,7 @@ def test_metric_utilities():
 test_metric_utilities()
 
 
-# In[64]:
+# In[34]:
 
 
 def test_comprehensive_evaluation_dense():
@@ -5170,7 +5759,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Run experimentation
 
-# In[90]:
+# In[34]:
 
 
 def compute_code_frequencies(
@@ -5232,7 +5821,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[113]:
+# In[35]:
 
 
 def run_single_experiment(
@@ -5244,7 +5833,8 @@ def run_single_experiment(
     device: torch.device,
     epochs: int = 4,
     code_frequencies: Optional[np.ndarray] = None,
-    log_dir: str = "logs",  # logging directory
+    log_dir: str = "logs",  # base logging directory
+    experiment_round: Optional[str] = None,
     check_embeddings_every: int = 2,  # check embeddings every N epochs
     log_metrics_every: int = 100,
     resume_from: Optional[str] = None,  # ← midpoint path used for resuming training
@@ -5279,15 +5869,26 @@ def run_single_experiment(
         
     # Determine if resume from check point
     is_resume = resume_from is not None
+    # Build hierarchical log directory
+    if experiment_round is not None:
+        effective_log_dir = os.path.join(log_dir, experiment_round)
+    else:
+        # 1. Get the current date and time as a datetime object
+        current_datetime = datetime.now()
+        datetime_string = current_datetime.strftime("%Y-%m-%d_%H-%M-%S")
+        log_folder_ame = f"exp_{datetime_string}"
+        effective_log_dir = os.path.join(log_dir, log_folder_ame)
+
     if checkpoint_dir is None:
-        checkpoint_dir = os.path.join(log_dir, exp_name, 'checkpoints')
+        checkpoint_dir = os.path.join(effective_log_dir, exp_name, 'checkpoints')
     
     # ============================================================
     # SETUP LOGGING
     # ============================================================
     
-    logger = setup_experiment_logging(exp_name, log_dir, resume=is_resume) 
-    metrics_logger = MetricsLogger(exp_name, log_dir, resume=is_resume) 
+    logger = setup_experiment_logging(exp_name, effective_log_dir, resume=is_resume) 
+    metrics_logger = MetricsLogger(exp_name, effective_log_dir, resume=is_resume) 
+    loss_tracker = LossTracker(window_size=100)
     
     if is_resume:
         logger.info(f"🔄 RESUMING {exp_name} training from checkpoint: {resume_from}")
@@ -5452,7 +6053,8 @@ def run_single_experiment(
     
     for epoch in range(start_epoch, epochs):
         logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
-        
+        loss_tracker.reset_epoch()
+        epoch_metrics = {}
         # Train
         train_metrics = train_epoch(
             model=model,
@@ -5468,14 +6070,27 @@ def run_single_experiment(
             epoch=epoch,
             use_bucketing=use_bucketing,
             log_interval=log_metrics_every,
-            global_step=global_step
+            global_step=global_step,
+            loss_tracker=loss_tracker
         )
         
         # Update the global steps
         global_step = train_metrics['global_step'] 
+        # Evaluation on training set to have inparallel training - val loss 
+        logger.info("  Evaluating on training subset...")
+        train_eval_metrics = evaluate(
+            model=model,
+            dataloader=train_loader,
+            criterion=criterion,
+            config=config,
+            device=device,
+            use_mixed_precision=use_mixed_precision,
+            max_batches=100,  # ✅ Only 50 batches for efficiency
+            verbose=False
+        )
         
         # Evaluate
-        check_embeddings = (epoch % check_embeddings_every == 0)
+        logger.info("  Evaluating on validation set...")
         val_metrics = evaluate(
             model=model,
             dataloader=val_loader,
@@ -5503,18 +6118,46 @@ def run_single_experiment(
         # Combine metrics
         epoch_metrics = {
             'epoch': epoch + 1,
-            **train_metrics,
-            **val_metrics
+            # Training trajectory (from tracker)
+            'train_loss': train_metrics['train_loss'],              # Learning average
+            'train_loss_mean': train_metrics['train_loss_mean'],    # Same as above
+            'train_loss_first': train_metrics['train_loss_first'],  # Epoch start
+            'train_loss_last': train_metrics['train_loss_last'],    # Epoch end (≈final)
+            'train_loss_std': train_metrics['train_loss_std'],      # Stability
+            'train_loss_improvement': train_metrics['train_loss_improvement'],  # Learning delta
+            
+            # Final model performance on TRAIN data
+            'eval_in_train_loss_final': train_eval_metrics['val_loss'],     # Comparable to val
+            'eval_in_train_top_1_acc': train_eval_metrics['top_1_acc'],
+            'eval_in_train_top_5_acc': train_eval_metrics['top_5_acc'],
+            'eval_in_train_top_10_acc': train_eval_metrics['top_10_acc'],
+            'eval_in_train_top_20_acc': train_eval_metrics['top_20_acc'],            
+            # Validation (final model)
+            'final_val_loss': val_metrics['val_loss'],
+            'final_val_top_1_acc': val_metrics['top_1_acc'],
+            'final_val_top_5_acc': val_metrics['top_5_acc'],
+            'final_val_top_10_acc': val_metrics['top_10_acc'],
+            'final_val_top_20_acc': val_metrics['top_20_acc'],
+            'generalization_gap': train_eval_metrics['val_loss'] - val_metrics['val_loss'],
         }
+        # Add other training metrics (batch-level averages)
+        for k, v in train_metrics.items():
+            if k.startswith('train_') and k not in epoch_metrics:
+                epoch_metrics[k] = v
+
+        # Add other validation metrics (embedding quality, etc.)
+        for k, v in val_metrics.items():
+            if k not in epoch_metrics and k not in ['val_loss', 'top_1_acc', 'top_5_acc', 'top_10_acc', 'top_20_acc']:
+                epoch_metrics[k] = v
         epoch_history.append(epoch_metrics)
         
         
         # ====================================================================
         # SAVE TRAINING CHECKPOINTS
         # ====================================================================        
-        is_best = epoch_metrics['val_loss'] < best_val_loss
+        is_best = epoch_metrics['final_val_loss'] < best_val_loss
         if is_best:
-            best_val_loss = epoch_metrics['val_loss']
+            best_val_loss = epoch_metrics['final_val_loss']
         
         save_checkpoint(
             checkpoint_dir=checkpoint_dir,
@@ -5532,11 +6175,29 @@ def run_single_experiment(
         # ====================================================================
         # LOG EPOCH METRICS
         # ====================================================================
-        logger.info(f"Train Loss: {train_metrics['train_loss']:.4f}")
-        logger.info(f"Val Loss: {val_metrics['val_loss']:.4f}")
-        logger.info(f"Top-10 Acc: {val_metrics['top_10_acc']:.3f}")   
+        logger.info(f"\n--- Epoch {epoch+1} Summary ---")
+        logger.info(f"Training Progress:")
+        logger.info(f"  Loss (learning avg): {train_metrics['train_loss']:.4f}")
+        logger.info(f"  Loss (first batch):  {train_metrics['train_loss_first']:.4f}")
+        logger.info(f"  Loss (last batch):   {train_metrics['train_loss_last']:.4f}")
+        logger.info(f"  Improvement:         {train_metrics['train_loss_improvement']:.4f}")
         
+        logger.info(f"\nFinal Model Performance:")
+        logger.info(f"  Train loss (final):  {train_eval_metrics['val_loss']:.4f}")
+        logger.info(f"  Val loss:            {val_metrics['val_loss']:.4f}")
+        logger.info(f"  Gap (train-val loss):{epoch_metrics['generalization_gap']:+.4f}")
+        logger.info(f"  Train Top-10:        {train_eval_metrics['top_10_acc']:.3f}")
+        logger.info(f"  Val Top-10:          {val_metrics['top_10_acc']:.3f}")
+        
+        gap = epoch_metrics['generalization_gap']
+        if gap > 0.01:
+            logger.warning(f"  ⚠️  Overfitting detected! Gap = {gap:.4f}")
+        elif gap < -0.005:
+            logger.warning(f"  ⚠️  Underfitting! Val loss < train loss by {abs(gap):.4f}")
+        else:
+            logger.info(f"  ✅ Good generalization (gap = {gap:+.4f})")        
         if 'train_recall@10' in train_metrics:
+            logger.info(f"\nBatch Metrics (during learning):")
             logger.info(f"Train Recall@10: {train_metrics['train_recall@10']:.3f}")
             logger.info(f"Train mAP@20: {train_metrics['train_mAP@20']:.3f}")
             logger.info(f"Train Brier: {train_metrics['train_brier_score']:.4f}")
@@ -5550,7 +6211,11 @@ def run_single_experiment(
             logger.info(f"MoE Collapsed: {train_metrics['train_num_collapsed_experts']}")
 
         metrics_logger.log_epoch(epoch + 1, epoch_metrics)
-    
+        
+        # Save loss trajectory
+        loss_tracker.save_trajectory(
+            filepath=os.path.join(effective_log_dir, exp_name, f'loss_trajectory_epoch{epoch}.json')
+        )    
     total_time = time.time() - start_time
     logger.info(f"\nTraining completed in {total_time:.1f}s")
             
@@ -5579,10 +6244,21 @@ def run_single_experiment(
         'parameters': total_params,
         'use_learned_pooling': use_learnt_att_pool,
         'use_bucketing': use_bucketing,
-        'final_train_loss': final_metrics['train_loss'],
-        'final_val_loss': final_metrics['val_loss'],
-        'final_top_10_acc': final_metrics['top_10_acc'],
-        'final_top_5_acc': final_metrics['top_5_acc'],
+        
+        'train_loss_mean': final_metrics['train_loss'],        # Learning average
+        'train_loss_learned': final_metrics['train_loss_improvement'],
+        'train_loss_final': final_metrics['eval_in_train_loss_final'],     # Final model on train
+        'val_loss_final': final_metrics['final_val_loss'],                     # Final model on val
+        'generalization_gap': final_metrics['generalization_gap'], # Overfitting indicator
+        
+        # Evaluation in training and in final eval set
+        'final_train_top_5_acc': final_metrics['eval_in_train_top_5_acc'],
+        'final_train_top_10_acc': final_metrics['eval_in_train_top_10_acc'],
+        'final_train_top_20_acc': final_metrics['eval_in_train_top_20_acc'],
+        'final_val_top_5_acc': final_metrics['final_val_top_5_acc'],
+        'final_val_top_10_acc': final_metrics['final_val_top_10_acc'],
+        'final_val_top_20_acc': final_metrics['final_val_top_20_acc'],
+        
         'training_time_sec': total_time,
         'precision@10': evaluation['performance']['precision@10'],
         'recall@10': evaluation['performance']['recall@10'],
@@ -5604,7 +6280,7 @@ def run_single_experiment(
     logger.info(f"\n{'='*80}")
     logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
     logger.info(f"{'='*80}")
-    logger.info(f"Final Top-10 Acc: {final_metrics['top_10_acc']:.3f}")
+    logger.info(f"Final Top-10 Acc in val: {final_metrics['final_val_top_10_acc']:.3f}")
     logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f} (epoch {summary['best_epoch']})")
     logger.info(f"Training Time: {total_time:.1f}s")
     logger.info(f"{'='*80}\n")
@@ -5617,7 +6293,8 @@ def run_selected_experiments(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     device: torch.device,
-    epochs: int = 10
+    epochs: int = 10,
+    experiment_round: Optional[str] = None 
 ) -> pd.DataFrame:
     """
     Run SELECTED experiments (flexible subset).
@@ -5628,6 +6305,7 @@ def run_selected_experiments(
         val_data: Validation DataFrame
         device: Torch device
         epochs: Number of epochs per experiment
+        experiment_round: Specify the experiment round name
     
     Returns:
         DataFrame with comparison of all selected experiments
@@ -5678,7 +6356,8 @@ def run_selected_experiments(
             train_data=train_data,
             val_data=val_data,
             device=device,
-            epochs=epochs
+            epochs=epochs,
+            experiment_round=experiment_round
         )
         
         all_results.append(results)
@@ -5695,7 +6374,8 @@ def run_all_experiments(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     device: torch.device,
-    epochs: int = 10
+    epochs: int = 10,
+    experiment_round: Optional[str] = None 
 ) -> pd.DataFrame:
     """
     Run ALL experiments (convenience wrapper).
@@ -5727,13 +6407,14 @@ def run_all_experiments(
         train_data=train_data,
         val_data=val_data,
         device=device,
-        epochs=epochs
+        epochs=epochs,
+        experiment_round=experiment_round
     )
 
 
 # ### Memory management
 
-# In[67]:
+# In[36]:
 
 
 import torch
@@ -5975,7 +6656,7 @@ def load_checkpoint_multigpu(
 
 # ### Time and cost estimation
 
-# In[58]:
+# In[38]:
 
 
 import numpy as np
@@ -7938,7 +8619,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[15]:
+# In[39]:
 
 
 # Device setup
@@ -7968,7 +8649,7 @@ df_val = df_remain.sample(100000, random_state=42, replace=False)
 df_test = df_remain.drop(df_val.index)
 
 
-# In[22]:
+# In[40]:
 
 
 import pandas as pd
@@ -7984,7 +8665,7 @@ df_train.shape
 
 # #### If flash_attention works?
 
-# In[71]:
+# In[41]:
 
 
 cleanup_gpu_memory_hard()
@@ -8007,24 +8688,26 @@ exp1_results_df = run_single_experiment(
 )
 
 
-# In[120]:
+# #### Experiment 1 Nov11
+
+# In[57]:
 
 
 # Clean up GPU memory everytime before running the test
 cleanup_gpu_memory_hard()
 
 # Minimal dataset
-train_tiny = df_train.sample(128000)
-val_tiny = df_val.sample(12800)
+train_tiny = df_train.sample(64000)
+val_tiny = df_val.sample(3200)
 
 # Run 3 experiments
 exp_names = ['exp1_dense_baseline', 
              'exp2_dense_flash',
-             'exp2b_flash_learned_pool'
+             'exp2b_flash_learned_pool',
              'exp3_standard_moe',
-             'exp3b_moe_learned_pool'
+             'exp3b_moe_learned_pool',
              'exp4_shared_expert',
-             # 'exp5_fine_grained'
+             'exp5_fine_grained'
             ]
 
 print(f"  Running {len(exp_names)} experiments (1 epoch each, 32 samples)...")
@@ -8034,26 +8717,108 @@ results_df = run_selected_experiments(
     train_data=train_tiny,
     val_data=val_tiny,
     device=device,
-    epochs=1
+    epochs=3
 )
 
 
-# In[124]:
+# In[62]:
 
 
-results_df.iloc[:-3, :].to_json()
+results_df.to_excel("experiment_logs/exp1_64k_3epoch_16batch_Nov11.xlsx")
 
 
-# In[ ]:
+# #### Experiment 2 - dive deep into MOE issues Nov 16
+
+# In[42]:
 
 
+def check_gpu_availability():
+    """Check and display all available GPUs."""
+    if not torch.cuda.is_available():
+        print("❌ No CUDA GPUs available. Using CPU.")
+        return 0
+    
+    num_gpus = torch.cuda.device_count()
+    print(f"\n{'='*60}")
+    print(f"GPU AVAILABILITY CHECK")
+    print(f"{'='*60}")
+    print(f"Total GPUs detected: {num_gpus}")
+    
+    for i in range(num_gpus):
+        props = torch.cuda.get_device_properties(i)
+        memory_total = props.total_memory / (1024**3)  # GB
+        print(f"\nGPU {i}: {props.name}")
+        print(f"  Total Memory: {memory_total:.2f} GB")
+        print(f"  Compute Capability: {props.major}.{props.minor}")
+        print(f"  Multiprocessors: {props.multi_processor_count}")
+    
+    print(f"{'='*60}\n")
+    return num_gpus
+
+# Call it at startup
+check_gpu_availability()
 
 
-
-# In[ ]:
-
+# In[43]:
 
 
+# Clean up before running
+cleanup_gpu_memory_hard()
+
+# Define your experiment round name
+round_name = "exp_round2_ablation_swiglu_aux_layer_nov16_2025"
+# Minimal dataset
+train_tiny = df_train.sample(64000)
+val_tiny = df_val.sample(3200)
+# Select experiments to run
+exp_names = [
+    'exp3_standard_moe',      # Baseline MoE (GELU experts, aux=0.01, layer=2)
+    'exp3a_moe_swiglu',       # + SwiGLU in experts
+    'exp3b_moe_swiglu_learned_pool',  # + SwiGLU + learned pooling
+    'exp3c_moe_swiglu_learned_pool_layer4',  # + Start MoE at layer 4
+    'exp3d_moe_swiglu_learned_pool_layer4_aux001'  # + Reduce aux to 0.001
+]
+
+# Run experiments with round name
+results_df = run_selected_experiments(
+    experiment_names=exp_names,
+    train_data=train_tiny,
+    val_data=val_tiny,
+    device=device,
+    epochs=2,
+    experiment_round=round_name
+)
+
+
+# In[44]:
+
+
+results_df
+
+
+# In[51]:
+
+
+results_dict = {}
+for exp_name in results_df.index:
+    results_dict[exp_name] = {
+        'full_evaluation': results_df.loc[exp_name, 'full_evaluation'],
+        'all_epochs': results_df.loc[exp_name, 'all_epochs']
+    }
+
+
+# In[56]:
+
+
+output_path = "logs/exp_round2_ablation_swiglu_aux_layer_nov16_2025/exp_round2_ablation_swiglu_aux_layer_nov16_2025_json.json"
+with open(output_path, 'w', encoding='utf-8') as f:
+     json.dump(
+        results_dict,
+        f,
+        indent=2,
+        ensure_ascii=False,
+        default=str  # Handle any non-serializable types (e.g., numpy types)
+     )
 
 
 # In[ ]:
