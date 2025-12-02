@@ -82,7 +82,7 @@ To fix this, you do not need a new architecture. You need to retune the training
 
 
 
-## Follow-up analysis
+## Next actions 
 ### 🛠️ Part 1: How to Fix Router Initialization (Code Guide)
 
 You need to modify the `MoELayer` class in `dev/moe/moe_flashattn_2.py`. The current initialization (`std=0.01`) is too small, causing the router to start with near-zero logits (maximum entropy), which means random routing and slow convergence.

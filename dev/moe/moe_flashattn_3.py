@@ -5,6 +5,8 @@
 
 
 """
+Version 1 and 2
+Data: 
 Mixture-of-Experts (MoE) Experimentation Framework for Hierarchical Clinical Transformer
 
 This module implements a comprehensive 5-experiment ablation study to evaluate MoE integration
@@ -44,12 +46,18 @@ Based on:
 - Switch Transformer load balancing
 - BEHRT clinical evaluation metrics
 
-Author: Daniel Xing
-Date: 2025-10-24
+
+Version 3
+- Distributed data parallel
+- Implement the LOB columns
+- Use Medicaid IP risk as downstream tasks and include the metrics to the model
+- 
+
+
 """
 
 
-# In[2]:
+# In[ ]:
 
 
 # ============================================================================
@@ -105,12 +113,6 @@ Date: 2025-10-24
 # ============================================================================
 
 
-# In[1]:
-
-
-import pandas as pd
-
-
 # In[2]:
 
 
@@ -120,7 +122,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[28]:
+# In[3]:
 
 
 """
@@ -166,7 +168,7 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[29]:
+# In[4]:
 
 
 # ============================================================================
@@ -233,7 +235,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[30]:
+# In[5]:
 
 
 @dataclass
@@ -264,7 +266,7 @@ class BaseConfig:
     age_vocab: int = 1440     # Age in months (120 years)
     
     # Training
-    batch_size: int = 16     # Batch size
+    batch_size: int = 32     # Batch size (change from 16 to 32)
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
     gradient_clip: float = 1.0  # Gradient clipping norm
@@ -350,7 +352,7 @@ class MoEConfig:
 
 
 
-# In[64]:
+# In[6]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -585,9 +587,149 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
     return configs
 
 
+# In[7]:
+
+
+# ============================================================================
+# DDP (Distributed Data Parallel) UTILITIES
+# ============================================================================
+
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from typing import Tuple
+
+def setup_ddp() -> Tuple[int, int, bool]:
+    """
+    Initialize Distributed Data Parallel.
+    
+    Returns:
+        local_rank: GPU index on this machine
+        world_size: Total number of processes
+        is_main: True if this is rank 0 (main process)
+    """
+    # Check if we're in a distributed environment
+    if 'LOCAL_RANK' not in os.environ:
+        # Not running with torchrun - single GPU mode
+        return 0, 1, True
+    
+    # Initialize process group
+    dist.init_process_group(backend='nccl')
+    
+    local_rank = int(os.environ['LOCAL_RANK'])
+    world_size = dist.get_world_size()
+    
+    # Set device for this process
+    torch.cuda.set_device(local_rank)
+    
+    # Set seeds for reproducibility (different per rank for data, same for model init)
+    seed = 42
+    torch.manual_seed(seed)
+    np.random.seed(seed + local_rank)  # Different random data per rank
+    
+    is_main = (local_rank == 0)
+    
+    if is_main:
+        print(f"\n{'='*60}")
+        print(f"DDP INITIALIZED")
+        print(f"{'='*60}")
+        print(f"World size: {world_size}")
+        print(f"Backend: NCCL (GPU-optimized)")
+        print(f"{'='*60}\n")
+    
+    # Synchronize all processes
+    dist.barrier()
+    
+    return local_rank, world_size, is_main
+
+
+def cleanup_ddp():
+    """Clean up distributed process group."""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def is_dist_initialized() -> bool:
+    """Check if DDP is initialized."""
+    return dist.is_initialized()
+
+
+def get_world_size() -> int:
+    """Get number of processes (1 if not distributed)."""
+    if dist.is_initialized():
+        return dist.get_world_size()
+    return 1
+
+
+def get_rank() -> int:
+    """Get current process rank (0 if not distributed)."""
+    if dist.is_initialized():
+        return dist.get_rank()
+    return 0
+
+
+def is_main_process() -> bool:
+    """Check if this is the main process (rank 0)."""
+    return get_rank() == 0
+
+
+def reduce_tensor(tensor: torch.Tensor, op: str = 'mean') -> torch.Tensor:
+    """
+    Reduce tensor across all processes.
+    
+    Args:
+        tensor: Tensor to reduce
+        op: 'mean' or 'sum'
+    
+    Returns:
+        Reduced tensor (only meaningful on rank 0, but returned on all ranks)
+    """
+    if not dist.is_initialized():
+        return tensor
+    
+    world_size = dist.get_world_size()
+    
+    # Clone to avoid modifying original
+    rt = tensor.clone()
+    
+    # All-reduce
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    
+    if op == 'mean':
+        rt = rt / world_size
+    
+    return rt
+
+
+def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, float]:
+    """
+    Synchronize metrics across all processes.
+    
+    Args:
+        metrics: Dictionary of metric names to values
+        device: Current device
+    
+    Returns:
+        Synchronized metrics (averaged across processes)
+    """
+    if not dist.is_initialized():
+        return metrics
+    
+    synced = {}
+    for key, value in metrics.items():
+        if isinstance(value, (int, float)):
+            tensor = torch.tensor(value, device=device)
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+            synced[key] = tensor.item() / dist.get_world_size()
+        else:
+            synced[key] = value  # Non-numeric, keep as is
+    
+    return synced
+
+
 # ### RPE and Swiglu
 
-# In[65]:
+# In[9]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -710,7 +852,9 @@ class SwiGLU(nn.Module):
         return output
 
 
-# In[8]:
+# #### Test
+
+# In[7]:
 
 
 def test_rotary_position_embedding():
@@ -727,7 +871,7 @@ def test_rotary_position_embedding():
 test_rotary_position_embedding()
 
 
-# In[9]:
+# In[8]:
 
 
 def test_swiglu_forward():
@@ -743,7 +887,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[66]:
+# In[7]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -982,7 +1126,7 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
-# In[11]:
+# In[10]:
 
 
 def test_flash_attention_layer_fallback():
@@ -1007,7 +1151,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[34]:
+# In[8]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1090,7 +1234,7 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
-# In[13]:
+# In[12]:
 
 
 def test_learned_attention_pooling():
@@ -1106,7 +1250,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[35]:
+# In[9]:
 
 
 # ============================================================================
@@ -1289,7 +1433,13 @@ class MoELayer(nn.Module):
         
         # Router network
         self.router = nn.Linear(config.d_model, self.num_routed_experts, bias=False)
-        nn.init.normal_(self.router.weight, mean=0.0, std=0.01)
+        # Kaiming initialization for better routing diversity at startup
+        # Formula: std = sqrt(2 / fan_in), where fan_in = d_model
+        # For d_model=256: std ≈ 0.088 (9x larger than previous 0.01)
+        # For d_model=512: std ≈ 0.063 (6x larger than previous 0.01)
+        fan_in = config.d_model
+        std = math.sqrt(2.0 / fan_in)
+        nn.init.normal_(self.router.weight, mean=0.0, std=std)
         
         # Routed experts
         self.experts = nn.ModuleList([
@@ -1439,6 +1589,8 @@ class MoELayer(nn.Module):
         return output, losses
 
 
+# #### Test
+
 # In[15]:
 
 
@@ -1512,7 +1664,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[36]:
+# In[10]:
 
 
 # ============================================================================
@@ -1690,7 +1842,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[37]:
+# In[11]:
 
 
 # ============================================================================
@@ -1830,6 +1982,7 @@ class FlashAttentionTransformer(nn.Module):
         gpu_batchsize = x.shape[0]
         actual_len_dy = x.shape[1]
         actual_len_cd = x.shape[2] - 2 
+        
         # Extract and embed (same as baseline)
         age_in_months = self.embedding_age_in_months(x[:, :, 0].long())
         gender_cd = self.embedding_gender_cd(x[:, :, 1].long())
@@ -1899,6 +2052,7 @@ class FlashAttentionTransformer(nn.Module):
         
         # Output projection
         cd = torch.swapaxes(cd, 0, 1)
+        
         cd = self.norm(cd)
         cd = self.dropout(cd)
         cd = self.decoder_cd(cd)
@@ -1909,7 +2063,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[38]:
+# In[12]:
 
 
 # ============================================================================
@@ -1925,7 +2079,7 @@ class FlashMoETransformer(nn.Module):
     2. MoE for conditional computation
     3. Flexible configuration for 5 experiments
     
-    MoE placement: layers 2-5 (after learning basic patterns)
+    MoE placement: layers 2-5 (after learning basic patterns); may change to 4-5
     """
     
     def __init__(self, config: FlashAttentionConfig, moe_config: Optional[MoEConfig] = None):
@@ -2025,7 +2179,10 @@ class FlashMoETransformer(nn.Module):
         nn.init.zeros_(self.decoder_cd.bias)
         nn.init.uniform_(self.decoder_cd.weight, -initrange, initrange)
     
-    def forward(self, x: torch.Tensor, return_moe_losses: bool = True) -> Tuple[torch.Tensor, Dict]:
+    def forward(self, 
+                x: torch.Tensor, 
+                return_moe_losses: bool = True
+               ) -> Tuple[torch.Tensor, Dict]:
         """
         Forward pass with Flash Attention + MoE.
         
@@ -2108,6 +2265,7 @@ class FlashMoETransformer(nn.Module):
         
         # Output
         cd = torch.swapaxes(cd, 0, 1)
+        
         cd = self.norm(cd)
         cd = self.dropout(cd)
         cd = self.decoder_cd(cd)
@@ -2215,7 +2373,7 @@ test_flash_moe_transformer_forward()
 
 # #### Preprocess data with data loader
 
-# In[39]:
+# In[13]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2272,7 +2430,7 @@ class ClinicalDataset(Dataset):
         }
 
 
-# In[40]:
+# In[14]:
 
 
 def clinical_collate_fn(batch):
@@ -2309,7 +2467,7 @@ def clinical_collate_fn(batch):
 
 # #### Data preparation
 
-# In[41]:
+# In[15]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2535,7 +2693,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function
 
-# In[42]:
+# In[16]:
 
 
 def compute_loss(
@@ -2999,7 +3157,7 @@ results = diagnose_with_trained_checkpoint()
 
 # #### Loss logger
 
-# In[43]:
+# In[16]:
 
 
 class LossTracker:
@@ -3125,9 +3283,15 @@ class LossTracker:
 
 # #### Train and evaluation
 
-# In[44]:
+# In[17]:
 
 
+def _model_has_moe(model):
+    """Check if model supports return_moe_losses, accounting for DDP wrapper."""
+    actual_model = model.module if hasattr(model, 'module') else model
+    if hasattr(actual_model, 'forward'):
+        return 'return_moe_losses' in actual_model.forward.__code__.co_varnames
+    return False
 # Training each epoch
 def train_epoch(
     model: nn.Module,
@@ -3144,7 +3308,9 @@ def train_epoch(
     use_bucketing: bool = False,
     log_interval: int = 100, 
     global_step: int = 0, 
-    loss_tracker: Optional[LossTracker] = None
+    loss_tracker: Optional[LossTracker] = None,
+    is_main: bool = True,
+    use_ddp: bool = False
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -3180,7 +3346,8 @@ def train_epoch(
     # ============================================================
     for batch_idx, batch in enumerate(dataloader):
         
-        if batch_idx % log_interval == 0:
+        # Only main process prints progress
+        if is_main and batch_idx % log_interval == 0:
             print(f'  Batch {batch_idx}/{len(dataloader)}')
         
         optimizer.zero_grad()
@@ -3204,7 +3371,7 @@ def train_epoch(
         if use_mixed_precision:
             with torch.cuda.amp.autocast(dtype=torch.float16):
                 # Model forward
-                if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                if _model_has_moe(model):
                     output, moe_losses = model(x, return_moe_losses=True)
                 else:
                     output = model(x)
@@ -3221,7 +3388,7 @@ def train_epoch(
                     total_loss = pred_loss
         else:
             # Standard precision (baseline)
-            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+            if _model_has_moe(model):
                 output, moe_losses = model(x, return_moe_losses=True)
             else:
                 output = model(x)
@@ -3271,7 +3438,7 @@ def train_epoch(
         # ========================================================================
         # STEP 6a: COMPUTE & LOG REAL-TIME METRICS (every log_interval batches)
         # ========================================================================        
-        if batch_idx % log_interval == 0:
+        if is_main and batch_idx % log_interval == 0:
             with torch.no_grad():
                 # Compute batch metrics (FAST)
                 batch_metrics = compute_batch_metrics_lightweight(
@@ -3308,7 +3475,7 @@ def train_epoch(
             gc.collect()  # Python GC only
             
             # Optional memory monitoring
-            if device.type == 'cuda' and batch_idx % 1000 == 0:
+            if is_main and device.type == 'cuda' and batch_idx % 1000 == 0:
                 allocated = torch.cuda.memory_allocated() / 1024**3
                 reserved = torch.cuda.memory_reserved() / 1024**3
                 print(f'    GPU Memory: {allocated:.2f}GB / {reserved:.2f}GB')
@@ -3342,7 +3509,7 @@ def train_epoch(
         # Store final expert usage for comprehensive evaluation
         if 'expert_usage' in moe_losses:
             epoch_metrics['expert_usage'] = moe_losses['expert_usage']
-    
+            
     # add global step 
     epoch_metrics['global_step'] = global_step
         
@@ -3724,7 +3891,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[45]:
+# In[18]:
 
 
 def save_checkpoint(
@@ -4241,7 +4408,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[59]:
+# In[19]:
 
 
 class MetricsLogger:
@@ -4308,7 +4475,7 @@ class MetricsLogger:
     def convert_to_serializable(obj):
         """Recursively convert numpy/torch types to native Python types for JSON serialization."""
         if isinstance(obj, dict):
-            return {MetricsLogger.convert_to_serializable(v) for k, v in obj.items()}
+            return {k: MetricsLogger.convert_to_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
             return [MetricsLogger.convert_to_serializable(item) for item in obj]
         elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
@@ -4340,13 +4507,13 @@ class MetricsLogger:
         if self.config:
             with open(self.log_path / 'config.json', 'w') as f:
                 json.dump(self.convert_to_serializable(self.config), f, indent=2)
-    
+                
     def save_final_results(self, results: Dict):
         """Save complete experiment results to JSON for later comparison."""
         results_path = self.log_path / 'final_results.json'
         with open(results_path, 'w') as f:
             json.dump(self.convert_to_serializable(results), f, indent=2)
-        return results_path
+        return results_path    
     
     def get_summary(self) -> Dict:
         """Get summary statistics."""
@@ -4369,15 +4536,9 @@ class MetricsLogger:
         }
 
 
-# In[145]:
-
-
-
-
-
 # #### Batch-based metrics
 
-# In[60]:
+# In[20]:
 
 
 def compute_batch_metrics_lightweight(
@@ -4555,89 +4716,51 @@ def compute_embedding_quality_epoch(
     )    
     all_embeddings = []
     all_targets = []
-    
-    with torch.no_grad():
-        
-        for batch in val_loader:  # ← Use DataLoader instead of manual iteration
-            age = batch['age'].to(device)
-            gender = batch['gender'].to(device)
-            codes = batch['codes'].to(device)
-            dt_cnt = batch['dt_cnt']
-            y = batch['target']
-            
-            x = torch.cat([
-                age.unsqueeze(-1),
-                gender.unsqueeze(-1),
-                codes
-            ], dim=-1)
-            
-            # Get ACTUAL batch size (might be smaller in last batch)
-            batch_size_actual = x.shape[0]
-            
-            # Extract embeddings (last temporal layer output, before classifier)
-            # Works for all model types
-            if isinstance(model, BaselineTransformer):
-                # Run through model but capture before decoder
-                age_in_months = model.embedding_age_in_months(x[:, :, 0].long())
-                gender_cd = model.embedding_gender_cd(x[:, :, 1].long())
-                cd = model.embedding_cd(x[:, :, 2:].long())
-                cd_res = cd.sum(-2)
-                
-                # Daily encoding
-                cd = cd.reshape(-1, config.len_cd, config.embedding_size)
-                cd = torch.swapaxes(cd, 0, 1)
-                cd = model.transformer_encoder_cd(cd)
-                cd = cd.permute(1, 2, 0)
-                cd = nn.MaxPool1d(config.len_cd)(cd)
-                cd = cd.reshape(batch_size_actual, config.len_dy, config.embedding_size)
-                
-                # Combine
-                cd = cd_res + cd + gender_cd + age_in_months
-                cd = model.mm(cd)
-                cd = model.norm(cd)
-                cd = torch.swapaxes(cd, 0, 1)
-                
-                # Temporal encoding
-                mth_mask = model._generate_square_subsequent_mask(config.len_dy).to(device)
-                embeddings = model.transformer_encoder_dy(cd, mth_mask)
-                embeddings = torch.swapaxes(embeddings, 0, 1)  # [batch, len_dy, 256]
-                
-            else:
-                # For Flash/MoE models - just get output before decoder
-                # Run full forward then extract
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():  
+            for batch in val_loader:  # ← Use DataLoader instead of manual iteration
+                age = batch['age'].to(device)
+                gender = batch['gender'].to(device)
+                codes = batch['codes'].to(device)
+                dt_cnt = batch['dt_cnt']
+                y = batch['target']
+
+                x = torch.cat([
+                    age.unsqueeze(-1),
+                    gender.unsqueeze(-1),
+                    codes
+                ], dim=-1)
+
+                # ============================================================
+                # FORWARD PASS - hook captures embeddings automatically
+                # ============================================================
                 if use_mixed_precision:
                     dtype = getattr(config, 'dtype', torch.float16)
                     with torch.cuda.amp.autocast(dtype=dtype):
-                        if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
-                            output_full, _ = model(x, return_moe_losses=False)
+                        if isinstance(model, FlashMoETransformer):
+                            _ = model(x, return_moe_losses=False)
                         else:
-                            output_full = model(x)
+                            _ = model(x)  # Works for Baseline AND FlashAttention
                 else:
-                    if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
-                        output_full, _ = model(x, return_moe_losses=False)
+                    if isinstance(model, FlashMoETransformer):
+                        _ = model(x, return_moe_losses=False)
                     else:
-                        output_full = model(x)
-                
-                # Reconstruct embeddings from just before decoder
-                # This is a workaround - ideally modify model to return embeddings
-                # For now, use the output logits as proxy (not ideal but works)
-                embeddings = output_full  # [batch, len_dy, target_cd_cnt]
-                # Take PCA to reduce to embedding_size
-                # Skip for now - too expensive
-                continue
-            
-            # Extract last valid day embedding per patient
-            for j in range(len(dt_cnt)):
-                if dt_cnt[j] > 0:
-                    valid_emb = embeddings[j, dt_cnt[j]-1, :]  # Last day
-                    all_embeddings.append(valid_emb.cpu())
-                    
-                    # Aggregate all target codes for this patient
-                    patient_targets = y[j]
-                    all_codes = set()
-                    for day_codes in patient_targets:
-                        all_codes.update([c for c in day_codes if c > 0])
-                    all_targets.append(all_codes)
+                        _ = model(x)
+
+                # Get patient embeddings (last valid day)    
+                patient_embs = extractor.get_patient_embedding(dt_cnt)
+
+                # Collect embeddings and targets
+                for j in range(len(dt_cnt)):
+                    if dt_cnt[j] > 0:
+                        all_embeddings.append(patient_embs[j].cpu())
+                        
+                        # Aggregate all target codes for this patient
+                        patient_targets = y[j]
+                        all_codes = set()
+                        for day_codes in patient_targets:
+                            all_codes.update([c for c in day_codes if c > 0])
+                        all_targets.append(all_codes)
     
     if len(all_embeddings) == 0:
         return {'embedding_std_mean': 0.0, 'nn_target_overlap': 0.0}
@@ -4728,7 +4851,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[61]:
+# In[21]:
 
 
 """
@@ -5838,9 +5961,245 @@ def test_comprehensive_evaluation_dense():
 test_comprehensive_evaluation_dense()
 
 
+# ### Extract embedding for each member
+
+# In[22]:
+
+
+# ============================================================================
+# EMBEDDING EXTRACTOR (Pythonic hook-based approach)
+# ============================================================================
+
+class EmbeddingExtractor:
+    """
+    Extract embeddings from any model using PyTorch forward hooks.
+    
+    This is the standard PyTorch way to capture intermediate activations
+    without modifying the forward() method.
+    
+    Usage:
+        extractor = EmbeddingExtractor(model)
+        
+        # Run forward pass normally
+        output = model(x)
+        
+        # Get embeddings (captured automatically)
+        embeddings = extractor.get_embeddings()  # [batch, len_dy, embedding_size]
+        
+        # Clean up when done
+        extractor.remove()
+    
+    Works with: BaselineTransformer, FlashAttentionTransformer, FlashMoETransformer
+    """
+    
+    def __init__(self, model: nn.Module):
+        self.model = model
+        self.embeddings = None
+        self._hook_handle = None
+        
+        # Register hook on the appropriate layer based on model type
+        self._register_hook()
+    
+    def _register_hook(self):
+        """Register forward hook on the layer BEFORE the decoder."""
+        
+        def hook_fn(module, input, output):
+            """Capture the output of the target layer."""
+            # Handle different output formats
+            if isinstance(output, tuple):
+                # Some modules return (output, other_stuff)
+                self.embeddings = output[0].detach()
+            else:
+                self.embeddings = output.detach()
+        
+        # Determine which layer to hook based on model type
+        if isinstance(self.model, BaselineTransformer):
+            # Hook the temporal encoder output
+            target_layer = self.model.transformer_encoder_dy
+            self._hook_handle = target_layer.register_forward_hook(hook_fn)
+            
+        elif isinstance(self.model, (FlashAttentionTransformer, FlashMoETransformer)):
+            # Hook the final temporal layer's output
+            # We need to hook the norm BEFORE decoder
+            target_layer = self.model.norm  # Final LayerNorm before decoder
+            
+            # Custom hook that captures BEFORE norm (the raw temporal output)
+            def pre_decoder_hook(module, input, output):
+                # input[0] is what goes INTO the norm layer = our embedding
+                self.embeddings = input[0].detach()
+            
+            self._hook_handle = target_layer.register_forward_hook(pre_decoder_hook)
+        else:
+            raise ValueError(f"Unsupported model type: {type(self.model).__name__}")
+    
+    def get_embeddings(self) -> torch.Tensor:
+        """
+        Get the captured embeddings.
+        
+        Returns:
+            embeddings: [batch, len_dy, embedding_size] for Flash/MoE models
+                        [len_dy, batch, embedding_size] for Baseline (needs transpose)
+        """
+        if self.embeddings is None:
+            raise RuntimeError("No embeddings captured. Did you run a forward pass?")
+        
+        emb = self.embeddings
+        
+        # Normalize shape to [batch, len_dy, embedding_size]
+        if isinstance(self.model, BaselineTransformer):
+            # Baseline returns [len_dy, batch, embedding_size]
+            emb = emb.permute(1, 0, 2)
+        
+        return emb
+    
+    def get_patient_embedding(self, dt_cnt: List[int]) -> torch.Tensor:
+        """
+        Get the embedding for each patient's LAST valid day.
+        
+        This is what you use for downstream tasks - one embedding per patient.
+        
+        Args:
+            dt_cnt: List of valid day counts per patient
+            
+        Returns:
+            embeddings: [batch, embedding_size]
+        """
+        embeddings = self.get_embeddings()  # [batch, len_dy, embedding_size]
+        
+        patient_embeddings = []
+        for i, valid_days in enumerate(dt_cnt):
+            if valid_days > 0:
+                # Get embedding at last valid day
+                patient_embeddings.append(embeddings[i, valid_days - 1, :])
+            else:
+                # Fallback to first position if no valid days
+                patient_embeddings.append(embeddings[i, 0, :])
+        
+        return torch.stack(patient_embeddings)  # [batch, embedding_size]
+    
+    def remove(self):
+        """Remove the hook. Call this when done to free memory."""
+        if self._hook_handle is not None:
+            self._hook_handle.remove()
+            self._hook_handle = None
+        self.embeddings = None
+    
+    def __enter__(self):
+        """Context manager support."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Auto-cleanup when exiting context."""
+        self.remove()
+        return False
+
+
+# #### Test
+
+# In[32]:
+
+
+def test_embedding_extractor():
+    """Test embedding extraction for all model types."""
+    
+    # Test configuration
+    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    
+    # Create properly structured dummy input
+    batch_size = 4
+    len_dy = 50
+    len_cd = 20
+    
+    # Build input tensor with correct value ranges
+    age_in_months = torch.randint(0, 1400, (batch_size, len_dy, 1), device=device)
+    gender_cd = torch.randint(0, 4, (batch_size, len_dy, 1), device=device)
+    codes = torch.randint(0, 1000, (batch_size, len_dy, len_cd), device=device)
+    
+    x = torch.cat([age_in_months, gender_cd, codes], dim=-1)
+    dt_cnt = [30, 45, 20, 50]
+    
+    # ============================================================
+    # Test BaselineTransformer (no mixed precision needed)
+    # ============================================================
+    print("Testing BaselineTransformer...")
+    model = BaselineTransformer(cfg).to(device)
+    model.eval()
+    
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():
+            _ = model(x)
+        
+        all_emb = extractor.get_embeddings()
+        print(f"  All embeddings shape: {all_emb.shape}")
+        assert all_emb.shape == (batch_size, len_dy, cfg.embedding_size)
+        
+        patient_emb = extractor.get_patient_embedding(dt_cnt)
+        print(f"  Patient embeddings shape: {patient_emb.shape}")
+        assert patient_emb.shape == (batch_size, cfg.embedding_size)
+    
+    print("✔️ BaselineTransformer embedding extraction works\n")
+    del model
+    torch.cuda.empty_cache()
+    
+    # ============================================================
+    # Test FlashAttentionTransformer (needs autocast for FP16)
+    # ============================================================
+    print("Testing FlashAttentionTransformer...")
+    flash_cfg = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
+    model = FlashAttentionTransformer(flash_cfg).to(device)
+    model.eval()
+    
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():
+            # Use autocast for mixed precision (FP16)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = model(x)
+        
+        all_emb = extractor.get_embeddings()
+        print(f"  All embeddings shape: {all_emb.shape}")
+        assert all_emb.shape == (batch_size, len_dy, flash_cfg.embedding_size)
+        
+        patient_emb = extractor.get_patient_embedding(dt_cnt)
+        print(f"  Patient embeddings shape: {patient_emb.shape}")
+        assert patient_emb.shape == (batch_size, flash_cfg.embedding_size)
+    
+    print("✔️ FlashAttentionTransformer embedding extraction works\n")
+    del model
+    torch.cuda.empty_cache()
+    
+    # ============================================================
+    # Test FlashMoETransformer (needs autocast for FP16)
+    # ============================================================
+    print("Testing FlashMoETransformer...")
+    moe_cfg = MoEConfig(d_model=256, d_ff=512)
+    model = FlashMoETransformer(flash_cfg, moe_cfg).to(device)
+    model.eval()
+    
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():
+            # Use autocast for mixed precision (FP16)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _, _ = model(x, return_moe_losses=False)
+        
+        all_emb = extractor.get_embeddings()
+        print(f"  All embeddings shape: {all_emb.shape}")
+        assert all_emb.shape == (batch_size, len_dy, flash_cfg.embedding_size)
+        
+        patient_emb = extractor.get_patient_embedding(dt_cnt)
+        print(f"  Patient embeddings shape: {patient_emb.shape}")
+        assert patient_emb.shape == (batch_size, flash_cfg.embedding_size)
+    
+    print("✔️ FlashMoETransformer embedding extraction works\n")
+    print("=" * 50)
+    print("✅ ALL EMBEDDING EXTRACTOR TESTS PASSED!")
+
+# Run test
+test_embedding_extractor()
+
+
 # ### Run experimentation
 
-# In[49]:
+# In[23]:
 
 
 def compute_code_frequencies(
@@ -5902,7 +6261,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[55]:
+# In[24]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -5966,7 +6325,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[62]:
+# In[25]:
 
 
 def run_single_experiment(
@@ -5984,7 +6343,9 @@ def run_single_experiment(
     log_metrics_every: int = 100,
     resume_from: Optional[str] = None,  # midpoint path used for resuming training
     checkpoint_dir: Optional[str] = None,  # add check point directory
-    embedding_size: Optional[int] = None
+    embedding_size: Optional[int] = None,
+    local_rank: Optional[int] = None,  # If provided, use DDP
+    world_size: Optional[int] = None
 ) -> Dict[str, any]:
     """
     Run a SINGLE experiment.
@@ -6009,10 +6370,35 @@ def run_single_experiment(
         - training_time_sec: total training time
         - all_epochs: list of per-epoch metrics
     """
-    print(f"\n{'='*80}")
-    print(f"EXPERIMENT: {exp_name}")
-    print(f"{'='*80}")
-        
+    
+    # ============================================================
+    # DDP SETUP
+    # ============================================================
+    use_ddp = local_rank is not None and world_size is not None and world_size > 1
+    
+    if use_ddp:
+        device = torch.device(f'cuda:{local_rank}')
+        is_main = (local_rank == 0)
+    else:
+        # Single GPU mode (backward compatible)
+        local_rank = 0
+        world_size = 1
+        is_main = True
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Only main process prints and logs
+    def log_info(msg):
+        if is_main:
+            print(msg)
+    
+    log_info(f"\n{'='*80}")
+    log_info(f"EXPERIMENT: {exp_name}")
+    if use_ddp:
+        log_info(f"DDP Mode: {world_size} GPUs (this is rank {local_rank})")
+    log_info(f"{'='*80}")
+    
+    
     # Determine if resume from check point
     is_resume = resume_from is not None
     # Build hierarchical log directory
@@ -6032,14 +6418,18 @@ def run_single_experiment(
     # SETUP LOGGING
     # ============================================================
     
-    logger = setup_experiment_logging(exp_name, effective_log_dir, resume=is_resume) 
-    metrics_logger = MetricsLogger(exp_name, effective_log_dir, resume=is_resume) 
-    loss_tracker = LossTracker(window_size=100)
-    
-    if is_resume:
-        logger.info(f"🔄 RESUMING {exp_name} training from checkpoint: {resume_from}")
+    if is_main:
+        logger = setup_experiment_logging(exp_name, effective_log_dir, resume=is_resume) 
+        metrics_logger = MetricsLogger(exp_name, effective_log_dir, resume=is_resume) 
     else:
-        logger.info(f"Starting experiment: {exp_name}")
+        logger = None
+        metrics_logger = None
+    loss_tracker = LossTracker(window_size=100)
+    if is_main:
+        if is_resume:
+            logger.info(f"🔄 RESUMING {exp_name} training from checkpoint: {resume_from}")
+        else:
+            logger.info(f"Starting experiment: {exp_name}")
 
     # ============================================================
     # AUTO-CALCULATE DIMENSIONS (NEW LOGIC)
@@ -6055,7 +6445,7 @@ def run_single_experiment(
     eff_nhead = dims['nhead']
     eff_nhid = dims['nhid']
     
-    if embedding_size is not None:
+    if is_main and embedding_size is not None:
         logger.info(f"⚡ OVERRIDE: embedding_size={eff_d_model}")
         logger.info(f"   Auto-calculated: nhead={eff_nhead} (head_dim={dims['head_dim']}), nhid={eff_nhid}")
         
@@ -6069,11 +6459,13 @@ def run_single_experiment(
         model = BaselineTransformer(config).to(device)
         use_mixed_precision = False
         use_bucketing = False
-        logger.info(f"Model: Baseline Transformer (FP32)")
-        logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead=16 (hardcoded)")
+        if is_main:
+            logger.info(f"Model: Baseline Transformer (FP32)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead=16 (hardcoded)")
         
     elif exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']:
         config = FlashAttentionConfig(
+            embedding_size=eff_d_model, 
             nhid=eff_nhid,
             nhead=eff_nhead, 
             use_swiglu=True,
@@ -6083,14 +6475,16 @@ def run_single_experiment(
         model = FlashAttentionTransformer(config).to(device)
         use_mixed_precision = True
         use_bucketing = True
-        pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-        logger.info(f"Model: Flash Attention Transformer (FP16)")
-        logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead} (head_dim={dims['head_dim']})")
-        logger.info(f"  Daily Encoder: {pooling_str}")
+        if is_main:
+            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
+            logger.info(f"Model: Flash Attention Transformer (FP16)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
+            logger.info(f"  Daily Encoder: {pooling_str}")
         
     else:
         # MoE variant
         config = FlashAttentionConfig(
+            embedding_size=eff_d_model, 
             nhid=eff_nhid,
             nhead=eff_nhead,
             use_swiglu=True,
@@ -6107,38 +6501,60 @@ def run_single_experiment(
         use_mixed_precision = True
         use_bucketing = True
 
-        pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-        logger.info(f"Model: Flash + MoE Transformer (FP16)")
-        logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead} (head_dim={dims['head_dim']})")
-        logger.info(f"  Daily Encoder: {pooling_str}")
-        logger.info(f"  MoE: {moe_config.num_experts} experts, top-{moe_config.top_k}")
+        if is_main:
+            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
+            logger.info(f"Model: Flash + MoE Transformer (FP16)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
+            logger.info(f"  Daily Encoder: {pooling_str}")
+            logger.info(f"  MoE: {moe_config.num_experts} experts, top-{moe_config.top_k}")
 
     total_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Total parameters: {total_params:,}")
+    if is_main:
+        logger.info(f"Total parameters: {total_params:,}")
     
-    # Log config
-    config_dict = {
-        'experiment': exp_name,
-        'parameters': total_params,
-        'epochs': epochs,
-        'batch_size': config.batch_size,
-        'learning_rate': config.learning_rate,
-        'embedding_size': eff_d_model,
-        'nhid': eff_nhid,
-        'nhead': eff_nhead,
-        'head_dim': dims['head_dim'],
-        'use_mixed_precision': use_mixed_precision,
-        'use_bucketing': use_bucketing
-    }
-    if moe_config:
-        config_dict['moe'] = {
-            'num_experts': moe_config.num_experts,
-            'top_k': moe_config.top_k,
-            'load_balance': moe_config.load_balance_strategy,
-            'd_model': moe_config.d_model,
-            'd_ff': moe_config.d_ff
+    # ============================================================
+    # WRAP MODEL WITH DDP
+    # ============================================================
+    if use_ddp:
+        # Synchronize all processes before wrapping
+        dist.barrier()
+        
+        model = DDP(
+            model, 
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False  # Set True if you have unused params
+        )
+        
+        if is_main:
+            logger.info(f"✅ Model wrapped with DDP on {world_size} GPUs")
+            logger.info(f"   Per-GPU batch size: {config.batch_size}")
+            logger.info(f"   Effective batch size: {config.batch_size * world_size}")
+    
+    # Log config (main process only)
+    if is_main:
+        config_dict = {
+            'experiment': exp_name,
+            'embedding_size': eff_d_model,
+            'nhid': eff_nhid,
+            'nhead': eff_nhead,
+            'batch_size': config.batch_size,
+            'effective_batch_size': config.batch_size * world_size,
+            'use_ddp': use_ddp,
+            'world_size': world_size,
+            'use_mixed_precision': use_mixed_precision,
+            'use_bucketing': use_bucketing,
+            'use_learnt_att_pool': use_learnt_att_pool,
+            'moe_config': {
+                'num_experts': moe_config.num_experts if moe_config else None,
+                'top_k': moe_config.top_k if moe_config else None,
+                'num_shared_experts': moe_config.num_shared_experts if moe_config else None,
+                'load_balance_strategy': moe_config.load_balance_strategy if moe_config else None,
+                'aux_loss_weight': moe_config.aux_loss_weight if moe_config else None,
+                'use_moe_from_layer': moe_config.use_moe_from_layer if moe_config else None,
+            } if moe_config else None
         }
-    metrics_logger.log_config(config_dict)
+        metrics_logger.log_config(config_dict)
 
     # Compute code frequencies if not provided
     if code_frequencies is None:
@@ -6151,9 +6567,30 @@ def run_single_experiment(
     # Create Datasets and DataLoaders
     train_dataset = ClinicalDataset(train_data, config)
     val_dataset = ClinicalDataset(val_data, config)
+
+    # Create samplers
+    if use_ddp:
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=local_rank,
+            shuffle=True,
+            drop_last=True
+        )
+        val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=world_size,
+            rank=local_rank,
+            shuffle=False,
+            drop_last=False
+        )
+    else:
+        train_sampler = None
+        val_sampler = None
     
-    if use_bucketing:
-        logger.info("Bucketing is ENABLED via BatchSampler.")
+    if use_bucketing and not use_ddp:
+        if is_main:
+            logger.info("Bucketing is ENABLED via BatchSampler.")
         train_batch_sampler = BucketingBatchSampler(
             data=train_data, # Sampler still needs the original df to get lengths
             batch_size=config.batch_size,
@@ -6162,30 +6599,38 @@ def run_single_experiment(
         train_loader = DataLoader(
             train_dataset,
             batch_sampler=train_batch_sampler,
-            num_workers=max(1, os.cpu_count() // 2),
+            num_workers=max(1, os.cpu_count() // max(world_size, 1) // 2),
             pin_memory=True,
             collate_fn=clinical_collate_fn
         )
     else: # For the baseline, we use a standard DataLoader
-        logger.info("Using standard DataLoader (no bucketing).")
+        if is_main:
+            if use_ddp:
+                logger.info("Using DistributedSampler (bucketing disabled for DDP).")
+            else:
+                logger.info("Using standard DataLoader (no bucketing).")
         train_loader = DataLoader(
             train_dataset,
             batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=max(1, os.cpu_count() // 2),
+            shuffle=(train_sampler is None),  # Only shuffle if no sampler
+            sampler=train_sampler,  
+            num_workers=max(1, os.cpu_count() // max(world_size, 1)),
             pin_memory=True,
             drop_last=True,
-            collate_fn=clinical_collate_fn
+            collate_fn=clinical_collate_fn,
+            persistent_workers=True if num_workers > 0 else False
         )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
         shuffle=False, # No need to bucket or shuffle validation data
-        num_workers=max(1, os.cpu_count() // 2),
+        sampler=val_sampler,
+        num_workers=max(1, os.cpu_count() // max(world_size, 1) // 2),
         pin_memory=True,
         collate_fn=clinical_collate_fn
     )
-    logger.info(f"Using high-performance DataLoader with {train_loader.num_workers} workers.")
+    if is_main:
+        logger.info(f"Using DataLoader with {train_loader.num_workers} workers.")
         
     # Set up optimizer, scheduler and scaler
     optimizer = optim.AdamW(
@@ -6205,32 +6650,58 @@ def run_single_experiment(
     best_val_loss = float('inf')
     
     if is_resume:
-        resumed_state = load_checkpoint(
-            resume_from, model, optimizer, scheduler, device, scaler
-        )
-        start_epoch = resumed_state['epoch'] + 1
-        global_step = resumed_state['global_step']
+        # Load checkpoint (handles DDP module prefix)
+        checkpoint = torch.load(resume_from, map_location=device)
         
-        # Get best val loss from history
-        if resumed_state['metrics']:
-            best_val_loss = min(m.get('val_loss', float('inf')) for m in resumed_state['metrics'])
+        # Load model state
+        if use_ddp:
+            model.module.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'])
         
-        logger.info(f"Resumed from epoch {start_epoch}, global_step {global_step}")
-        logger.info(f"Previous best val loss: {best_val_loss:.4f}")
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if scheduler and checkpoint.get('scheduler_state_dict'):
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        if scaler and checkpoint.get('scaler_state_dict'):
+            scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        start_epoch = checkpoint['epoch'] + 1
+        global_step = checkpoint.get('global_step', 0)
+        
+        if checkpoint.get('metrics'):
+            best_val_loss = min(m.get('val_loss', float('inf')) for m in checkpoint['metrics'] if 'val_loss' in m)
+        
+        if is_main:
+            logger.info(f"✅ Resumed from epoch {start_epoch}, step {global_step}")
+            logger.info(f"   Previous best val loss: {best_val_loss:.4f}")
+        
+        # Synchronize after loading
+        if use_ddp:
+            dist.barrier()
     
     
     # ============================================================
     # TRAINING LOOP
     # ============================================================
-    logger.info(f"Training for {epochs} epochs...")
+    if is_main:
+        logger.info(f"Training for {epochs} epochs...")
+        
     epoch_history = []
-    
     start_time = time.time()
     
     for epoch in range(start_epoch, epochs):
-        logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
+        
+        # CRITICAL for DDP: Set epoch on sampler for proper shuffling
+        if use_ddp and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+        
+        if is_main:
+            logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
+        
         loss_tracker.reset_epoch()
-        epoch_metrics = {}
+
         # Train
         train_metrics = train_epoch(
             model=model,
@@ -6247,13 +6718,23 @@ def run_single_experiment(
             use_bucketing=use_bucketing,
             log_interval=log_metrics_every,
             global_step=global_step,
-            loss_tracker=loss_tracker
+            loss_tracker=loss_tracker,
+            is_main=is_main,
+            use_ddp=use_ddp
         )
         
-        # Update the global steps
-        global_step = train_metrics['global_step'] 
+        if use_ddp:
+            # Sync metrics but preserve global_step
+            local_global_step = train_metrics['global_step']
+            train_metrics = sync_metrics(train_metrics, device)
+            # global_step should be total across all ranks
+            train_metrics['global_step'] = local_global_step * world_size
+            dist.barrier()
+
+        global_step = train_metrics['global_step']
         # Evaluation on training set to have inparallel training - val loss 
-        logger.info("  Evaluating on training subset...")
+        if is_main:
+            logger.info("  Evaluating on training subset...")
         train_eval_metrics = evaluate(
             model=model,
             dataloader=train_loader,
@@ -6264,9 +6745,12 @@ def run_single_experiment(
             max_batches=100,  # ✅ Only 50 batches for efficiency
             verbose=False
         )
+        if use_ddp:
+            train_eval_metrics = sync_metrics(train_eval_metrics, device)
         
-        # Evaluate
-        logger.info("  Evaluating on validation set...")
+        if is_main:
+            logger.info("  Evaluating on validation set...")
+
         val_metrics = evaluate(
             model=model,
             dataloader=val_loader,
@@ -6275,19 +6759,21 @@ def run_single_experiment(
             device=device,
             use_mixed_precision=use_mixed_precision,
         )
-
-        if epoch % check_embeddings_every == 0:
+        if use_ddp:
+            val_metrics = sync_metrics(val_metrics, device)
+            
+        # Embedding quality (main process only for efficiency)
+        if is_main and epoch % check_embeddings_every == 0:
             logger.info("Computing embedding quality...")
             emb_metrics = compute_embedding_quality_epoch(
-                model, 
-                val_data,  # ← Original DataFrame is available here
+                model.module if use_ddp else model,  # Unwrap DDP
+                val_data,
                 config, 
                 device, 
                 num_samples=200,
                 use_mixed_precision=use_mixed_precision 
             )
-            val_metrics.update(emb_metrics)  # Add to val_metrics
-
+            val_metrics.update(emb_metrics)
             logger.info(f"    Embedding std: {emb_metrics['embedding_std_mean']:.4f}")
             logger.info(f"    NN overlap: {emb_metrics['nn_target_overlap']:.3f}")
         
@@ -6328,143 +6814,138 @@ def run_single_experiment(
         epoch_history.append(epoch_metrics)
         
         
-        # ====================================================================
-        # SAVE TRAINING CHECKPOINTS
-        # ====================================================================        
-        is_best = epoch_metrics['final_val_loss'] < best_val_loss
-        if is_best:
-            best_val_loss = epoch_metrics['final_val_loss']
-        
-        save_checkpoint(
-            checkpoint_dir=checkpoint_dir,
-            epoch=epoch,
-            global_step=global_step,
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            scaler=scaler,
-            metrics=epoch_history,
-            is_best=is_best
-        )
-        logger.info(f"Checkpoint saved (epoch {epoch+1}, step {global_step})")
+        # ============================================================
+        # SAVE CHECKPOINTS (main process only)
+        # ============================================================
+        if is_main:
+            is_best = epoch_metrics['final_val_loss'] < best_val_loss
+            if is_best:
+                best_val_loss = epoch_metrics['final_val_loss']
+            
+            # Save unwrapped model state
+            model_to_save = model.module if use_ddp else model
+            
+            save_checkpoint(
+                checkpoint_dir=checkpoint_dir,
+                epoch=epoch,
+                global_step=global_step,
+                model=model_to_save,  # Unwrapped!
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                metrics=epoch_history,
+                is_best=is_best
+            )
+            logger.info(f"Checkpoint saved (epoch {epoch+1}, step {global_step})")
 
-        # ====================================================================
-        # LOG EPOCH METRICS
-        # ====================================================================
-        logger.info(f"\n--- Epoch {epoch+1} Summary ---")
-        logger.info(f"Training Progress:")
-        logger.info(f"  Loss (learning avg): {train_metrics['train_loss']:.4f}")
-        logger.info(f"  Loss (first batch):  {train_metrics['train_loss_first']:.4f}")
-        logger.info(f"  Loss (last batch):   {train_metrics['train_loss_last']:.4f}")
-        logger.info(f"  Improvement:         {train_metrics['train_loss_improvement']:.4f}")
+            # Log epoch summary
+            logger.info(f"\n--- Epoch {epoch+1} Summary ---")
+            logger.info(f"Training Progress:")
+            logger.info(f"  Loss (learning avg): {train_metrics['train_loss']:.4f}")
+            logger.info(f"  Loss (first batch):  {train_metrics['train_loss_first']:.4f}")
+            logger.info(f"  Loss (last batch):   {train_metrics['train_loss_last']:.4f}")
+            logger.info(f"  Improvement:         {train_metrics['train_loss_improvement']:.4f}")
+            
+            logger.info(f"\nFinal Model Performance:")
+            logger.info(f"  Train loss (final):  {train_eval_metrics['val_loss']:.4f}")
+            logger.info(f"  Val loss:            {val_metrics['val_loss']:.4f}")
+            logger.info(f"  Train Top-10:        {train_eval_metrics['top_10_acc']:.3f}")
+            logger.info(f"  Val Top-10:          {val_metrics['top_10_acc']:.3f}")
+            
+            metrics_logger.log_epoch(epoch + 1, epoch_metrics)
+            
+            loss_tracker.save_trajectory(
+                filepath=os.path.join(effective_log_dir, exp_name, f'loss_trajectory_epoch{epoch}.json')
+            )
         
-        logger.info(f"\nFinal Model Performance:")
-        logger.info(f"  Train loss (final):  {train_eval_metrics['val_loss']:.4f}")
-        logger.info(f"  Val loss:            {val_metrics['val_loss']:.4f}")
-        logger.info(f"  Gap (train-val loss):{epoch_metrics['generalization_gap']:+.4f}")
-        logger.info(f"  Train Top-10:        {train_eval_metrics['top_10_acc']:.3f}")
-        logger.info(f"  Val Top-10:          {val_metrics['top_10_acc']:.3f}")
-        
-        gap = epoch_metrics['generalization_gap']
-        if gap > 0.01:
-            logger.warning(f"  ⚠️  Overfitting detected! Gap = {gap:.4f}")
-        elif gap < -0.005:
-            logger.warning(f"  ⚠️  Underfitting! Val loss < train loss by {abs(gap):.4f}")
-        else:
-            logger.info(f"  ✅ Good generalization (gap = {gap:+.4f})")        
-        if 'train_recall@10' in train_metrics:
-            logger.info(f"\nBatch Metrics (during learning):")
-            logger.info(f"Train Recall@10: {train_metrics['train_recall@10']:.3f}")
-            logger.info(f"Train mAP@20: {train_metrics['train_mAP@20']:.3f}")
-            logger.info(f"Train Brier: {train_metrics['train_brier_score']:.4f}")
-        
-        if 'embedding_std_mean' in val_metrics:
-            logger.info(f"Embedding std: {val_metrics['embedding_std_mean']:.4f}")
-            logger.info(f"NN overlap: {val_metrics['nn_target_overlap']:.3f}")
-        
-        if 'train_expert_load_cv' in train_metrics:
-            logger.info(f"MoE Load CV: {train_metrics['train_expert_load_cv']:.3f}")
-            logger.info(f"MoE Collapsed: {train_metrics['train_num_collapsed_experts']}")
-
-        metrics_logger.log_epoch(epoch + 1, epoch_metrics)
-        
-        # Save loss trajectory
-        loss_tracker.save_trajectory(
-            filepath=os.path.join(effective_log_dir, exp_name, f'loss_trajectory_epoch{epoch}.json')
-        )    
+        # Synchronize all processes at epoch end
+        if use_ddp:
+            dist.barrier()
+            
     total_time = time.time() - start_time
-    logger.info(f"\nTraining completed in {total_time:.1f}s")
+    
+    if is_main:
+        logger.info(f"\nTraining completed in {total_time:.1f}s")
             
     # ========================================================================
     # COMPREHENSIVE EVALUATION
     # ========================================================================
-    evaluation = comprehensive_evaluation(
-        model=model,
-        val_dataloader=val_loader,
-        config=config,
-        device=device,
-        training_time_sec=total_time,
-        epoch_history=epoch_history,
-        code_frequencies=code_frequencies,
-        moe_config=moe_config,
-        use_mixed_precision=use_mixed_precision
-    )
+    if is_main:
+        model_to_eval = model.module if use_ddp else model 
+        evaluation = comprehensive_evaluation(
+            model=model_to_eval,
+            val_dataloader=val_loader,
+            config=config,
+            device=device,
+            training_time_sec=total_time,
+            epoch_history=epoch_history,
+            code_frequencies=code_frequencies,
+            moe_config=moe_config,
+            use_mixed_precision=use_mixed_precision
+        )
+
+        # ============================================================
+        # FINAL RESULTS
+        # ============================================================
+        final_metrics = epoch_history[-1]
+
+        results = {
+            'experiment': exp_name,
+            'parameters': total_params,
+            'use_learned_pooling': use_learnt_att_pool,
+            'use_bucketing': use_bucketing,
+
+            'train_loss_mean': final_metrics['train_loss'],        # Learning average
+            'train_loss_learned': final_metrics['train_loss_improvement'],
+            'train_loss_final': final_metrics['eval_in_train_loss_final'],     # Final model on train
+            'val_loss_final': final_metrics['final_val_loss'],                     # Final model on val
+            'generalization_gap': final_metrics['generalization_gap'], # Overfitting indicator
+
+            # Evaluation in training and in final eval set
+            'final_train_top_5_acc': final_metrics['eval_in_train_top_5_acc'],
+            'final_train_top_10_acc': final_metrics['eval_in_train_top_10_acc'],
+            'final_train_top_20_acc': final_metrics['eval_in_train_top_20_acc'],
+            'final_val_top_5_acc': final_metrics['final_val_top_5_acc'],
+            'final_val_top_10_acc': final_metrics['final_val_top_10_acc'],
+            'final_val_top_20_acc': final_metrics['final_val_top_20_acc'],
+
+            'training_time_sec': total_time,
+            'precision@10': evaluation['performance']['precision@10'],
+            'recall@10': evaluation['performance']['recall@10'],
+            'f1@10': evaluation['performance']['f1@10'],
+            'balanced_top10_acc': evaluation['performance']['balanced_top10_acc'],
+            'tail_top10_acc': evaluation['performance']['tail_top10_acc'],
+            'cost_usd': evaluation['resources']['cost_usd'],
+            'peak_memory_gb': evaluation['resources']['total_peak_gb'],
+            'full_evaluation': evaluation,
+            'all_epochs': epoch_history
+        }
+
+        # Save complete results to JSON for later comparison
+        results_path = metrics_logger.save_final_results(results)
+        logger.info(f"Complete results saved to {results_path}")    
+
+        # Save metrics
+        metrics_logger.save()
+        logger.info(f"Metrics saved to {log_dir}/{exp_name}/")
+
+        # Print summary
+        summary = metrics_logger.get_summary()
+        logger.info(f"\n{'='*80}")
+        logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
+        logger.info(f"{'='*80}")
+        logger.info(f"Final Top-10 Acc in val: {final_metrics['final_val_top_10_acc']:.3f}")
+        logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f} (epoch {summary['best_epoch']})")
+        logger.info(f"Training Time: {total_time:.1f}s")
+        logger.info(f"{'='*80}\n")
+
+    if use_ddp:
+        dist.barrier()
     
-    # ============================================================
-    # FINAL RESULTS
-    # ============================================================
-    final_metrics = epoch_history[-1]
-    
-    results = {
-        'experiment': exp_name,
-        'parameters': total_params,
-        'use_learned_pooling': use_learnt_att_pool,
-        'use_bucketing': use_bucketing,
-        
-        'train_loss_mean': final_metrics['train_loss'],        # Learning average
-        'train_loss_learned': final_metrics['train_loss_improvement'],
-        'train_loss_final': final_metrics['eval_in_train_loss_final'],     # Final model on train
-        'val_loss_final': final_metrics['final_val_loss'],                     # Final model on val
-        'generalization_gap': final_metrics['generalization_gap'], # Overfitting indicator
-        
-        # Evaluation in training and in final eval set
-        'final_train_top_5_acc': final_metrics['eval_in_train_top_5_acc'],
-        'final_train_top_10_acc': final_metrics['eval_in_train_top_10_acc'],
-        'final_train_top_20_acc': final_metrics['eval_in_train_top_20_acc'],
-        'final_val_top_5_acc': final_metrics['final_val_top_5_acc'],
-        'final_val_top_10_acc': final_metrics['final_val_top_10_acc'],
-        'final_val_top_20_acc': final_metrics['final_val_top_20_acc'],
-        
-        'training_time_sec': total_time,
-        'precision@10': evaluation['performance']['precision@10'],
-        'recall@10': evaluation['performance']['recall@10'],
-        'f1@10': evaluation['performance']['f1@10'],
-        'balanced_top10_acc': evaluation['performance']['balanced_top10_acc'],
-        'tail_top10_acc': evaluation['performance']['tail_top10_acc'],
-        'cost_usd': evaluation['resources']['cost_usd'],
-        'peak_memory_gb': evaluation['resources']['total_peak_gb'],
-        'full_evaluation': evaluation,
-        'all_epochs': epoch_history
-    }
-    # Save complete results to JSON for later comparison
-    results_path = metrics_logger.save_final_results(results)
-    logger.info(f"Complete results saved to {results_path}")
-        
-    # Save metrics
-    metrics_logger.save()
-    logger.info(f"Metrics saved to {log_dir}/{exp_name}/")
-    
-    # Print summary
-    summary = metrics_logger.get_summary()
-    logger.info(f"\n{'='*80}")
-    logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
-    logger.info(f"{'='*80}")
-    logger.info(f"Final Top-10 Acc in val: {final_metrics['final_val_top_10_acc']:.3f}")
-    logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f} (epoch {summary['best_epoch']})")
-    logger.info(f"Training Time: {total_time:.1f}s")
-    logger.info(f"{'='*80}\n")
-    
-    return results
+    if is_main:
+        return results
+    else:
+        return {'experiment': exp_name, 'rank': local_rank}
 
 
 def run_selected_experiments(
@@ -6473,7 +6954,10 @@ def run_selected_experiments(
     val_data: pd.DataFrame,
     device: torch.device,
     epochs: int = 10,
-    experiment_round: Optional[str] = None 
+    experiment_round: Optional[str] = None,
+    embedding_size: Optional[int] = None,
+    local_rank: Optional[int] = None,      
+    world_size: Optional[int] = None       
 ) -> pd.DataFrame:
     """
     Run SELECTED experiments (flexible subset).
@@ -6502,10 +6986,13 @@ def run_selected_experiments(
             df_train, df_val, device
         )
     """
-    print("\n" + "="*80)
-    print(f"RUNNING {len(experiment_names)} SELECTED EXPERIMENTS")
-    print("="*80)
+    is_main = (local_rank is None) or (local_rank == 0)
     
+    if is_main:  # Only main process prints
+        print("\n" + "="*80)
+        print(f"RUNNING {len(experiment_names)} SELECTED EXPERIMENTS")
+        print("="*80)
+        
     # Get all available configurations
     all_configs = get_experiment_configs()
     
@@ -6518,6 +7005,7 @@ def run_selected_experiments(
     all_results = []
     
     for exp_name in experiment_names:
+        
         # Clean GPU before each experiment
         if device.type == 'cuda':
             torch.cuda.synchronize()
@@ -6536,7 +7024,10 @@ def run_selected_experiments(
             val_data=val_data,
             device=device,
             epochs=epochs,
-            experiment_round=experiment_round
+            experiment_round=experiment_round,
+            embedding_size=embedding_size,
+            local_rank=local_rank,      
+            world_size=world_size 
         )
         
         all_results.append(results)
@@ -6593,7 +7084,7 @@ def run_all_experiments(
 
 # ### Memory management
 
-# In[51]:
+# In[26]:
 
 
 import torch
@@ -6835,7 +7326,7 @@ def load_checkpoint_multigpu(
 
 # ### Time and cost estimation
 
-# In[58]:
+# In[27]:
 
 
 import numpy as np
@@ -7016,7 +7507,7 @@ for n in [1, 2, 4]:
     print("Flash+MoE", n, "GPU:", h100_time_cost(12_000_000, 1, "flash_moe", n))
 
 
-# In[7]:
+# In[28]:
 
 
 scenarios = [
@@ -8787,7 +9278,7 @@ test_full_experiment_simulation()
 
 # #### Training with real data
 
-# In[52]:
+# In[28]:
 
 
 import google.auth
@@ -8798,7 +9289,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[39]:
+# In[33]:
 
 
 # Device setup
@@ -8828,7 +9319,7 @@ df_val = df_remain.sample(100000, random_state=42, replace=False)
 df_test = df_remain.drop(df_val.index)
 
 
-# In[53]:
+# In[29]:
 
 
 import pandas as pd
@@ -8836,10 +9327,16 @@ df_train = pd.read_feather("sample_data/mdcd_train_1m.feather")
 df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 
 
-# In[27]:
+# In[56]:
 
 
 df_train.shape
+
+
+# In[57]:
+
+
+df_val.shape
 
 
 # #### If flash_attention works?
@@ -8904,6 +9401,37 @@ results_df = run_selected_experiments(
 
 
 results_df.to_excel("experiment_logs/exp1_64k_3epoch_16batch_Nov11.xlsx")
+
+
+# In[ ]:
+
+
+# Clean up GPU memory everytime before running the test
+cleanup_gpu_memory_hard()
+
+# Minimal dataset
+train_tiny = df_train.sample(64000)
+val_tiny = df_val.sample(3200)
+
+# Run 3 experiments
+exp_names = ['exp1_dense_baseline', 
+             'exp2_dense_flash',
+             'exp2b_flash_learned_pool',
+             'exp3_standard_moe',
+             'exp3b_moe_learned_pool',
+             'exp4_shared_expert',
+             'exp5_fine_grained'
+            ]
+
+print(f"  Running {len(exp_names)} experiments (1 epoch each, 32 samples)...")
+
+results_df = run_selected_experiments(
+    experiment_names=exp_names,
+    train_data=train_tiny,
+    val_data=val_tiny,
+    device=device,
+    epochs=3
+)
 
 
 # #### Experiment 2 - dive deep into MOE issues Nov 16
@@ -9002,33 +9530,6 @@ with open(output_path, 'w', encoding='utf-8') as f:
      )
 
 
-# In[57]:
-
-
-# Clean up before running
-cleanup_gpu_memory_hard()
-
-# Define your experiment round name
-round_name = "exp_round2_ablation_swiglu_aux_layer_auxiliary_nov16_2025"
-# Minimal dataset
-train_tiny = df_train.sample(64000)
-val_tiny = df_val.sample(3200)
-# Select experiments to run
-exp_names = [
-    'exp6_auxiliary_free'
-]
-
-# Run experiments with round name
-results_df_1 = run_selected_experiments(
-    experiment_names=exp_names,
-    train_data=train_tiny,
-    val_data=val_tiny,
-    device=device,
-    epochs=2,
-    experiment_round=round_name
-)
-
-
 # In[58]:
 
 
@@ -9041,34 +9542,109 @@ results_df_1.head()
 results_df = pd.concat([results_df, results_df_1])
 
 
+# #### Conclusion and lessoned from Exp1 and Exp2
+
+# ##### **Round 1: The Baseline & The Crash**
+# *   **Goal:** Establish a dense baseline and introduce Mixture-of-Experts (MoE) with Flash Attention.
+# *   **Experiments:**
+#     1.  **Dense Baseline:** Standard Transformer (FP32, 16 heads, Max Pooling). **Recall@1: ~0.697**.
+#     2.  **Flash Attention:** Dense model with Flash Attention (FP16, 8 heads). **Recall@1: ~0.697**. (Proven: Flash Attention works without performance loss).
+#     3.  **MoE Variants:** Standard (Top-2), Shared Expert, Fine-grained.
+# *   **Result:** All MoE models failed catastrophically, plateauing at **Recall@1 ~0.305** (vs ~0.70 for dense).
+# *   **Initial Diagnoses:**
+#     *   *Auxiliary Loss Dominance:* The loss used to balance experts was ~10x larger than the prediction loss, forcing the model to prioritize balancing over learning.
+#     *   *Expert Collapse:* Many experts were unused.
+#     *   *Premature Insertion:* MoE layers started too early (Layer 2 of 6).
+#     *   *Activation Mismatch:* Expert 3 hypothesized that switching from SwiGLU (Dense layers) to GELU (MoE layers) caused the failure.
+# 
+# ##### **Round 2: Ablation Studies (Testing Hypotheses)**
+# *   **Goal:** systematically isolate and test the root causes identified in Round 1.
+# *   **Adjustments & Results:**
+#     *   **Exp3a (Activation Consistency):** Switched MoE experts to use **SwiGLU** (matching dense layers).
+#         *   *Result:* Performance **dropped** slightly (Recall@1: 0.320).
+#         *   *Learnings:* **Refuted** the hypothesis that activation mismatch was the root cause.
+#     *   **Exp3c (Layer Placement):** Moved MoE start from Layer 2 to **Layer 4**.
+#         *   *Result:* Performance **dropped** slightly (Recall@1: 0.311).
+#         *   *Learnings:* **Refuted** the hypothesis that premature MoE insertion was the issue.
+#     *   **Exp3d (Aux Loss Tuning):** Reduced auxiliary loss weight from 0.01 to **0.001**.
+#         *   *Result:* **Best MoE performance** (Recall@1: 0.341), but still far below dense baseline.
+#         *   *Learnings:* **Partially Confirmed**. High aux loss hurts, but fixing it only closes ~6% of the performance gap. Crucially, this model had *higher* expert imbalance, suggesting that **forced balance hurts performance**.
+# 
+# ---
+# 
+# ##### **What We Agree On (Proven)**
+# 1.  **Auxiliary Loss was too high:** Reducing the weight improved performance, confirming that the original setup forced the router to care more about load balancing than prediction.
+# 2.  **Flash Attention is valid:** The switch to 8 heads and FP16 (Exp2) matched the FP32 baseline perfectly, proving the base architecture changes are sound.
+# 3.  **Forced Balance is harmful:** The best performing MoE model (Exp3d) had *more* unbalanced experts than the worst ones. This flips the common wisdom: some expert collapse/specialization is necessary for this task.
+# 4.  **MoE is consistently stuck:** Regardless of activation function, layer depth, or pooling, all MoE variants plateau in the **0.30-0.34** range, suggesting a fundamental structural or scale issue rather than a hyperparameter bug.
+# 
+# ##### **What We Disagree On / Refuted**
+# *   **Refuted:** *Activation Mismatch* is NOT the killer. Changing to SwiGLU didn't fix it.
+# *   **Refuted:** *Premature Insertion* is NOT the killer. Moving MoE deeper didn't fix it.
+# *   **Refuted:** *Expert Collapse* is the primary enemy. Evidence suggests that minimizing collapse (via high aux loss) actually degrades predictive performance.
+# 
+# ---
+# 
+# ##### 3. The "Why": Emerging Structural Hypotheses
+# 
+# Since the "easy" fixes (activations, layers, loss weights) failed to close the massive gap (0.34 vs 0.70), the experts have identified **three deeper structural flaws**:
+# 
+# 1.  **The Embedding Bottleneck (Critical):**
+#     *   You are compressing **84,000** distinct medical codes into a tiny **256-dimensional** vector.
+#     *   *Consequence:* The vector space is too crowded. The linear router cannot mathematically separate "Diabetes" from "Hypertension" because their vectors are too similar. It is routing noise.
+# 
+# 2.  **Scale Mismatch:**
+#     *   MoE is typically used for **Billion-parameter** models where compute is the bottleneck.
+#     *   *Consequence:* Applying MoE to a tiny **27M parameter** model adds massive routing overhead and training instability without the benefit of scale. You are paying the "MoE tax" without the "Scale dividend."
+# 
+# 3.  **Cold Start / Training Duration:**
+#     *   MoE routers need to "discover" clusters before experts can specialize.
+#     *   *Consequence:* Starting with a random router (`std=0.01`) and training for only 3 epochs means the model never leaves the chaotic initialization phase.
+# 
+# ##### 4. Recommendations for Next Steps
+# 1.  **Widen the Bottleneck:** Increase `embedding_size` to **512** or **768** to let the router distinguish concepts.
+# 2.  **Fix Initialization:** Use **Kaiming initialization** (higher variance) for the router to break symmetry early.
+# 3.  **Upcycling Strategy:** Do not train MoE from scratch. Train a **Dense** model first, then "upcycle" (copy) its weights to the experts to initialize the MoE.
+# 4.  **Longer Training:** MoE requires significantly more epochs (10-20+) to converge compared to dense models.
+
 # #### Experiment 3 Increase embedding size and training sample size Nov 26
 
 # In[ ]:
+
+
+cleanup_gpu_memory_hard()
+
+
+# In[52]:
 
 
 # Clean up before running
 cleanup_gpu_memory_hard()
 
 # Define your experiment round name
-round_name = "exp_round3_ablation_larger_dim384-512_trainsize_nov26_2025"
-
+round_name = "exp_round3_ablation_larger_dim512_trainsize_kaiming-moe-init_nov26_2025"
+train_tiny = df_train.sample(320000)
+val_tiny = df_val.sample(32000)
 # Select experiments to run
 exp_names = [
-    'exp2b_flash_learned_pool',
-    'exp3e_moe_swiglu_learned_pool_layer2_aux001',
-    'exp6_auxiliary_free',
-    'exp6a_auxiliary_free_layer4',
-    'exp6b_auxiliary_free_no-share-exp'
+    'exp1_dense_baseline', 
+    'exp3_standard_moe'
+    # 'exp6a_auxiliary_free_layer4',
+    # 'exp6b_auxiliary_free_no-share-exp',
+    # 'exp6_auxiliary_free',
+    # 'exp2b_flash_learned_pool',
+    # 'exp3e_moe_swiglu_learned_pool_layer2_aux001'
 ]
 
 # Run experiments with round name
-results_df_2 = run_selected_experiments(
+results_df_1 = run_selected_experiments(
     experiment_names=exp_names,
-    train_data=df_train,
-    val_data=df_val,
+    train_data=train_tiny,
+    val_data=val_tiny,
     device=device,
-    epochs=3,
-    experiment_round=round_name
+    epochs=1,
+    experiment_round=round_name,
+    embedding_size=512
 )
 
 
@@ -9076,4 +9652,30 @@ results_df_2 = run_selected_experiments(
 
 
 
+
+
+# In[ ]:
+
+
+results_df_3 = pd.concat([
+                        result_df_1
+                        result_df_2], axis = 0)
+
+
+# In[ ]:
+
+
+results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-moe-init_nov26.xlsx")
+
+
+# In[50]:
+
+
+
+
+
+# In[48]:
+
+
+get_ipython().system('pip install openpyxl')
 
