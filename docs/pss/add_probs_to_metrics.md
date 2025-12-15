@@ -1,3 +1,60 @@
+## Data Flow
+### Train val test split
+```sql
+input_sql = """
+select 
+a.*, 
+'Medicaid' as lob,
+b.acute_ip_flag
+from
+edp-prod-storage.edp_ent_sdoheir_cns.a834793_Medicaid_o3_train_ending a
+left join edp-prod-storage.edp_ent_sdoheir_cns.a964286_Medicaid_outcome_ip_4_te_experiment b
+on a.individual_id = b.individual_id
+"""
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         RECOMMENDED IMPLEMENTATION                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    input_data (merged features + outcomes)
+           │
+           │ stratified_holdout_split
+           │
+    ┌──────┴──────────────────┬───────────────────────┐
+    │                         │                       │
+    ▼                         ▼                       ▼
+train_data (75%)         val_data (10%)      holdout_test_data (15%)
+    │                         │                       │
+    │                         │                       │
+    ▼                         ▼                       │
+┌─────────────────────────────────────────┐          │
+│         TRANSFORMER TRAINING             │          │
+│  - train_data: gradient updates          │          │
+│  - val_data: loss monitoring, early stop │          │
+└─────────────────────────────────────────┘          │
+                    │                                 │
+                    │ Model training complete         │
+                    ▼                                 │
+┌─────────────────────────────────────────┐          │
+│         DOWNSTREAM EVALUATION            │          │
+│                                          │          │
+│  Probe Training:                         │          │
+│    - Use val_data for probe train/val    │          │
+│    - Extract embeddings from val_data    │          │
+│    - Train logistic regression           │          │
+│                                          │          │
+│  Final Evaluation:                       │          │
+│    - Use holdout_test_data ◀─────────────┼──────────┘
+│    - Extract embeddings (NEVER SEEN!)    │
+│    - Evaluate probe on holdout           │
+│    - Report THESE metrics                │
+└─────────────────────────────────────────┘
+
+### Justification of using val for training probe classfication
+- The embeddings are artificially "good" because the model has seen these patients
+- The probe will achieve higher performance than it would on truly unseen data
+- You're not measuring transfer capability, you're measuring memorization
+
 
 ## Implementation: Linear Probe Evaluation for age, gender, and presence of ICD9 codes
 

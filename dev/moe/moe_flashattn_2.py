@@ -49,7 +49,7 @@ Date: 2025-10-24
 """
 
 
-# In[2]:
+# In[ ]:
 
 
 # ============================================================================
@@ -105,13 +105,7 @@ Date: 2025-10-24
 # ============================================================================
 
 
-# In[1]:
-
-
-import pandas as pd
-
-
-# In[2]:
+# In[17]:
 
 
 import pandas as pd
@@ -120,7 +114,7 @@ df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[28]:
+# In[18]:
 
 
 """
@@ -166,7 +160,7 @@ print(f"Using device: {device}")
 
 # ### Configurations
 
-# In[29]:
+# In[19]:
 
 
 # ============================================================================
@@ -233,7 +227,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[30]:
+# In[20]:
 
 
 @dataclass
@@ -264,7 +258,7 @@ class BaseConfig:
     age_vocab: int = 1440     # Age in months (120 years)
     
     # Training
-    batch_size: int = 16     # Batch size
+    batch_size: int = 32     # Batch size (change from 16 to 32)
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
     gradient_clip: float = 1.0  # Gradient clipping norm
@@ -350,7 +344,7 @@ class MoEConfig:
 
 
 
-# In[64]:
+# In[21]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -587,7 +581,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### RPE and Swiglu
 
-# In[65]:
+# In[22]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -710,7 +704,7 @@ class SwiGLU(nn.Module):
         return output
 
 
-# In[8]:
+# In[7]:
 
 
 def test_rotary_position_embedding():
@@ -727,7 +721,7 @@ def test_rotary_position_embedding():
 test_rotary_position_embedding()
 
 
-# In[9]:
+# In[8]:
 
 
 def test_swiglu_forward():
@@ -743,7 +737,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[66]:
+# In[23]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -982,7 +976,7 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
-# In[11]:
+# In[10]:
 
 
 def test_flash_attention_layer_fallback():
@@ -1007,7 +1001,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[34]:
+# In[24]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1090,7 +1084,7 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
-# In[13]:
+# In[12]:
 
 
 def test_learned_attention_pooling():
@@ -1106,7 +1100,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[35]:
+# In[25]:
 
 
 # ============================================================================
@@ -1289,7 +1283,13 @@ class MoELayer(nn.Module):
         
         # Router network
         self.router = nn.Linear(config.d_model, self.num_routed_experts, bias=False)
-        nn.init.normal_(self.router.weight, mean=0.0, std=0.01)
+        # Kaiming initialization for better routing diversity at startup
+        # Formula: std = sqrt(2 / fan_in), where fan_in = d_model
+        # For d_model=256: std ≈ 0.088 (9x larger than previous 0.01)
+        # For d_model=512: std ≈ 0.063 (6x larger than previous 0.01)
+        fan_in = config.d_model
+        std = math.sqrt(2.0 / fan_in)
+        nn.init.normal_(self.router.weight, mean=0.0, std=std)
         
         # Routed experts
         self.experts = nn.ModuleList([
@@ -1439,6 +1439,8 @@ class MoELayer(nn.Module):
         return output, losses
 
 
+# #### Test
+
 # In[15]:
 
 
@@ -1512,7 +1514,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[36]:
+# In[26]:
 
 
 # ============================================================================
@@ -1690,7 +1692,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[37]:
+# In[27]:
 
 
 # ============================================================================
@@ -1830,6 +1832,7 @@ class FlashAttentionTransformer(nn.Module):
         gpu_batchsize = x.shape[0]
         actual_len_dy = x.shape[1]
         actual_len_cd = x.shape[2] - 2 
+        
         # Extract and embed (same as baseline)
         age_in_months = self.embedding_age_in_months(x[:, :, 0].long())
         gender_cd = self.embedding_gender_cd(x[:, :, 1].long())
@@ -1899,6 +1902,7 @@ class FlashAttentionTransformer(nn.Module):
         
         # Output projection
         cd = torch.swapaxes(cd, 0, 1)
+        
         cd = self.norm(cd)
         cd = self.dropout(cd)
         cd = self.decoder_cd(cd)
@@ -1909,7 +1913,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[38]:
+# In[28]:
 
 
 # ============================================================================
@@ -1925,7 +1929,7 @@ class FlashMoETransformer(nn.Module):
     2. MoE for conditional computation
     3. Flexible configuration for 5 experiments
     
-    MoE placement: layers 2-5 (after learning basic patterns)
+    MoE placement: layers 2-5 (after learning basic patterns); may change to 4-5
     """
     
     def __init__(self, config: FlashAttentionConfig, moe_config: Optional[MoEConfig] = None):
@@ -2025,7 +2029,10 @@ class FlashMoETransformer(nn.Module):
         nn.init.zeros_(self.decoder_cd.bias)
         nn.init.uniform_(self.decoder_cd.weight, -initrange, initrange)
     
-    def forward(self, x: torch.Tensor, return_moe_losses: bool = True) -> Tuple[torch.Tensor, Dict]:
+    def forward(self, 
+                x: torch.Tensor, 
+                return_moe_losses: bool = True
+               ) -> Tuple[torch.Tensor, Dict]:
         """
         Forward pass with Flash Attention + MoE.
         
@@ -2108,6 +2115,7 @@ class FlashMoETransformer(nn.Module):
         
         # Output
         cd = torch.swapaxes(cd, 0, 1)
+        
         cd = self.norm(cd)
         cd = self.dropout(cd)
         cd = self.decoder_cd(cd)
@@ -2215,7 +2223,7 @@ test_flash_moe_transformer_forward()
 
 # #### Preprocess data with data loader
 
-# In[39]:
+# In[29]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2272,7 +2280,7 @@ class ClinicalDataset(Dataset):
         }
 
 
-# In[40]:
+# In[30]:
 
 
 def clinical_collate_fn(batch):
@@ -2309,7 +2317,7 @@ def clinical_collate_fn(batch):
 
 # #### Data preparation
 
-# In[41]:
+# In[31]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2535,7 +2543,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function
 
-# In[42]:
+# In[32]:
 
 
 def compute_loss(
@@ -2999,7 +3007,7 @@ results = diagnose_with_trained_checkpoint()
 
 # #### Loss logger
 
-# In[43]:
+# In[33]:
 
 
 class LossTracker:
@@ -3125,7 +3133,7 @@ class LossTracker:
 
 # #### Train and evaluation
 
-# In[44]:
+# In[34]:
 
 
 # Training each epoch
@@ -3724,7 +3732,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[45]:
+# In[35]:
 
 
 def save_checkpoint(
@@ -4241,7 +4249,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[59]:
+# In[36]:
 
 
 class MetricsLogger:
@@ -4308,7 +4316,7 @@ class MetricsLogger:
     def convert_to_serializable(obj):
         """Recursively convert numpy/torch types to native Python types for JSON serialization."""
         if isinstance(obj, dict):
-            return {MetricsLogger.convert_to_serializable(v) for k, v in obj.items()}
+            return {k: MetricsLogger.convert_to_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
             return [MetricsLogger.convert_to_serializable(item) for item in obj]
         elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
@@ -4340,13 +4348,13 @@ class MetricsLogger:
         if self.config:
             with open(self.log_path / 'config.json', 'w') as f:
                 json.dump(self.convert_to_serializable(self.config), f, indent=2)
-    
+                
     def save_final_results(self, results: Dict):
         """Save complete experiment results to JSON for later comparison."""
         results_path = self.log_path / 'final_results.json'
         with open(results_path, 'w') as f:
             json.dump(self.convert_to_serializable(results), f, indent=2)
-        return results_path
+        return results_path    
     
     def get_summary(self) -> Dict:
         """Get summary statistics."""
@@ -4369,15 +4377,9 @@ class MetricsLogger:
         }
 
 
-# In[145]:
-
-
-
-
-
 # #### Batch-based metrics
 
-# In[60]:
+# In[37]:
 
 
 def compute_batch_metrics_lightweight(
@@ -4555,89 +4557,51 @@ def compute_embedding_quality_epoch(
     )    
     all_embeddings = []
     all_targets = []
-    
-    with torch.no_grad():
-        
-        for batch in val_loader:  # ← Use DataLoader instead of manual iteration
-            age = batch['age'].to(device)
-            gender = batch['gender'].to(device)
-            codes = batch['codes'].to(device)
-            dt_cnt = batch['dt_cnt']
-            y = batch['target']
-            
-            x = torch.cat([
-                age.unsqueeze(-1),
-                gender.unsqueeze(-1),
-                codes
-            ], dim=-1)
-            
-            # Get ACTUAL batch size (might be smaller in last batch)
-            batch_size_actual = x.shape[0]
-            
-            # Extract embeddings (last temporal layer output, before classifier)
-            # Works for all model types
-            if isinstance(model, BaselineTransformer):
-                # Run through model but capture before decoder
-                age_in_months = model.embedding_age_in_months(x[:, :, 0].long())
-                gender_cd = model.embedding_gender_cd(x[:, :, 1].long())
-                cd = model.embedding_cd(x[:, :, 2:].long())
-                cd_res = cd.sum(-2)
-                
-                # Daily encoding
-                cd = cd.reshape(-1, config.len_cd, config.embedding_size)
-                cd = torch.swapaxes(cd, 0, 1)
-                cd = model.transformer_encoder_cd(cd)
-                cd = cd.permute(1, 2, 0)
-                cd = nn.MaxPool1d(config.len_cd)(cd)
-                cd = cd.reshape(batch_size_actual, config.len_dy, config.embedding_size)
-                
-                # Combine
-                cd = cd_res + cd + gender_cd + age_in_months
-                cd = model.mm(cd)
-                cd = model.norm(cd)
-                cd = torch.swapaxes(cd, 0, 1)
-                
-                # Temporal encoding
-                mth_mask = model._generate_square_subsequent_mask(config.len_dy).to(device)
-                embeddings = model.transformer_encoder_dy(cd, mth_mask)
-                embeddings = torch.swapaxes(embeddings, 0, 1)  # [batch, len_dy, 256]
-                
-            else:
-                # For Flash/MoE models - just get output before decoder
-                # Run full forward then extract
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():  
+            for batch in val_loader:  # ← Use DataLoader instead of manual iteration
+                age = batch['age'].to(device)
+                gender = batch['gender'].to(device)
+                codes = batch['codes'].to(device)
+                dt_cnt = batch['dt_cnt']
+                y = batch['target']
+
+                x = torch.cat([
+                    age.unsqueeze(-1),
+                    gender.unsqueeze(-1),
+                    codes
+                ], dim=-1)
+
+                # ============================================================
+                # FORWARD PASS - hook captures embeddings automatically
+                # ============================================================
                 if use_mixed_precision:
                     dtype = getattr(config, 'dtype', torch.float16)
                     with torch.cuda.amp.autocast(dtype=dtype):
-                        if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
-                            output_full, _ = model(x, return_moe_losses=False)
+                        if isinstance(model, FlashMoETransformer):
+                            _ = model(x, return_moe_losses=False)
                         else:
-                            output_full = model(x)
+                            _ = model(x)  # Works for Baseline AND FlashAttention
                 else:
-                    if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
-                        output_full, _ = model(x, return_moe_losses=False)
+                    if isinstance(model, FlashMoETransformer):
+                        _ = model(x, return_moe_losses=False)
                     else:
-                        output_full = model(x)
-                
-                # Reconstruct embeddings from just before decoder
-                # This is a workaround - ideally modify model to return embeddings
-                # For now, use the output logits as proxy (not ideal but works)
-                embeddings = output_full  # [batch, len_dy, target_cd_cnt]
-                # Take PCA to reduce to embedding_size
-                # Skip for now - too expensive
-                continue
-            
-            # Extract last valid day embedding per patient
-            for j in range(len(dt_cnt)):
-                if dt_cnt[j] > 0:
-                    valid_emb = embeddings[j, dt_cnt[j]-1, :]  # Last day
-                    all_embeddings.append(valid_emb.cpu())
-                    
-                    # Aggregate all target codes for this patient
-                    patient_targets = y[j]
-                    all_codes = set()
-                    for day_codes in patient_targets:
-                        all_codes.update([c for c in day_codes if c > 0])
-                    all_targets.append(all_codes)
+                        _ = model(x)
+
+                # Get patient embeddings (last valid day)    
+                patient_embs = extractor.get_patient_embedding(dt_cnt)
+
+                # Collect embeddings and targets
+                for j in range(len(dt_cnt)):
+                    if dt_cnt[j] > 0:
+                        all_embeddings.append(patient_embs[j].cpu())
+                        
+                        # Aggregate all target codes for this patient
+                        patient_targets = y[j]
+                        all_codes = set()
+                        for day_codes in patient_targets:
+                            all_codes.update([c for c in day_codes if c > 0])
+                        all_targets.append(all_codes)
     
     if len(all_embeddings) == 0:
         return {'embedding_std_mean': 0.0, 'nn_target_overlap': 0.0}
@@ -4728,7 +4692,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[61]:
+# In[38]:
 
 
 """
@@ -5838,9 +5802,245 @@ def test_comprehensive_evaluation_dense():
 test_comprehensive_evaluation_dense()
 
 
+# ### Extract embedding for each member
+
+# In[39]:
+
+
+# ============================================================================
+# EMBEDDING EXTRACTOR (Pythonic hook-based approach)
+# ============================================================================
+
+class EmbeddingExtractor:
+    """
+    Extract embeddings from any model using PyTorch forward hooks.
+    
+    This is the standard PyTorch way to capture intermediate activations
+    without modifying the forward() method.
+    
+    Usage:
+        extractor = EmbeddingExtractor(model)
+        
+        # Run forward pass normally
+        output = model(x)
+        
+        # Get embeddings (captured automatically)
+        embeddings = extractor.get_embeddings()  # [batch, len_dy, embedding_size]
+        
+        # Clean up when done
+        extractor.remove()
+    
+    Works with: BaselineTransformer, FlashAttentionTransformer, FlashMoETransformer
+    """
+    
+    def __init__(self, model: nn.Module):
+        self.model = model
+        self.embeddings = None
+        self._hook_handle = None
+        
+        # Register hook on the appropriate layer based on model type
+        self._register_hook()
+    
+    def _register_hook(self):
+        """Register forward hook on the layer BEFORE the decoder."""
+        
+        def hook_fn(module, input, output):
+            """Capture the output of the target layer."""
+            # Handle different output formats
+            if isinstance(output, tuple):
+                # Some modules return (output, other_stuff)
+                self.embeddings = output[0].detach()
+            else:
+                self.embeddings = output.detach()
+        
+        # Determine which layer to hook based on model type
+        if isinstance(self.model, BaselineTransformer):
+            # Hook the temporal encoder output
+            target_layer = self.model.transformer_encoder_dy
+            self._hook_handle = target_layer.register_forward_hook(hook_fn)
+            
+        elif isinstance(self.model, (FlashAttentionTransformer, FlashMoETransformer)):
+            # Hook the final temporal layer's output
+            # We need to hook the norm BEFORE decoder
+            target_layer = self.model.norm  # Final LayerNorm before decoder
+            
+            # Custom hook that captures BEFORE norm (the raw temporal output)
+            def pre_decoder_hook(module, input, output):
+                # input[0] is what goes INTO the norm layer = our embedding
+                self.embeddings = input[0].detach()
+            
+            self._hook_handle = target_layer.register_forward_hook(pre_decoder_hook)
+        else:
+            raise ValueError(f"Unsupported model type: {type(self.model).__name__}")
+    
+    def get_embeddings(self) -> torch.Tensor:
+        """
+        Get the captured embeddings.
+        
+        Returns:
+            embeddings: [batch, len_dy, embedding_size] for Flash/MoE models
+                        [len_dy, batch, embedding_size] for Baseline (needs transpose)
+        """
+        if self.embeddings is None:
+            raise RuntimeError("No embeddings captured. Did you run a forward pass?")
+        
+        emb = self.embeddings
+        
+        # Normalize shape to [batch, len_dy, embedding_size]
+        if isinstance(self.model, BaselineTransformer):
+            # Baseline returns [len_dy, batch, embedding_size]
+            emb = emb.permute(1, 0, 2)
+        
+        return emb
+    
+    def get_patient_embedding(self, dt_cnt: List[int]) -> torch.Tensor:
+        """
+        Get the embedding for each patient's LAST valid day.
+        
+        This is what you use for downstream tasks - one embedding per patient.
+        
+        Args:
+            dt_cnt: List of valid day counts per patient
+            
+        Returns:
+            embeddings: [batch, embedding_size]
+        """
+        embeddings = self.get_embeddings()  # [batch, len_dy, embedding_size]
+        
+        patient_embeddings = []
+        for i, valid_days in enumerate(dt_cnt):
+            if valid_days > 0:
+                # Get embedding at last valid day
+                patient_embeddings.append(embeddings[i, valid_days - 1, :])
+            else:
+                # Fallback to first position if no valid days
+                patient_embeddings.append(embeddings[i, 0, :])
+        
+        return torch.stack(patient_embeddings)  # [batch, embedding_size]
+    
+    def remove(self):
+        """Remove the hook. Call this when done to free memory."""
+        if self._hook_handle is not None:
+            self._hook_handle.remove()
+            self._hook_handle = None
+        self.embeddings = None
+    
+    def __enter__(self):
+        """Context manager support."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Auto-cleanup when exiting context."""
+        self.remove()
+        return False
+
+
+# #### Test
+
+# In[32]:
+
+
+def test_embedding_extractor():
+    """Test embedding extraction for all model types."""
+    
+    # Test configuration
+    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    
+    # Create properly structured dummy input
+    batch_size = 4
+    len_dy = 50
+    len_cd = 20
+    
+    # Build input tensor with correct value ranges
+    age_in_months = torch.randint(0, 1400, (batch_size, len_dy, 1), device=device)
+    gender_cd = torch.randint(0, 4, (batch_size, len_dy, 1), device=device)
+    codes = torch.randint(0, 1000, (batch_size, len_dy, len_cd), device=device)
+    
+    x = torch.cat([age_in_months, gender_cd, codes], dim=-1)
+    dt_cnt = [30, 45, 20, 50]
+    
+    # ============================================================
+    # Test BaselineTransformer (no mixed precision needed)
+    # ============================================================
+    print("Testing BaselineTransformer...")
+    model = BaselineTransformer(cfg).to(device)
+    model.eval()
+    
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():
+            _ = model(x)
+        
+        all_emb = extractor.get_embeddings()
+        print(f"  All embeddings shape: {all_emb.shape}")
+        assert all_emb.shape == (batch_size, len_dy, cfg.embedding_size)
+        
+        patient_emb = extractor.get_patient_embedding(dt_cnt)
+        print(f"  Patient embeddings shape: {patient_emb.shape}")
+        assert patient_emb.shape == (batch_size, cfg.embedding_size)
+    
+    print("✔️ BaselineTransformer embedding extraction works\n")
+    del model
+    torch.cuda.empty_cache()
+    
+    # ============================================================
+    # Test FlashAttentionTransformer (needs autocast for FP16)
+    # ============================================================
+    print("Testing FlashAttentionTransformer...")
+    flash_cfg = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
+    model = FlashAttentionTransformer(flash_cfg).to(device)
+    model.eval()
+    
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():
+            # Use autocast for mixed precision (FP16)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = model(x)
+        
+        all_emb = extractor.get_embeddings()
+        print(f"  All embeddings shape: {all_emb.shape}")
+        assert all_emb.shape == (batch_size, len_dy, flash_cfg.embedding_size)
+        
+        patient_emb = extractor.get_patient_embedding(dt_cnt)
+        print(f"  Patient embeddings shape: {patient_emb.shape}")
+        assert patient_emb.shape == (batch_size, flash_cfg.embedding_size)
+    
+    print("✔️ FlashAttentionTransformer embedding extraction works\n")
+    del model
+    torch.cuda.empty_cache()
+    
+    # ============================================================
+    # Test FlashMoETransformer (needs autocast for FP16)
+    # ============================================================
+    print("Testing FlashMoETransformer...")
+    moe_cfg = MoEConfig(d_model=256, d_ff=512)
+    model = FlashMoETransformer(flash_cfg, moe_cfg).to(device)
+    model.eval()
+    
+    with EmbeddingExtractor(model) as extractor:
+        with torch.no_grad():
+            # Use autocast for mixed precision (FP16)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _, _ = model(x, return_moe_losses=False)
+        
+        all_emb = extractor.get_embeddings()
+        print(f"  All embeddings shape: {all_emb.shape}")
+        assert all_emb.shape == (batch_size, len_dy, flash_cfg.embedding_size)
+        
+        patient_emb = extractor.get_patient_embedding(dt_cnt)
+        print(f"  Patient embeddings shape: {patient_emb.shape}")
+        assert patient_emb.shape == (batch_size, flash_cfg.embedding_size)
+    
+    print("✔️ FlashMoETransformer embedding extraction works\n")
+    print("=" * 50)
+    print("✅ ALL EMBEDDING EXTRACTOR TESTS PASSED!")
+
+# Run test
+test_embedding_extractor()
+
+
 # ### Run experimentation
 
-# In[49]:
+# In[40]:
 
 
 def compute_code_frequencies(
@@ -5902,7 +6102,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[55]:
+# In[41]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -5966,7 +6166,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[62]:
+# In[42]:
 
 
 def run_single_experiment(
@@ -6074,6 +6274,7 @@ def run_single_experiment(
         
     elif exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']:
         config = FlashAttentionConfig(
+            embedding_size=eff_d_model, 
             nhid=eff_nhid,
             nhead=eff_nhead, 
             use_swiglu=True,
@@ -6091,6 +6292,7 @@ def run_single_experiment(
     else:
         # MoE variant
         config = FlashAttentionConfig(
+            embedding_size=eff_d_model, 
             nhid=eff_nhid,
             nhead=eff_nhead,
             use_swiglu=True,
@@ -6446,10 +6648,11 @@ def run_single_experiment(
         'full_evaluation': evaluation,
         'all_epochs': epoch_history
     }
+    
     # Save complete results to JSON for later comparison
     results_path = metrics_logger.save_final_results(results)
-    logger.info(f"Complete results saved to {results_path}")
-        
+    logger.info(f"Complete results saved to {results_path}")    
+    
     # Save metrics
     metrics_logger.save()
     logger.info(f"Metrics saved to {log_dir}/{exp_name}/")
@@ -6473,7 +6676,8 @@ def run_selected_experiments(
     val_data: pd.DataFrame,
     device: torch.device,
     epochs: int = 10,
-    experiment_round: Optional[str] = None 
+    experiment_round: Optional[str] = None,
+    embedding_size: Optional[int] = None
 ) -> pd.DataFrame:
     """
     Run SELECTED experiments (flexible subset).
@@ -6518,6 +6722,7 @@ def run_selected_experiments(
     all_results = []
     
     for exp_name in experiment_names:
+        
         # Clean GPU before each experiment
         if device.type == 'cuda':
             torch.cuda.synchronize()
@@ -6536,7 +6741,8 @@ def run_selected_experiments(
             val_data=val_data,
             device=device,
             epochs=epochs,
-            experiment_round=experiment_round
+            experiment_round=experiment_round,
+            embedding_size=embedding_size
         )
         
         all_results.append(results)
@@ -6593,7 +6799,7 @@ def run_all_experiments(
 
 # ### Memory management
 
-# In[51]:
+# In[43]:
 
 
 import torch
@@ -6835,7 +7041,7 @@ def load_checkpoint_multigpu(
 
 # ### Time and cost estimation
 
-# In[58]:
+# In[44]:
 
 
 import numpy as np
@@ -7016,7 +7222,7 @@ for n in [1, 2, 4]:
     print("Flash+MoE", n, "GPU:", h100_time_cost(12_000_000, 1, "flash_moe", n))
 
 
-# In[7]:
+# In[28]:
 
 
 scenarios = [
@@ -8787,7 +8993,7 @@ test_full_experiment_simulation()
 
 # #### Training with real data
 
-# In[52]:
+# In[45]:
 
 
 import google.auth
@@ -8798,7 +9004,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[39]:
+# In[33]:
 
 
 # Device setup
@@ -8828,7 +9034,7 @@ df_val = df_remain.sample(100000, random_state=42, replace=False)
 df_test = df_remain.drop(df_val.index)
 
 
-# In[53]:
+# In[46]:
 
 
 import pandas as pd
@@ -8836,10 +9042,16 @@ df_train = pd.read_feather("sample_data/mdcd_train_1m.feather")
 df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
 
 
-# In[27]:
+# In[56]:
 
 
 df_train.shape
+
+
+# In[57]:
+
+
+df_val.shape
 
 
 # #### If flash_attention works?
@@ -8906,9 +9118,40 @@ results_df = run_selected_experiments(
 results_df.to_excel("experiment_logs/exp1_64k_3epoch_16batch_Nov11.xlsx")
 
 
+# In[ ]:
+
+
+# Clean up GPU memory everytime before running the test
+cleanup_gpu_memory_hard()
+
+# Minimal dataset
+train_tiny = df_train.sample(64000)
+val_tiny = df_val.sample(3200)
+
+# Run 3 experiments
+exp_names = ['exp1_dense_baseline', 
+             'exp2_dense_flash',
+             'exp2b_flash_learned_pool',
+             'exp3_standard_moe',
+             'exp3b_moe_learned_pool',
+             'exp4_shared_expert',
+             'exp5_fine_grained'
+            ]
+
+print(f"  Running {len(exp_names)} experiments (1 epoch each, 32 samples)...")
+
+results_df = run_selected_experiments(
+    experiment_names=exp_names,
+    train_data=train_tiny,
+    val_data=val_tiny,
+    device=device,
+    epochs=3
+)
+
+
 # #### Experiment 2 - dive deep into MOE issues Nov 16
 
-# In[42]:
+# In[47]:
 
 
 def check_gpu_availability():
@@ -8938,21 +9181,25 @@ def check_gpu_availability():
 check_gpu_availability()
 
 
-# In[43]:
+# In[49]:
 
 
 # Clean up before running
 cleanup_gpu_memory_hard()
 
 # Define your experiment round name
-round_name = "exp_round2_ablation_swiglu_aux_layer_nov16_2025"
+# round_name = "exp_round2_ablation_swiglu_aux_layer_nov16_2025"
+
+# round 2-1 increasing the training dataset; see performance difference
+round_name = "exp_round2-1_ablation_swiglu_aux_layer_dec1_2025" # kaiming init, larger sample size 320k, batch_size = 32
 # Minimal dataset
-train_tiny = df_train.sample(64000)
-val_tiny = df_val.sample(3200)
+train_tiny = df_train.sample(320000)
+val_tiny = df_val.sample(32000)
 # Select experiments to run
 exp_names = [
+    'exp2b_flash_learned_pool',
     'exp3_standard_moe',      # Baseline MoE (GELU experts, aux=0.01, layer=2)
-    'exp3a_moe_swiglu',       # + SwiGLU in experts
+    # 'exp3a_moe_swiglu',       # + SwiGLU in experts
     'exp3b_moe_swiglu_learned_pool',  # + SwiGLU + learned pooling
     'exp3c_moe_swiglu_learned_pool_layer4',  # + Start MoE at layer 4
     'exp3d_moe_swiglu_learned_pool_layer4_aux001',  # + Reduce aux to 0.001,
@@ -8971,13 +9218,19 @@ results_df = run_selected_experiments(
 )
 
 
-# In[44]:
+# In[ ]:
 
 
-results_df
 
 
-# In[64]:
+
+# In[52]:
+
+
+results_df.to_excel("experiment_logs/exp2-1_320k_2epoch_32batch_kaiming-moe-init_Dec1.xlsx")
+
+
+# In[53]:
 
 
 results_dict = {}
@@ -8988,10 +9241,10 @@ for exp_name in results_df.index:
     }
 
 
-# In[65]:
+# In[54]:
 
 
-output_path = "logs/exp_round2_ablation_swiglu_aux_layer_nov16_2025/exp_round2_ablation_swiglu_aux_layer_nov16_2025_json.json"
+output_path = "logs/exp_round2-1_ablation_swiglu_aux_layer_dec1_2025/exp_round2-1_ablation_swiglu_aux_layer_dec1_2025_json.json"
 with open(output_path, 'w', encoding='utf-8') as f:
      json.dump(
         results_dict,
@@ -9000,33 +9253,6 @@ with open(output_path, 'w', encoding='utf-8') as f:
         ensure_ascii=False,
         default=str  # Handle any non-serializable types (e.g., numpy types)
      )
-
-
-# In[57]:
-
-
-# Clean up before running
-cleanup_gpu_memory_hard()
-
-# Define your experiment round name
-round_name = "exp_round2_ablation_swiglu_aux_layer_auxiliary_nov16_2025"
-# Minimal dataset
-train_tiny = df_train.sample(64000)
-val_tiny = df_val.sample(3200)
-# Select experiments to run
-exp_names = [
-    'exp6_auxiliary_free'
-]
-
-# Run experiments with round name
-results_df_1 = run_selected_experiments(
-    experiment_names=exp_names,
-    train_data=train_tiny,
-    val_data=val_tiny,
-    device=device,
-    epochs=2,
-    experiment_round=round_name
-)
 
 
 # In[58]:
@@ -9041,35 +9267,173 @@ results_df_1.head()
 results_df = pd.concat([results_df, results_df_1])
 
 
+# #### Conclusion and lessoned from Exp1 and Exp2
+
+# ##### **Round 1: The Baseline & The Crash**
+# *   **Goal:** Establish a dense baseline and introduce Mixture-of-Experts (MoE) with Flash Attention.
+# *   **Experiments:**
+#     1.  **Dense Baseline:** Standard Transformer (FP32, 16 heads, Max Pooling). **Recall@1: ~0.697**.
+#     2.  **Flash Attention:** Dense model with Flash Attention (FP16, 8 heads). **Recall@1: ~0.697**. (Proven: Flash Attention works without performance loss).
+#     3.  **MoE Variants:** Standard (Top-2), Shared Expert, Fine-grained.
+# *   **Result:** All MoE models failed catastrophically, plateauing at **Recall@1 ~0.305** (vs ~0.70 for dense).
+# *   **Initial Diagnoses:**
+#     *   *Auxiliary Loss Dominance:* The loss used to balance experts was ~10x larger than the prediction loss, forcing the model to prioritize balancing over learning.
+#     *   *Expert Collapse:* Many experts were unused.
+#     *   *Premature Insertion:* MoE layers started too early (Layer 2 of 6).
+#     *   *Activation Mismatch:* Expert 3 hypothesized that switching from SwiGLU (Dense layers) to GELU (MoE layers) caused the failure.
+# 
+# ##### **Round 2: Ablation Studies (Testing Hypotheses)**
+# *   **Goal:** systematically isolate and test the root causes identified in Round 1.
+# *   **Adjustments & Results:**
+#     *   **Exp3a (Activation Consistency):** Switched MoE experts to use **SwiGLU** (matching dense layers).
+#         *   *Result:* Performance **dropped** slightly (Recall@1: 0.320).
+#         *   *Learnings:* **Refuted** the hypothesis that activation mismatch was the root cause.
+#     *   **Exp3c (Layer Placement):** Moved MoE start from Layer 2 to **Layer 4**.
+#         *   *Result:* Performance **dropped** slightly (Recall@1: 0.311).
+#         *   *Learnings:* **Refuted** the hypothesis that premature MoE insertion was the issue.
+#     *   **Exp3d (Aux Loss Tuning):** Reduced auxiliary loss weight from 0.01 to **0.001**.
+#         *   *Result:* **Best MoE performance** (Recall@1: 0.341), but still far below dense baseline.
+#         *   *Learnings:* **Partially Confirmed**. High aux loss hurts, but fixing it only closes ~6% of the performance gap. Crucially, this model had *higher* expert imbalance, suggesting that **forced balance hurts performance**.
+# 
+# ---
+# 
+# ##### **What We Agree On (Proven)**
+# 1.  **Auxiliary Loss was too high:** Reducing the weight improved performance, confirming that the original setup forced the router to care more about load balancing than prediction.
+# 2.  **Flash Attention is valid:** The switch to 8 heads and FP16 (Exp2) matched the FP32 baseline perfectly, proving the base architecture changes are sound.
+# 3.  **Forced Balance is harmful:** The best performing MoE model (Exp3d) had *more* unbalanced experts than the worst ones. This flips the common wisdom: some expert collapse/specialization is necessary for this task.
+# 4.  **MoE is consistently stuck:** Regardless of activation function, layer depth, or pooling, all MoE variants plateau in the **0.30-0.34** range, suggesting a fundamental structural or scale issue rather than a hyperparameter bug.
+# 
+# ##### **What We Disagree On / Refuted**
+# *   **Refuted:** *Activation Mismatch* is NOT the killer. Changing to SwiGLU didn't fix it.
+# *   **Refuted:** *Premature Insertion* is NOT the killer. Moving MoE deeper didn't fix it.
+# *   **Refuted:** *Expert Collapse* is the primary enemy. Evidence suggests that minimizing collapse (via high aux loss) actually degrades predictive performance.
+# 
+# ---
+# 
+# ##### 3. The "Why": Emerging Structural Hypotheses
+# 
+# Since the "easy" fixes (activations, layers, loss weights) failed to close the massive gap (0.34 vs 0.70), the experts have identified **three deeper structural flaws**:
+# 
+# 1.  **The Embedding Bottleneck (Critical):**
+#     *   You are compressing **84,000** distinct medical codes into a tiny **256-dimensional** vector.
+#     *   *Consequence:* The vector space is too crowded. The linear router cannot mathematically separate "Diabetes" from "Hypertension" because their vectors are too similar. It is routing noise.
+# 
+# 2.  **Scale Mismatch:**
+#     *   MoE is typically used for **Billion-parameter** models where compute is the bottleneck.
+#     *   *Consequence:* Applying MoE to a tiny **27M parameter** model adds massive routing overhead and training instability without the benefit of scale. You are paying the "MoE tax" without the "Scale dividend."
+# 
+# 3.  **Cold Start / Training Duration:**
+#     *   MoE routers need to "discover" clusters before experts can specialize.
+#     *   *Consequence:* Starting with a random router (`std=0.01`) and training for only 3 epochs means the model never leaves the chaotic initialization phase.
+# 
+# ##### 4. Recommendations for Next Steps
+# 1.  **Widen the Bottleneck:** Increase `embedding_size` to **512** or **768** to let the router distinguish concepts.
+# 2.  **Fix Initialization:** Use **Kaiming initialization** (higher variance) for the router to break symmetry early.
+# 3.  **Upcycling Strategy:** Do not train MoE from scratch. Train a **Dense** model first, then "upcycle" (copy) its weights to the experts to initialize the MoE.
+# 4.  **Longer Training:** MoE requires significantly more epochs (10-20+) to converge compared to dense models.
+
 # #### Experiment 3 Increase embedding size and training sample size Nov 26
 
-# In[ ]:
+# In[62]:
+
+
+cleanup_gpu_memory_hard()
+
+
+# In[61]:
 
 
 # Clean up before running
 cleanup_gpu_memory_hard()
 
 # Define your experiment round name
-round_name = "exp_round3_ablation_larger_dim384-512_trainsize_nov26_2025"
-
+round_name = "exp_round3_ablation_larger_dim512_trainsize_kaiming-moe-init_nov26_2025"
+train_tiny = df_train.sample(320000)
+val_tiny = df_val.sample(32000)
 # Select experiments to run
 exp_names = [
-    'exp2b_flash_learned_pool',
-    'exp3e_moe_swiglu_learned_pool_layer2_aux001',
-    'exp6_auxiliary_free',
-    'exp6a_auxiliary_free_layer4',
-    'exp6b_auxiliary_free_no-share-exp'
+    'exp1_dense_baseline', 
+    'exp3_standard_moe'
+    # 'exp6a_auxiliary_free_layer4',
+    # 'exp6b_auxiliary_free_no-share-exp',
+    # 'exp6_auxiliary_free',
+    # 'exp2b_flash_learned_pool',
+    # 'exp3e_moe_swiglu_learned_pool_layer2_aux001'
 ]
 
 # Run experiments with round name
-results_df_2 = run_selected_experiments(
+results_df_4 = run_selected_experiments(
     experiment_names=exp_names,
-    train_data=df_train,
-    val_data=df_val,
+    train_data=train_tiny,
+    val_data=val_tiny,
     device=device,
-    epochs=3,
-    experiment_round=round_name
+    epochs=1,
+    experiment_round=round_name,
+    embedding_size=256 
 )
+
+
+# In[ ]:
+
+
+
+
+
+# In[55]:
+
+
+results_df_3.head()
+
+
+# In[ ]:
+
+
+results_df_3 = pd.concat([
+                        result_df_1
+                        result_df_2], axis = 0)
+
+
+# In[ ]:
+
+
+results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-moe-init_nov26.xlsx")
+
+
+# In[56]:
+
+
+results_df_3 = pd.read_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-moe-init_nov26.xlsx", index_col = 0)
+
+
+# In[ ]:
+
+
+
+
+
+# In[59]:
+
+
+results_dict = {}
+for exp_name in results_df_3.index:
+    results_dict[exp_name] = {
+        'full_evaluation': results_df_3.loc[exp_name, 'full_evaluation'],
+        'all_epochs': results_df_3.loc[exp_name, 'all_epochs']
+    }
+
+
+# In[60]:
+
+
+output_path = "logs/exp_round3_ablation_larger_dim512_trainsize_kaiming-moe-init_nov26_2025/exp_round3_ablation_larger_dim512_trainsize_kaiming-moe-init_nov26_2025_json.json"
+with open(output_path, 'w', encoding='utf-8') as f:
+     json.dump(
+        results_dict,
+        f,
+        indent=2,
+        ensure_ascii=False,
+        default=str  # Handle any non-serializable types (e.g., numpy types)
+     )
 
 
 # In[ ]:

@@ -51,13 +51,13 @@ Version 3
 - Distributed data parallel
 - Implement the LOB columns
 - Use Medicaid IP risk as downstream tasks and include the metrics to the model
-- 
+- Refactor the run_single_experiment
 
 
 """
 
 
-# In[ ]:
+# In[43]:
 
 
 # ============================================================================
@@ -113,16 +113,17 @@ Version 3
 # ============================================================================
 
 
-# In[2]:
+# In[1]:
 
 
 import pandas as pd
-df_train = pd.read_feather("sample_data/mdcd_train_1m.feather")
-df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
+df_train = pd.read_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_train.feather")
+df_val = pd.read_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_val_mdcd_ip_probe.feather")
+
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[3]:
+# In[2]:
 
 
 """
@@ -164,6 +165,29 @@ warnings.filterwarnings("ignore")
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
+
+
+# In[3]:
+
+
+# import for downstream evaluation
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
+from sklearn.metrics import (
+    roc_auc_score, 
+    f1_score, 
+    precision_score, 
+    recall_score,
+    average_precision_score,
+    brier_score_loss,
+    classification_report,
+    confusion_matrix
+)
+from sklearn.exceptions import ConvergenceWarning
+import warnings
+import json
+from datetime import datetime
 
 
 # ### Configurations
@@ -264,6 +288,7 @@ class BaseConfig:
     # Embeddings
     gender_vocab: int = 4     # Gender categories
     age_vocab: int = 1440     # Age in months (120 years)
+    lob_vocab: int = 4        # LOB categories (0=padding, 1=Commercial, 2=Medicare, 3=Medicaid)
     
     # Training
     batch_size: int = 32     # Batch size (change from 16 to 32)
@@ -587,6 +612,8 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
     return configs
 
 
+# ### DDP Utilitiy
+
 # In[7]:
 
 
@@ -729,7 +756,7 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
 
 # ### RPE and Swiglu
 
-# In[9]:
+# In[8]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -887,7 +914,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[7]:
+# In[9]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1126,6 +1153,8 @@ class FlashAttentionLayer(nn.Module):
         return output
 
 
+# #### Test
+
 # In[10]:
 
 
@@ -1151,7 +1180,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[8]:
+# In[10]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1234,6 +1263,8 @@ class LearnedAttentionPooling(nn.Module):
         return pooled
 
 
+# #### Test
+
 # In[12]:
 
 
@@ -1250,7 +1281,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[9]:
+# In[11]:
 
 
 # ============================================================================
@@ -1664,7 +1695,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[10]:
+# In[12]:
 
 
 # ============================================================================
@@ -1699,6 +1730,7 @@ class BaselineTransformer(nn.Module):
         # Demographics embeddings
         self.embedding_gender_cd = nn.Embedding(config.gender_vocab, config.embedding_size)
         self.embedding_age_in_months = nn.Embedding(config.age_vocab, config.embedding_size)
+        self.embedding_lob = nn.Embedding(config.lob_vocab, config.embedding_size)
         
         # ============================================================
         # DAILY CODE ENCODER
@@ -1770,20 +1802,22 @@ class BaselineTransformer(nn.Module):
         """
         gpu_batchsize = x.shape[0]
         actual_len_dy = x.shape[1]
-        actual_len_cd = x.shape[2] - 2
+        actual_len_cd = x.shape[2] - 3 # demographics (age, gender, lob)
         
         # ============================================================
         # STEP 1: EXTRACT COMPONENTS
         # ============================================================
         age_in_months = x[:, :, 0].long()  # [batch, len_dy]
         gender_cd = x[:, :, 1].long()       # [batch, len_dy]
-        cd = x[:, :, 2:].long()             # [batch, len_dy, len_cd]
+        lob = x[:, :, 2].long()
+        cd = x[:, :, 3:].long()             # [batch, len_dy, len_cd]
         
         # ============================================================
         # STEP 2: EMBED
         # ============================================================
         gender_cd = self.embedding_gender_cd(gender_cd)      # [batch, len_dy, embedding_size]
         age_in_months = self.embedding_age_in_months(age_in_months)  # [batch, len_dy, embedding_size]
+        lob_emb = self.embedding_lob(lob)      # [batch, len_dy, embedding_size]
         cd = self.embedding_cd(cd)                           # [batch, len_dy, len_cd, embedding_size]
         
         # Residual connection: sum of all code embeddings
@@ -1808,7 +1842,7 @@ class BaselineTransformer(nn.Module):
         # STEP 4: COMBINE REPRESENTATIONS
         # ============================================================
         # Add all embeddings: residual codes + encoded codes + demographics
-        cd = cd_res + cd + gender_cd + age_in_months
+        cd = cd_res + cd + gender_cd + age_in_months + lob_emb
         cd = self.mm(cd)  # GELU activation
         cd = self.norm(cd)
         
@@ -1842,7 +1876,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[11]:
+# In[13]:
 
 
 # ============================================================================
@@ -1869,6 +1903,7 @@ class FlashAttentionTransformer(nn.Module):
         self.embedding_cd = nn.Embedding(config.cd_cnt, config.embedding_size)
         self.embedding_gender_cd = nn.Embedding(config.gender_vocab, config.embedding_size)
         self.embedding_age_in_months = nn.Embedding(config.age_vocab, config.embedding_size)
+        self.embedding_lob = nn.Embedding(config.lob_vocab, config.embedding_size)
         
         # ============================================================
         # DAILY ENCODER (can use Flash or standard)
@@ -1981,12 +2016,13 @@ class FlashAttentionTransformer(nn.Module):
         """
         gpu_batchsize = x.shape[0]
         actual_len_dy = x.shape[1]
-        actual_len_cd = x.shape[2] - 2 
+        actual_len_cd = x.shape[2] - 3 # demographics age, gender, lob
         
         # Extract and embed (same as baseline)
         age_in_months = self.embedding_age_in_months(x[:, :, 0].long())
         gender_cd = self.embedding_gender_cd(x[:, :, 1].long())
-        cd = self.embedding_cd(x[:, :, 2:].long())
+        lob_emb = self.embedding_lob(x[:, :, 2].long()) 
+        cd = self.embedding_cd(x[:, :, 3:].long())
         cd_res = cd.sum(-2)
         
         # Daily encoding
@@ -2031,7 +2067,7 @@ class FlashAttentionTransformer(nn.Module):
         cd = cd.reshape(gpu_batchsize, actual_len_dy, self.config.embedding_size)
         
         # Combine representations
-        cd = cd_res + cd + gender_cd + age_in_months
+        cd = cd_res + cd + gender_cd + age_in_months + lob_emb
         cd = self.mm(cd)
         cd = self.norm(cd)
         cd = torch.swapaxes(cd, 0, 1)  # [len_dy, batch, embedding_size]
@@ -2063,7 +2099,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[12]:
+# In[14]:
 
 
 # ============================================================================
@@ -2092,6 +2128,7 @@ class FlashMoETransformer(nn.Module):
         self.embedding_cd = nn.Embedding(config.cd_cnt, config.embedding_size)
         self.embedding_gender_cd = nn.Embedding(config.gender_vocab, config.embedding_size)
         self.embedding_age_in_months = nn.Embedding(config.age_vocab, config.embedding_size)
+        self.embedding_lob = nn.Embedding(config.lob_vocab, config.embedding_size)
         
         # Daily encoder (Flash Attention, no MoE)
         if self.config.use_learnt_att_pool:
@@ -2192,13 +2229,14 @@ class FlashMoETransformer(nn.Module):
         """
         gpu_batchsize = x.shape[0]
         actual_len_dy = x.shape[1]  
-        actual_len_cd = x.shape[2] - 2
+        actual_len_cd = x.shape[2] - 3
         device = x.device
         
         # Extract and embed
         age_in_months = self.embedding_age_in_months(x[:, :, 0].long())
         gender_cd = self.embedding_gender_cd(x[:, :, 1].long())
-        cd = self.embedding_cd(x[:, :, 2:].long())
+        lob_emb = self.embedding_lob(x[:, :, 2].long()) 
+        cd = self.embedding_cd(x[:, :, 3:].long())
         cd_res = cd.sum(-2)
         
         # Daily encoding with Flash Attention
@@ -2231,7 +2269,7 @@ class FlashMoETransformer(nn.Module):
         cd = cd.reshape(gpu_batchsize, actual_len_dy, self.config.embedding_size)
         
         # Combine
-        cd = cd_res + cd + gender_cd + age_in_months
+        cd = cd_res + cd + gender_cd + age_in_months + lob_emb
         cd = self.mm(cd)
         cd = self.norm(cd)
         cd = torch.swapaxes(cd, 0, 1)
@@ -2369,11 +2407,100 @@ def test_flash_moe_transformer_forward():
 test_flash_moe_transformer_forward()
 
 
+# In[97]:
+
+
+def test_model_forward_with_lob():
+    """
+    Test all model types handle LOB correctly in forward pass.
+    
+    Validates:
+    - Input tensor shape: [batch, len_dy, 3 + len_cd]
+    - All models accept LOB embedding
+    - Output shape is correct
+    """
+    
+    cleanup_gpu_memory()
+    
+    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    batch_size = 4
+    len_dy = 50
+    len_cd = 20
+    
+    # Build input tensor with LOB (age, gender, lob, codes)
+    age = torch.randint(0, 1400, (batch_size, len_dy), device=device)
+    gender = torch.randint(0, 4, (batch_size, len_dy), device=device)
+    lob = torch.randint(0, 4, (batch_size, len_dy), device=device)  # NEW: LOB
+    codes = torch.randint(0, 1000, (batch_size, len_dy, len_cd), device=device)
+    
+    x = torch.cat([
+        age.unsqueeze(-1),
+        gender.unsqueeze(-1),
+        lob.unsqueeze(-1),  # NEW: Include LOB
+        codes
+    ], dim=-1)
+    
+    expected_input_dim = 3 + len_cd  # age + gender + lob + codes
+    assert x.shape == (batch_size, len_dy, expected_input_dim), \
+        f"Input shape wrong: {x.shape}, expected ({batch_size}, {len_dy}, {expected_input_dim})"
+    print(f"  Input tensor shape: {x.shape} ✅")
+    
+    # Test BaselineTransformer
+    print("  Testing BaselineTransformer with LOB...")
+    model = BaselineTransformer(cfg).to(device)
+    model.eval()
+    
+    with torch.no_grad():
+        output = model(x)
+    
+    assert output.shape == (batch_size, len_dy, cfg.target_cd_cnt), \
+        f"Baseline output shape wrong: {output.shape}"
+    print(f"    Output shape: {output.shape} ✅")
+    del model
+    
+    # Test FlashAttentionTransformer
+    print("  Testing FlashAttentionTransformer with LOB...")
+    flash_cfg = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
+    model = FlashAttentionTransformer(flash_cfg).to(device)
+    model.eval()
+    
+    with torch.no_grad():
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            output = model(x)
+    
+    assert output.shape == (batch_size, len_dy, flash_cfg.target_cd_cnt), \
+        f"Flash output shape wrong: {output.shape}"
+    print(f"    Output shape: {output.shape} ✅")
+    del model
+    
+    # Test FlashMoETransformer
+    print("  Testing FlashMoETransformer with LOB...")
+    moe_cfg = MoEConfig(d_model=flash_cfg.embedding_size, d_ff=flash_cfg.nhid, 
+                        num_experts=4, top_k=2, use_moe_from_layer=0)
+    model = FlashMoETransformer(flash_cfg, moe_cfg).to(device)
+    model.eval()
+    
+    with torch.no_grad():
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            output, moe_losses = model(x, return_moe_losses=True)
+    
+    assert output.shape == (batch_size, len_dy, flash_cfg.target_cd_cnt), \
+        f"MoE output shape wrong: {output.shape}"
+    print(f"    Output shape: {output.shape} ✅")
+    del model
+    
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    print("\n✅ TEST 18 PASSED: All models handle LOB correctly\n")
+test_model_forward_with_lob()
+
+
 # ### Training session
 
 # #### Preprocess data with data loader
 
-# In[13]:
+# In[15]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2393,11 +2520,13 @@ class ClinicalDataset(Dataset):
         cd_strs = df['cd'].tolist()
         target_strs = df['target_cd'].tolist()
         self.dt_cnt = df['dt_cnt'].tolist()
-
+        lob_strs = df['lob'].tolist()
+        
         # Pre-allocate tensors
         self.ages = torch.zeros(len(df), config.len_dy, dtype=torch.long)
         self.genders = torch.zeros(len(df), config.len_dy, dtype=torch.long)
         self.codes = torch.zeros(len(df), config.len_dy, config.len_cd, dtype=torch.long)
+        self.lobs = torch.zeros(len(df), config.len_dy, dtype=torch.long)
         self.targets = []
 
         # Process all samples
@@ -2408,11 +2537,13 @@ class ClinicalDataset(Dataset):
             age_list = conv_age_gender(age_strs[i], config.len_dy)
             gender_list = conv_age_gender(gender_strs[i], config.len_dy, max_val=3)
             cd_list = conv_cd(cd_strs[i], config.len_dy, config.len_cd)
+            lob_list = conv_lob(lob_strs[i], config.len_dy) 
             target_list = conv_target(target_strs[i], config.len_dy, config.target_cd_cnt)
 
             self.ages[i] = torch.tensor(age_list, dtype=torch.long)
             self.genders[i] = torch.tensor(gender_list, dtype=torch.long)
             self.codes[i] = torch.tensor(cd_list, dtype=torch.long)
+            self.lobs[i] = torch.tensor(lob_list, dtype=torch.long)
             self.targets.append(target_list)
         
         print("Pre-processing complete.")
@@ -2424,13 +2555,14 @@ class ClinicalDataset(Dataset):
         return {
             'age': self.ages[idx],
             'gender': self.genders[idx],
+            'lob': self.lobs[idx], 
             'codes': self.codes[idx],
             'dt_cnt': self.dt_cnt[idx],
             'target': self.targets[idx]
         }
 
 
-# In[14]:
+# In[16]:
 
 
 def clinical_collate_fn(batch):
@@ -2452,6 +2584,7 @@ def clinical_collate_fn(batch):
     # Extract each field
     ages = torch.stack([item['age'] for item in batch])
     genders = torch.stack([item['gender'] for item in batch])
+    lobs = torch.stack([item['lob'] for item in batch])
     codes = torch.stack([item['codes'] for item in batch])
     dt_cnts = [item['dt_cnt'] for item in batch]  # Keep as list
     targets = [item['target'] for item in batch]  # Keep as list of lists
@@ -2459,15 +2592,78 @@ def clinical_collate_fn(batch):
     return {
         'age': ages,
         'gender': genders,
+        'lob': lobs,
         'codes': codes,
         'dt_cnt': dt_cnts,
         'target': targets
     }
 
 
+# ##### Test
+
+# In[17]:
+
+
+def test_clinical_dataset_with_lob():
+    """
+    Test ClinicalDataset properly handles LOB column.
+    
+    Validates:
+    - LOB tensor is created
+    - LOB values are correct
+    - Batch collation includes LOB
+    - Works with missing LOB column (default to Medicaid)
+    """
+    print("\n" + "="*80)
+    print("TEST 17: ClinicalDataset with LOB")
+    print("="*80)
+    
+    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    
+    # Create test data WITH LOB column
+    print("  Testing with LOB column present...")
+    test_data = df_train.head(10).copy()
+    
+    # Add LOB column if not present
+    if 'lob' not in test_data.columns:
+        test_data['lob'] = 'Medicaid'
+    
+    # Rename target to target_cd if needed
+    if 'target' in test_data.columns and 'target_cd' not in test_data.columns:
+        test_data = test_data.rename(columns={'target': 'target_cd'})
+    
+    dataset = ClinicalDataset(test_data, cfg)
+    
+    # Check LOB tensor exists
+    assert hasattr(dataset, 'lobs'), "Dataset missing 'lobs' tensor"
+    assert dataset.lobs.shape == (len(test_data), cfg.len_dy), f"LOB shape wrong: {dataset.lobs.shape}"
+    print(f"    LOB tensor shape: {dataset.lobs.shape} ✅")
+    
+    # Check values are in valid range [0, 3]
+    assert dataset.lobs.min() >= 0 and dataset.lobs.max() <= 3, "LOB values out of range"
+    print(f"    LOB value range: [{dataset.lobs.min()}, {dataset.lobs.max()}] ✅")
+    
+    # Test dataloader and collation
+    print("  Testing DataLoader and collation...")
+    dataloader = DataLoader(
+        dataset,
+        batch_size=4,
+        shuffle=False,
+        collate_fn=clinical_collate_fn
+    )
+    
+    batch = next(iter(dataloader))
+    assert 'lob' in batch, "Batch missing 'lob' key"
+    assert batch['lob'].shape == (4, cfg.len_dy), f"Batch LOB shape wrong: {batch['lob'].shape}"
+    print(f"    Batch LOB shape: {batch['lob'].shape} ✅")
+    
+    print("\n✅ TEST 17 PASSED: ClinicalDataset handles LOB correctly\n")
+test_clinical_dataset_with_lob()
+
+
 # #### Data preparation
 
-# In[15]:
+# In[17]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2534,6 +2730,57 @@ def conv_age_gender(ipt: str, len_dy: int, max_val: int = 1439) -> List[int]:
             result.append(last_val)
     else:
         result = [0] * len_dy
+    
+    return result
+
+def conv_lob(ipt: str, len_dy: int) -> List[int]:
+    """
+    Convert LOB (Line of Business) string to list.
+    
+    Format: "value1*value2*..." (same format as age/gender, but with string values)
+    Maps: Commercial=1, Medicare=2, Medicaid=3, padding/unknown=0
+    
+    Args:
+        ipt: LOB string from data (e.g., "Medicaid*Medicaid*..." or single value "Medicaid")
+        len_dy: Target sequence length (200)
+    
+    Returns:
+        List of LOB indices [len_dy]
+    """
+    # LOB mapping (case-insensitive)
+    lob_map = {
+        'commercial': 1,
+        'medicare': 2,
+        'medicaid': 3
+    }
+    
+    if not ipt or pd.isna(ipt):
+        return [0] * len_dy
+    
+    # Handle both single value and asterisk-separated formats
+    if '*' in str(ipt):
+        values = str(ipt).split('*')
+    else:
+        # Single value - repeat for all days
+        values = [str(ipt)] * len_dy
+    
+    values = values[:len_dy]  # Truncate to max days
+    
+    result = []
+    for val in values:
+        val_clean = val.strip().lower() if val else ''
+        if val_clean in lob_map:
+            result.append(lob_map[val_clean])
+        else:
+            result.append(0)  # Unknown LOB
+    
+    # Forward-fill with last valid value (LOB typically doesn't change within sequence)
+    if result:
+        last_val = result[-1] if result[-1] != 0 else 3  # Default to Medicaid if all zeros
+        while len(result) < len_dy:
+            result.append(last_val)
+    else:
+        result = [3] * len_dy  # Default to Medicaid (since this is Medicaid data)
     
     return result
 
@@ -2693,7 +2940,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function
 
-# In[16]:
+# In[18]:
 
 
 def compute_loss(
@@ -3155,9 +3402,83 @@ def diagnose_with_trained_checkpoint():
 results = diagnose_with_trained_checkpoint()
 
 
+# In[74]:
+
+
+def test_conv_lob():
+    """
+    Test LOB (Line of Business) parsing function.
+    
+    Validates:
+    - Single value format: "Medicaid"
+    - Asterisk-separated format: "Medicaid*Medicaid*..."
+    - Case insensitivity
+    - Unknown values default to 0
+    - Forward-fill behavior
+    """
+    print("\n" + "="*80)
+    print("TEST 16: LOB Parsing Function")
+    print("="*80)
+    
+    # Test 1: Single value format
+    print("  Testing single value format...")
+    result = conv_lob("Medicaid", 5)
+    assert result == [3, 3, 3, 3, 3], f"Single value failed: {result}"
+    print(f"    'Medicaid' -> {result} ✅")
+    
+    result = conv_lob("Commercial", 5)
+    assert result == [1, 1, 1, 1, 1], f"Commercial failed: {result}"
+    print(f"    'Commercial' -> {result} ✅")
+    
+    result = conv_lob("Medicare", 5)
+    assert result == [2, 2, 2, 2, 2], f"Medicare failed: {result}"
+    print(f"    'Medicare' -> {result} ✅")
+    
+    # Test 2: Asterisk-separated format
+    print("  Testing asterisk-separated format...")
+    result = conv_lob("Medicaid*Medicaid*Commercial", 5)
+    assert result == [3, 3, 1, 1, 1], f"Asterisk format failed: {result}"
+    print(f"    'Medicaid*Medicaid*Commercial' (len=5) -> {result} ✅")
+    
+    # Test 3: Case insensitivity
+    print("  Testing case insensitivity...")
+    result = conv_lob("MEDICAID", 3)
+    assert result == [3, 3, 3], f"Case insensitivity failed: {result}"
+    print(f"    'MEDICAID' -> {result} ✅")
+    
+    result = conv_lob("medicare", 3)
+    assert result == [2, 2, 2], f"Lowercase failed: {result}"
+    print(f"    'medicare' -> {result} ✅")
+    
+    
+    # Test 5: None/empty values
+    print("  Testing None/empty values...")
+    result = conv_lob(None, 3)
+    assert result == [0, 0, 0], f"None failed: {result}"
+    print(f"    None -> {result} ✅")
+    
+    result = conv_lob("", 3)
+    assert result == [0, 0, 0], f"Empty string failed: {result}"
+    print(f"    '' -> {result} ✅")
+    
+    print("\n✅ TEST 16 PASSED: conv_lob function works correctly\n")
+
+
+# In[75]:
+
+
+test_conv_lob()
+
+
+# In[ ]:
+
+
+
+
+
 # #### Loss logger
 
-# In[16]:
+# In[19]:
 
 
 class LossTracker:
@@ -3283,7 +3604,7 @@ class LossTracker:
 
 # #### Train and evaluation
 
-# In[17]:
+# In[20]:
 
 
 def _model_has_moe(model):
@@ -3355,12 +3676,14 @@ def train_epoch(
         # Get batch data
         age = batch['age'].to(device, non_blocking=True)
         gender = batch['gender'].to(device, non_blocking=True)
+        lob = batch['lob'].to(device, non_blocking=True)
         codes = batch['codes'].to(device, non_blocking=True)
         dt_cnt = batch['dt_cnt']
         y = batch['target']
         x = torch.cat([
             age.unsqueeze(-1),
             gender.unsqueeze(-1),
+            lob.unsqueeze(-1),
             codes
         ], dim=-1)
         
@@ -3476,9 +3799,10 @@ def train_epoch(
             
             # Optional memory monitoring
             if is_main and device.type == 'cuda' and batch_idx % 1000 == 0:
-                allocated = torch.cuda.memory_allocated() / 1024**3
-                reserved = torch.cuda.memory_reserved() / 1024**3
-                print(f'    GPU Memory: {allocated:.2f}GB / {reserved:.2f}GB')
+                for gpu_id in range(torch.cuda.device_count()):
+                    allocated = torch.cuda.memory_allocated(gpu_id) / 1024**3
+                    peak = torch.cuda.max_memory_allocated(gpu_id) / 1024**3
+                    print(f'    GPU {gpu_id}: {allocated:.2f}GB / {peak:.2f}GB peak')
     
     # End-of-epoch cleanup
     if device.type == 'cuda':
@@ -3578,6 +3902,7 @@ def evaluate(
                 
             age = batch['age'].to(device, non_blocking=True)
             gender = batch['gender'].to(device, non_blocking=True)
+            lob = batch['lob'].to(device, non_blocking=True)
             codes = batch['codes'].to(device, non_blocking=True)
             dt_cnt = batch['dt_cnt']
             y = batch['target']
@@ -3585,6 +3910,7 @@ def evaluate(
             x = torch.cat([
                 age.unsqueeze(-1),
                 gender.unsqueeze(-1),
+                lob.unsqueeze(-1),
                 codes
             ], dim=-1)            
             
@@ -3891,7 +4217,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[18]:
+# In[45]:
 
 
 def save_checkpoint(
@@ -3922,7 +4248,7 @@ def save_checkpoint(
     checkpoint = {
         'epoch': epoch,
         'global_step': global_step,
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
         'scaler_state_dict': scaler.state_dict() if scaler else None,
@@ -4408,7 +4734,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[19]:
+# In[22]:
 
 
 class MetricsLogger:
@@ -4538,7 +4864,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[20]:
+# In[23]:
 
 
 def compute_batch_metrics_lightweight(
@@ -4722,12 +5048,14 @@ def compute_embedding_quality_epoch(
                 age = batch['age'].to(device)
                 gender = batch['gender'].to(device)
                 codes = batch['codes'].to(device)
+                lob = batch['lob'].to(device)
                 dt_cnt = batch['dt_cnt']
                 y = batch['target']
 
                 x = torch.cat([
                     age.unsqueeze(-1),
                     gender.unsqueeze(-1),
+                    lob.unsqueeze(-1),
                     codes
                 ], dim=-1)
 
@@ -4851,7 +5179,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[21]:
+# In[24]:
 
 
 """
@@ -5766,6 +6094,7 @@ def comprehensive_evaluation(
         for batch in val_dataloader:  # ← Iterate over DataLoader
             age = batch['age'].to(device)
             gender = batch['gender'].to(device)
+            lob = batch['lob'].to(device)
             codes = batch['codes'].to(device)
             dt_cnt = batch['dt_cnt']
             y = batch['target']
@@ -5773,6 +6102,7 @@ def comprehensive_evaluation(
             x = torch.cat([
                 age.unsqueeze(-1),
                 gender.unsqueeze(-1),
+                lob.unsqueeze(-1), 
                 codes
             ], dim=-1)
             
@@ -5963,7 +6293,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Extract embedding for each member
 
-# In[22]:
+# In[25]:
 
 
 # ============================================================================
@@ -6096,11 +6426,13 @@ class EmbeddingExtractor:
 
 # #### Test
 
-# In[32]:
+# In[103]:
 
 
 def test_embedding_extractor():
     """Test embedding extraction for all model types."""
+    
+    cleanup_gpu_memory()
     
     # Test configuration
     cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
@@ -6114,8 +6446,9 @@ def test_embedding_extractor():
     age_in_months = torch.randint(0, 1400, (batch_size, len_dy, 1), device=device)
     gender_cd = torch.randint(0, 4, (batch_size, len_dy, 1), device=device)
     codes = torch.randint(0, 1000, (batch_size, len_dy, len_cd), device=device)
-    
-    x = torch.cat([age_in_months, gender_cd, codes], dim=-1)
+    lob_cd = torch.randint(0, 4, (batch_size, len_dy, 1), device=device)
+    x = torch.cat([age_in_months, gender_cd, lob_cd, codes], dim=-1)
+
     dt_cnt = [30, 45, 20, 50]
     
     # ============================================================
@@ -6197,9 +6530,875 @@ def test_embedding_extractor():
 test_embedding_extractor()
 
 
+# ### Downstream Evaluation
+
+# In[35]:
+
+
+# ============================================================================
+# DOWNSTREAM TASK EVALUATION MODULE
+# ============================================================================
+# Implements linear probe evaluation for IP risk prediction
+# Separate from training for clean evaluation with proper train/val/test splits
+# ============================================================================
+from utils.metrics import lift_at_percentage, true_positives_at_percentage, num_samples_at_percentage, precision_at_percentage, recall_at_percentage, f1_at_percentage
+@dataclass
+class DownstreamConfig:
+    """Configuration for downstream task evaluation."""
+    task_name: str = "medicaid_ip_risk"
+    test_size: float = 0.1        # 10% for test
+    val_size: float = 0.1         # 10% of remaining for validation (= 8% of total)
+    random_state: int = 42
+    n_cv_folds: int = 5           # optional, this takes long time; cross-validation folds for probe
+    max_iter: int = 1000          # Max iterations for logistic regression
+    class_weight: str = 'balanced'  # Handle class imbalance
+
+
+class DownstreamEvaluator:
+    """
+    Evaluates transformer embeddings on downstream classification tasks.
+    
+    Implements the "linear probe" methodology:
+    1. Extract embeddings from trained transformer (frozen)
+    2. Train a simple logistic regression on top
+    3. Evaluate on held-out test set
+    
+    # why linear probes? 
+    Reference: Radford et al. (2021) "CLIP" uses linear probe as primary metric
+    
+    Usage:
+        evaluator = DownstreamEvaluator(model, config, device)
+        results = evaluator.evaluate(
+            features_df=train_data,
+            outcomes_df=outcomes_data,
+            downstream_config=DownstreamConfig()
+        )
+    """
+    
+    def __init__(
+        self,
+        model: nn.Module,
+        model_config: BaseConfig,
+        device: torch.device,
+        use_mixed_precision: bool = False
+    ):
+        # Enable multi-GPU wrapper
+        self.model = model.module if isinstance(model, nn.DataParallel) else model
+        self.model_config = model_config
+        self.device = device
+        self.use_mixed_precision = use_mixed_precision
+        
+        # Ensure model is in eval mode
+        self.model.eval()
+    
+    def extract_embeddings(
+        self,
+        data: pd.DataFrame,
+        batch_size: int = 32
+    ) -> Tuple[np.ndarray, List[str], List[str]]:
+        """
+        Extract member-level embeddings from the transformer.
+        
+        Args:
+            data: DataFrame with transformer input columns + individual_id, index_dt
+            batch_size: Batch size for inference
+            
+        Returns:
+            embeddings: np.ndarray [num_patients, embedding_dim]
+            individual_ids: List of individual_id strings
+            index_dts: List of index_dt strings
+        """
+        # Create dataset and dataloader
+        dataset = ClinicalDataset(data, self.model_config)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=clinical_collate_fn,
+            num_workers=0
+        )
+        
+        all_embeddings = []
+        individual_ids = data['individual_id'].tolist()
+        index_dts = data['index_dt'].astype(str).tolist()
+        
+        self.model.eval()
+        
+        with torch.no_grad():
+            with EmbeddingExtractor(self.model) as extractor:
+                for batch_idx, batch in enumerate(dataloader):
+                    # Prepare input
+                    age = batch['age'].to(self.device)
+                    gender = batch['gender'].to(self.device)
+                    lob = batch['lob'].to(self.device)
+                    codes = batch['codes'].to(self.device)
+                    dt_cnt = batch['dt_cnt']
+                    
+                    x = torch.cat([
+                        age.unsqueeze(-1),
+                        gender.unsqueeze(-1),
+                        lob.unsqueeze(-1),
+                        codes
+                    ], dim=-1)
+                    
+                    # Forward pass
+                    if self.use_mixed_precision:
+                        with torch.cuda.amp.autocast(dtype=torch.float16):
+                            if hasattr(self.model, 'forward') and 'return_moe_losses' in self.model.forward.__code__.co_varnames:
+                                _ = self.model(x, return_moe_losses=False)
+                            else:
+                                _ = self.model(x)
+                    else:
+                        if hasattr(self.model, 'forward') and 'return_moe_losses' in self.model.forward.__code__.co_varnames:
+                            _ = self.model(x, return_moe_losses=False)
+                        else:
+                            _ = self.model(x)
+                    
+                    # Get patient-level embeddings (last valid day)
+                    patient_embs = extractor.get_patient_embedding(dt_cnt)
+                    all_embeddings.append(patient_embs.cpu().numpy())
+                    
+                    if batch_idx % 100 == 0:
+                        print(f"  Extracted embeddings: {(batch_idx + 1) * batch_size}/{len(data)}")
+        
+        embeddings = np.vstack(all_embeddings)
+        print(f"  Total embeddings extracted: {embeddings.shape}")
+        
+        return embeddings, individual_ids, index_dts
+    
+    def prepare_downstream_data(
+        self,
+        features_df: pd.DataFrame,
+        outcomes_df: pd.DataFrame,
+        downstream_config: DownstreamConfig
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Join features with outcomes and create train/val/test splits.
+        
+        Args:
+            features_df: Transformer training data with individual_id, index_dt
+            outcomes_df: Outcome table with individual_id, index_dt, acute_ip_flag
+            downstream_config: Configuration for splitting
+            
+        Returns:
+            X_train, X_val, X_test, y_train, y_val, y_test
+        """
+        print("Preparing downstream data...")
+        
+        # Extract embeddings
+        embeddings, individual_ids, index_dts = self.extract_embeddings(features_df)
+        
+        # Create embedding DataFrame for joining
+        emb_df = pd.DataFrame({
+            'individual_id': individual_ids,
+            'index_dt': index_dts
+        })
+        emb_df['embedding_idx'] = range(len(emb_df))
+        emb_df['individual_id'] = emb_df['individual_id'].astype(str)
+        
+        # Ensure outcomes_df has correct types
+        outcomes_df = outcomes_df.copy()
+        outcomes_df['individual_id'] = outcomes_df['individual_id'].astype(str)
+        outcomes_df['index_dt'] = outcomes_df['index_dt'].astype(str)
+        
+        # Left join embeddings with outcomes
+        merged = emb_df.merge(
+            outcomes_df[['individual_id', 'index_dt', 'acute_ip_flag']],
+            on=['individual_id'],
+            how='left'
+        )
+        
+        # Handle missing outcomes (default to 0)
+        merged['acute_ip_flag'] = merged['acute_ip_flag'].fillna(0).astype(int)
+        
+        print(f"  Matched {len(merged)} records")
+        print(f"  Label distribution: {merged['acute_ip_flag'].value_counts().to_dict()}")
+        
+        # Get embeddings and labels
+        X = embeddings[merged['embedding_idx'].values]
+        y = merged['acute_ip_flag'].values
+        
+        # Stratified train/test split
+        X_trainval, X_test, y_trainval, y_test = train_test_split(
+            X, y,
+            test_size=downstream_config.test_size,
+            random_state=downstream_config.random_state,
+            stratify=y
+        )
+        
+        # Stratified train/val split from trainval
+        val_ratio = downstream_config.val_size / (1 - downstream_config.test_size)
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_trainval, y_trainval,
+            test_size=val_ratio,
+            random_state=downstream_config.random_state,
+            stratify=y_trainval
+        )
+        
+        print(f"  Train: {len(X_train)} (pos: {y_train.sum()})")
+        print(f"  Val:   {len(X_val)} (pos: {y_val.sum()})")
+        print(f"  Test:  {len(X_test)} (pos: {y_test.sum()})")
+        
+        return X_train, X_val, X_test, y_train, y_val, y_test
+    
+    def train_linear_probe(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        downstream_config: DownstreamConfig
+    ) -> Tuple[LogisticRegression, StandardScaler]:
+        """
+        Train a linear probe (logistic regression) on embeddings.
+        
+        Args:
+            X_train: Training embeddings
+            y_train: Training labels
+            downstream_config: Configuration
+            
+        Returns:
+            Trained classifier and scaler
+        """
+        print("Training linear probe...")
+        
+        # Standardize features
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        
+        # Train logistic regression
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=ConvergenceWarning)
+            
+            classifier = LogisticRegression(
+                max_iter=downstream_config.max_iter,
+                solver='lbfgs',
+                class_weight=downstream_config.class_weight,
+                random_state=downstream_config.random_state,
+                n_jobs=-1
+            )
+            classifier.fit(X_train_scaled, y_train)
+        
+        print("  Linear probe trained successfully")
+        return classifier, scaler
+    
+    def evaluate_probe(
+        self,
+        classifier: LogisticRegression,
+        scaler: StandardScaler,
+        X: np.ndarray,
+        y: np.ndarray,
+        split_name: str = "test"
+    ) -> Dict[str, float]:
+        """
+        Evaluate the linear probe on a dataset split.
+        
+        Args:
+            classifier: Trained logistic regression
+            scaler: Fitted scaler
+            X: Embeddings
+            y: True labels
+            split_name: Name of split for logging
+            
+        Returns:
+            Dictionary of metrics
+        """
+        X_scaled = scaler.transform(X)
+        
+        # Predictions
+        y_pred = classifier.predict(X_scaled)
+        y_prob = classifier.predict_proba(X_scaled)[:, 1]
+        
+        # Compute metrics
+        metrics = {
+            f'{split_name}_accuracy': float((y_pred == y).mean()),
+            f'{split_name}_auc_roc': float(roc_auc_score(y, y_prob)),
+            f'{split_name}_auc_pr': float(average_precision_score(y, y_prob)),
+            f'{split_name}_f1': float(f1_score(y, y_pred)),
+            f'{split_name}_precision': float(precision_score(y, y_pred, zero_division=0)),
+            f'{split_name}_recall': float(recall_score(y, y_pred, zero_division=0)),
+            f'{split_name}_brier': float(brier_score_loss(y, y_prob)),
+            f'{split_name}_prevalence': float(y.mean()),
+            f'{split_name}_n_samples': int(len(y)),
+            f'{split_name}_n_positive': int(y.sum()),
+        }
+        for pct in [0.01]:
+            pct_str = f"{int(pct * 100)}pct"  # e.g., "1pct", "5pct", "10pct", "20pct"
+            # Lift at top X%
+            metrics[f'{split_name}_lift_{pct_str}'] = lift_at_percentage(y_array, y_prob, pct)
+            # True positives at top X%
+            metrics[f'{split_name}_true_positives_{pct_str}'] = true_positives_at_percentage(y_array, y_prob, pct)
+            # Number of samples at top X%
+            metrics[f'{split_name}_n_samples_{pct_str}'] = num_samples_at_percentage(y_array, pct)
+            # Precision at top X% (how many in top X% are actual positives)
+            metrics[f'{split_name}_precision_{pct_str}'] = precision_at_percentage(y_array, y_prob, pct)
+            # Recall at top X% (what fraction of all positives are captured)
+            metrics[f'{split_name}_recall_{pct_str}'] = recall_at_percentage(y_array, y_prob, pct)
+            # F1 at top X%
+            metrics[f'{split_name}_f1_{pct_str}'] = f1_at_percentage(y_array, y_prob, pct)        
+        return metrics
+    
+    def evaluate(
+        self,
+        features_df: pd.DataFrame,
+        outcomes_df: pd.DataFrame,
+        downstream_config: Optional[DownstreamConfig] = None
+    ) -> Dict[str, any]:
+        """
+        Full downstream evaluation pipeline.
+        
+        Args:
+            features_df: Transformer training data with individual_id, index_dt
+            outcomes_df: Outcome table with individual_id, index_dt, acute_ip_flag
+            downstream_config: Configuration for evaluation
+            
+        Returns:
+            Dictionary with all metrics for train/val/test splits
+        """
+        if downstream_config is None:
+            downstream_config = DownstreamConfig()
+        
+        print(f"\n{'='*60}")
+        print(f"DOWNSTREAM EVALUATION: {downstream_config.task_name}")
+        print(f"{'='*60}")
+        
+        # Prepare data
+        X_train, X_val, X_test, y_train, y_val, y_test = self.prepare_downstream_data(
+            features_df, outcomes_df, downstream_config
+        )
+        
+        # Train linear probe
+        classifier, scaler = self.train_linear_probe(X_train, y_train, downstream_config)
+        
+        # Evaluate on all splits
+        train_metrics = self.evaluate_probe(classifier, scaler, X_train, y_train, 'train')
+        val_metrics = self.evaluate_probe(classifier, scaler, X_val, y_val, 'val')
+        test_metrics = self.evaluate_probe(classifier, scaler, X_test, y_test, 'test')
+        
+        # Combine results
+        results = {
+            'task_name': downstream_config.task_name,
+            'embedding_dim': X_train.shape[1],
+            **train_metrics,
+            **val_metrics,
+            **test_metrics,
+        }
+        
+        # Print summary
+        print(f"\n--- Linear Probe Results ---")
+        print(f"Train AUC-ROC: {train_metrics['train_auc_roc']:.4f}")
+        print(f"Val AUC-ROC:   {val_metrics['val_auc_roc']:.4f}")
+        print(f"Test AUC-ROC:  {test_metrics['test_auc_roc']:.4f}")
+        print(f"Test F1:       {test_metrics['test_f1']:.4f}")
+        print(f"Test Recall:   {test_metrics['test_recall']:.4f}")
+        print(f"{'='*60}\n")
+        
+        return results
+
+
+
+# In[36]:
+
+
+def generate_model_name(
+    exp_name: str,
+    experiment_round: Optional[str] = None,
+    batch_size: int = 32,
+    epochs: int = 1,
+    embedding_size: int = 256 # 256 by default
+) -> str:
+    """
+    Generate a standardized model name for saving/loading.
+    
+    Format: {experiment_round}_{exp_name}_bs{batch_size}_ep{epochs}_d{embedding_size}_{timestamp}
+    
+    Example: round3_exp3_standard_moe_bs32_ep10_d256_20241211_143022
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    parts = []
+    if experiment_round:
+        parts.append(experiment_round)
+    parts.append(exp_name)
+    parts.append(f"bs{batch_size}")
+    parts.append(f"ep{epochs}")
+    parts.append(f"d{embedding_size}")
+    parts.append(timestamp)
+    
+    return "_".join(parts)
+
+
+def save_trained_model(
+    model: nn.Module,
+    config: BaseConfig,
+    model_name: str,
+    save_dir: str,
+    exp_results: Dict[str, any],
+    checkpoint_dir: Optional[str] = None,  # Link to checkpoint for resume
+    is_best: bool = False
+) -> str:
+    """
+    Save trained model for inference/downstream evaluation.
+    
+    This is SEPARATE from save_checkpoint() which is for training resume.
+    This creates lightweight, portable model files for:
+    - Loading in production
+    - Running downstream evaluations
+    - Sharing/deploying models
+    
+    Directory structure after training:
+    logs/{experiment_round}/{exp_name}/
+    ├── checkpoints/                    # Training resume (save_checkpoint)
+    │   ├── checkpoint_latest.pt
+    │   ├── checkpoint_best.pt
+    │   └── checkpoint_epoch{N}.pt
+    ├── saved_models/                   # Inference (save_trained_model)
+    │   ├── {model_name}_final.pt       # Lightweight: just weights
+    │   ├── {model_name}_config.json
+    │   └── {model_name}_results.json
+    ├── epoch_metrics.json              # MetricsLogger
+    ├── batch_metrics.json
+    ├── config.json
+    ├── final_results.json
+    └── {exp_name}.log                  # Python logger
+    
+    Args:
+        model: Trained model
+        config: Model configuration
+        model_name: Generated model name (for traceability)
+        save_dir: Directory to save model files
+        exp_results: Experiment results dictionary
+        checkpoint_dir: Path to checkpoint directory (for linking)
+        is_best: Whether this is the best model
+        
+    Returns:
+        Path to saved model
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 1. Save lightweight model (just state dict + model info)
+    model_path = os.path.join(save_dir, f"{model_name}_final.pt")
+    save_dict = {
+        'model_state_dict': model.state_dict(),
+        'model_name': model_name,
+        'model_type': type(model).__name__,
+        'embedding_size': config.embedding_size,
+        'nlayers': config.nlayers,
+        # Link back to full checkpoint for resume if needed
+        'checkpoint_dir': checkpoint_dir,
+        'timestamp': datetime.now().isoformat()
+    }
+    torch.save(save_dict, model_path)
+    print(f"Model saved to: {model_path}")
+    
+    # 2. Save config (human-readable)
+    config_path = os.path.join(save_dir, f"{model_name}_config.json")
+    config_dict = {}
+    for k, v in config.__dict__.items():
+        if isinstance(v, torch.dtype):
+            config_dict[k] = str(v)
+        elif callable(v):
+            config_dict[k] = str(v)
+        else:
+            config_dict[k] = v
+    with open(config_path, 'w') as f:
+        json.dump(config_dict, f, indent=2)
+    
+    # 3. Save results (with downstream metrics if available)
+    results_path = os.path.join(save_dir, f"{model_name}_results.json")
+    with open(results_path, 'w') as f:
+        json.dump(MetricsLogger.convert_to_serializable(exp_results), f, indent=2)
+    
+    # 4. Also save as "best" for easy access
+    if is_best:
+        best_path = os.path.join(save_dir, f"{model_name}_best.pt")
+        torch.save(save_dict, best_path)
+        print(f"Best model saved to: {best_path}")
+    
+    return model_path
+
+
+def load_trained_model(
+    model_path: str,
+    model_class: type,
+    config: BaseConfig,
+    device: torch.device
+) -> nn.Module:
+    """
+    Load a trained model from checkpoint.
+    
+    Args:
+        model_path: Path to saved .pt file
+        model_class: Class of the model (BaselineTransformer, FlashAttentionTransformer, etc.)
+        config: Model configuration
+        device: Device to load model to
+        
+    Returns:
+        Loaded model
+    """
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Create model instance
+    if model_class == FlashMoETransformer:
+        # MoE models need additional config
+        moe_config = MoEConfig(d_model=config.embedding_size, d_ff=config.nhid)
+        model = model_class(config, moe_config)
+    else:
+        model = model_class(config)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()
+    
+    print(f"Model loaded from: {model_path}")
+    print(f"Model type: {checkpoint.get('model_type', 'Unknown')}")
+    
+    return model
+
+
+def run_downstream_evaluation(
+    model: nn.Module,
+    model_config: BaseConfig,
+    features_df: pd.DataFrame,
+    outcomes_df: pd.DataFrame,
+    device: torch.device,
+    use_mixed_precision: bool = False,
+    downstream_config: Optional[DownstreamConfig] = None
+) -> Dict[str, any]:
+    """
+    Convenience function to run downstream evaluation on a trained model.
+    
+    Args:
+        model: Trained transformer model
+        model_config: Model configuration
+        features_df: Training data with individual_id, index_dt, and transformer features
+        outcomes_df: Outcomes with individual_id, index_dt, acute_ip_flag
+        device: Torch device
+        use_mixed_precision: Whether to use FP16 for inference
+        downstream_config: Optional downstream evaluation configuration
+        
+    Returns:
+        Dictionary with downstream evaluation metrics
+    """
+    evaluator = DownstreamEvaluator(
+        model=model,
+        model_config=model_config,
+        device=device,
+        use_mixed_precision=use_mixed_precision
+    )
+    
+    return evaluator.evaluate(
+        features_df=features_df,
+        outcomes_df=outcomes_df,
+        downstream_config=downstream_config
+    )
+
+
+# #### Test
+
+# In[105]:
+
+
+import tempfile
+def test_model_saving_and_loading():
+    """
+    Test model saving and loading functionality.
+    
+    Validates:
+    - Model can be saved with standardized naming
+    - Model can be loaded back
+    - Loaded model produces same output
+    - Config and results are saved
+    """
+    print("\n" + "="*80)
+    print("TEST 20: Model Saving and Loading")
+    print("="*80)
+    
+    cleanup_gpu_memory()
+    
+    import tempfile
+    import os
+    
+    cfg = FlashAttentionConfig(len_dy=50, len_cd=20, 
+                               batch_size=16, embedding_size=256, nhid=128)
+    
+    # Create and initialize model
+    print("  Creating model...")
+    model = FlashAttentionTransformer(cfg).to(device)
+    model.eval()
+    
+    # Test generate_model_name
+    print("  Testing model name generation...")
+    model_name = generate_model_name(
+        exp_name='exp2_dense_flash',
+        experiment_round='test_round',
+        batch_size=32,
+        epochs=10,
+        embedding_size=64
+    )
+    print(f"    Generated name: {model_name}")
+    assert 'test_round' in model_name
+    assert 'exp2_dense_flash' in model_name
+    assert 'bs32' in model_name
+    assert 'ep10' in model_name
+    assert 'd64' in model_name
+    print("    ✅ Name format correct")
+    
+    # Create temporary directory for saving
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Mock results
+        exp_results = {
+            'experiment': 'exp2_dense_flash',
+            'final_val_loss': 0.5,
+            'final_top_10_acc': 0.75,
+            'training_time_sec': 100.0
+        }
+        
+        # Save model
+        print("  Saving model...")
+        model_path = save_trained_model(
+            model=model,
+            config=cfg,
+            model_name=model_name,
+            save_dir=tmpdir,
+            exp_results=exp_results,
+            is_best=True
+        )
+        
+        # Check files exist
+        assert os.path.exists(model_path), "Model file not saved"
+        assert os.path.exists(os.path.join(tmpdir, f"{model_name}_config.json")), "Config not saved"
+        assert os.path.exists(os.path.join(tmpdir, f"{model_name}_results.json")), "Results not saved"
+        assert os.path.exists(os.path.join(tmpdir, f"{model_name}_best.pt")), "Best model not saved"
+        print("    ✅ All files saved")
+        
+        # Test loading
+        print("  Loading model...")
+        loaded_model = load_trained_model(
+            model_path=model_path,
+            model_class=FlashAttentionTransformer,
+            config=cfg,
+            device=device
+        )
+        
+        # Verify loaded model works
+        print("  Verifying loaded model...")
+        batch_size = 16
+        len_dy = 50
+        len_cd = 20
+        
+        age = torch.randint(0, 1400, (batch_size, len_dy), device=device)
+        gender = torch.randint(0, 4, (batch_size, len_dy), device=device)
+        lob = torch.randint(0, 4, (batch_size, len_dy), device=device)
+        codes = torch.randint(0, 1000, (batch_size, len_dy, len_cd), device=device)
+        
+        x = torch.cat([
+            age.unsqueeze(-1),
+            gender.unsqueeze(-1),
+            lob.unsqueeze(-1),
+            codes
+        ], dim=-1)
+        
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                original_output = model(x)
+                loaded_output = loaded_model(x)
+        
+        # Outputs should be identical
+        assert torch.allclose(original_output, loaded_output, atol=1e-4), \
+            "Loaded model produces different output"
+        print("    ✅ Loaded model produces identical output")
+    
+    del model, loaded_model
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    print("\n✅ TEST 20 PASSED: Model saving and loading works\n")
+
+test_model_saving_and_loading()
+
+
+# In[111]:
+
+
+def test_downstream_evaluator_with_real_data():
+    """
+    Test DownstreamEvaluator with real data.
+    
+    This is the integration test for the full downstream evaluation pipeline:
+    1. Load real training data
+    2. Load real outcomes data
+    3. Train a small model
+    4. Extract embeddings
+    5. Train linear probe
+    6. Evaluate on train/val/test
+    
+    REQUIRES: Real data loaded (df_train, df_val) and outcomes table available
+    """
+    print("\n" + "="*80)
+    print("TEST 21: DownstreamEvaluator with Real Data")
+    print("="*80)
+    
+    cleanup_gpu_memory_hard()
+    
+    # Use small sample for testing
+    train_sample = df_train.head(1000).copy()
+    val_sample = df_val.head(200).copy()
+
+    # Ensure required columns exist
+    if 'target' in train_sample.columns and 'target_cd' not in train_sample.columns:
+        train_sample = train_sample.rename(columns={'target': 'target_cd'})
+    if 'target' in val_sample.columns and 'target_cd' not in val_sample.columns:
+        val_sample = val_sample.rename(columns={'target': 'target_cd'})
+    
+            
+    print(f"  Using {len(train_sample)} train samples, {len(val_sample)} val samples")
+    
+    # Create a small model for testing
+    print("  Creating model...")
+    cfg = FlashAttentionConfig(
+        len_dy=200,  # Smaller for speed
+        len_cd=80,
+        batch_size=16,
+        embedding_size=256,  # Smaller for speed
+        nhid=128
+    )
+    model = FlashAttentionTransformer(cfg).to(device)
+    
+    # Train for 1 epoch to get non-random weights
+    print("  Training model for 1 epoch...")
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+    criterion = nn.BCEWithLogitsLoss()
+    scaler = torch.cuda.amp.GradScaler()
+    
+    # Create dataset and dataloader
+    train_dataset = ClinicalDataset(train_sample, cfg)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        collate_fn=clinical_collate_fn,
+        num_workers=0
+    )
+    
+    # Quick training
+    model.train()
+    for batch_idx, batch in enumerate(train_loader):
+        if batch_idx >= 5:  # Just 5 batches
+            break
+        
+        optimizer.zero_grad()
+        
+        age = batch['age'].to(device)
+        gender = batch['gender'].to(device)
+        lob = batch['lob'].to(device)
+        codes = batch['codes'].to(device)
+        dt_cnt = batch['dt_cnt']
+        y = batch['target']
+        
+        x = torch.cat([
+            age.unsqueeze(-1),
+            gender.unsqueeze(-1),
+            lob.unsqueeze(-1),
+            codes
+        ], dim=-1)
+        
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            output = model(x)
+            loss = compute_loss(output, y, dt_cnt, cfg, criterion, device)
+        
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+    
+    print("  Training complete")
+    
+    # Run downstream evaluation
+    print("\n  Running DownstreamEvaluator...")
+    model.eval()
+    
+    evaluator = DownstreamEvaluator(
+        model=model,
+        model_config=cfg,
+        device=device,
+        use_mixed_precision=True
+    )
+    
+    # Ensure val_sample has individual_id and index_dt as strings
+    val_sample['individual_id'] = val_sample['individual_id'].astype(str)
+    val_sample['index_dt'] = val_sample['index_dt'].astype(str)
+    
+    downstream_config = DownstreamConfig(
+        task_name="medicaid_ip_risk_test",
+        test_size=0.1,
+        val_size=0.1,
+        n_cv_folds=3,
+        max_iter=500
+    )
+    
+    try:
+        results = evaluator.evaluate(
+            features_df=val_sample,
+            outcomes_df=val_sample[['individual_id', 'acute_ip_flag', 'index_dt']],
+            downstream_config=downstream_config
+        )
+        
+        # Validate results structure
+        print("\n  Validating results...")
+        assert 'train_auc_roc' in results, "Missing train_auc_roc"
+        assert 'val_auc_roc' in results, "Missing val_auc_roc"
+        assert 'test_auc_roc' in results, "Missing test_auc_roc"
+        assert 'test_f1' in results, "Missing test_f1"
+        
+        print(f"\n  Results Summary:")
+        print(f"    Train AUC-ROC: {results['train_auc_roc']:.4f}")
+        print(f"    Val AUC-ROC:   {results['val_auc_roc']:.4f}")
+        print(f"    Test AUC-ROC:  {results['test_auc_roc']:.4f}")
+        print(f"    Test F1:       {results['test_f1']:.4f}")
+        print(f"    Test Recall:   {results['test_recall']:.4f}")
+        print(f"    Embedding dim: {results['embedding_dim']}")
+        
+        # Basic sanity checks
+        assert results['embedding_dim'] == cfg.embedding_size, "Wrong embedding dimension"
+        
+        print("\n  ✅ DownstreamEvaluator works correctly!")
+        
+    except Exception as e:
+        print(f"\n  ⚠️ Evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    
+    finally:
+        del model, evaluator
+        gc.collect()
+        torch.cuda.empty_cache()
+    
+    print("\n✅ TEST 21 PASSED: DownstreamEvaluator works with real data\n")
+test_downstream_evaluator_with_real_data()
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
 # ### Run experimentation
 
-# In[23]:
+# #### Utils
+
+# In[37]:
 
 
 def compute_code_frequencies(
@@ -6261,7 +7460,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[24]:
+# In[38]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -6325,7 +7524,295 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[25]:
+# #### Run experimentation
+
+# In[39]:
+
+
+# ============================================================================
+# EXPERIMENT HELPER FUNCTIONS
+# ============================================================================
+
+def _setup_experiment_directories(
+    log_dir: str,
+    experiment_round: Optional[str],
+    exp_name: str,
+    checkpoint_dir: Optional[str]
+) -> Tuple[str, str]:
+    """Set up logging and checkpoint directories."""
+    if experiment_round is not None:
+        effective_log_dir = os.path.join(log_dir, experiment_round)
+    else:
+        datetime_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        effective_log_dir = os.path.join(log_dir, f"exp_{datetime_string}")
+    
+    if checkpoint_dir is None:
+        checkpoint_dir = os.path.join(effective_log_dir, exp_name, 'checkpoints')
+    
+    return effective_log_dir, checkpoint_dir
+
+
+def _create_model(
+    exp_name: str,
+    eff_d_model: int,
+    eff_nhid: int,
+    eff_nhead: int,
+    moe_config: Optional[MoEConfig],
+    use_learnt_att_pool: bool,
+    device: torch.device,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[nn.Module, BaseConfig, bool, bool]:
+    """
+    Create model based on experiment type.
+    
+    Returns:
+        model, config, use_mixed_precision, use_bucketing
+    """
+    is_baseline = exp_name == 'exp1_dense_baseline'
+    is_flash_dense = exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']
+    is_moe = moe_config is not None and not is_baseline and not is_flash_dense
+    
+    if is_baseline:
+        config = BaseConfig(embedding_size=eff_d_model, nhid=eff_nhid)
+        model = BaselineTransformer(config).to(device)
+        use_mixed_precision = False
+        use_bucketing = False
+        if logger:
+            logger.info(f"Model: Baseline Transformer (FP32)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead=16 (hardcoded)")
+            
+    elif is_flash_dense:
+        config = FlashAttentionConfig(
+            embedding_size=eff_d_model,
+            nhid=eff_nhid,
+            nhead=eff_nhead,
+            use_swiglu=True,
+            dtype=torch.float16,
+            use_learnt_att_pool=use_learnt_att_pool
+        )
+        model = FlashAttentionTransformer(config).to(device)
+        use_mixed_precision = True
+        use_bucketing = True
+        if logger:
+            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
+            logger.info(f"Model: Flash Attention Transformer (FP16)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
+            logger.info(f"  Daily Encoder: {pooling_str}")
+            
+    else:
+        # MoE variant
+        config = FlashAttentionConfig(
+            embedding_size=eff_d_model,
+            nhid=eff_nhid,
+            nhead=eff_nhead,
+            use_swiglu=True,
+            dtype=torch.float16,
+            use_learnt_att_pool=use_learnt_att_pool
+        )
+        if moe_config:
+            import copy
+            moe_config = copy.deepcopy(moe_config)
+            moe_config.d_model = eff_d_model
+            moe_config.d_ff = eff_nhid
+            
+        model = FlashMoETransformer(config, moe_config).to(device)
+        use_mixed_precision = True
+        use_bucketing = True
+        if logger:
+            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
+            logger.info(f"Model: Flash + MoE Transformer (FP16)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
+            logger.info(f"  Daily Encoder: {pooling_str}")
+            logger.info(f"  MoE: {moe_config.num_experts} experts, top-{moe_config.top_k}")
+    
+    return model, config, use_mixed_precision, use_bucketing
+
+
+def _create_dataloaders(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    config: BaseConfig,
+    use_bucketing: bool,
+    world_size: int = 1,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[DataLoader, DataLoader]:
+    """Create train and validation dataloaders."""
+    train_dataset = ClinicalDataset(train_data, config)
+    val_dataset = ClinicalDataset(val_data, config)
+    
+    n_workers = max(1, os.cpu_count() // max(world_size, 1) // 2)
+    
+    if use_bucketing:
+        if logger:
+            logger.info("Bucketing is ENABLED via BatchSampler.")
+        train_batch_sampler = BucketingBatchSampler(
+            data=train_data,
+            batch_size=config.batch_size,
+            shuffle=True
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_batch_sampler,
+            num_workers=n_workers,
+            pin_memory=True,
+            collate_fn=clinical_collate_fn
+        )
+    else:
+        if logger:
+            logger.info("Using standard DataLoader (no bucketing).")
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=n_workers,
+            pin_memory=True,
+            drop_last=True,
+            collate_fn=clinical_collate_fn,
+            persistent_workers=n_workers > 0
+        )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=n_workers,
+        pin_memory=True,
+        collate_fn=clinical_collate_fn
+    )
+    
+    if logger:
+        logger.info(f"Using DataLoader with {n_workers} workers.")
+    
+    return train_loader, val_loader
+
+
+def _resume_from_checkpoint(
+    resume_path: str,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Optional[Any],
+    scaler: Optional[GradScaler],
+    device: torch.device,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[int, int, float]:
+    """
+    Resume training from checkpoint.
+    
+    Returns:
+        start_epoch, global_step, best_val_loss
+    """
+    checkpoint = torch.load(resume_path, map_location=device)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    if scheduler and checkpoint.get('scheduler_state_dict'):
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    if scaler and checkpoint.get('scaler_state_dict'):
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+    
+    start_epoch = checkpoint['epoch'] + 1
+    global_step = checkpoint.get('global_step', 0)
+    
+    best_val_loss = float('inf')
+    if checkpoint.get('metrics'):
+        valid_losses = [m.get('val_loss', float('inf')) for m in checkpoint['metrics'] if 'val_loss' in m]
+        if valid_losses:
+            best_val_loss = min(valid_losses)
+    
+    if logger:
+        logger.info(f"✅ Resumed from epoch {start_epoch}, step {global_step}")
+        logger.info(f"   Previous best val loss: {best_val_loss:.4f}")
+    
+    return start_epoch, global_step, best_val_loss
+
+
+def _build_epoch_metrics(
+    epoch: int,
+    train_metrics: Dict,
+    train_eval_metrics: Dict,
+    val_metrics: Dict
+) -> Dict[str, Any]:
+    """Build comprehensive epoch metrics dictionary."""
+    epoch_metrics = {
+        'epoch': epoch + 1,
+        # Training trajectory
+        'train_loss': train_metrics['train_loss'],
+        'train_loss_mean': train_metrics['train_loss_mean'],
+        'train_loss_first': train_metrics['train_loss_first'],
+        'train_loss_last': train_metrics['train_loss_last'],
+        'train_loss_std': train_metrics['train_loss_std'],
+        'train_loss_improvement': train_metrics['train_loss_improvement'],
+        # Train evaluation
+        'eval_in_train_loss_final': train_eval_metrics['val_loss'],
+        'eval_in_train_top_1_acc': train_eval_metrics['top_1_acc'],
+        'eval_in_train_top_5_acc': train_eval_metrics['top_5_acc'],
+        'eval_in_train_top_10_acc': train_eval_metrics['top_10_acc'],
+        'eval_in_train_top_20_acc': train_eval_metrics['top_20_acc'],
+        # Validation
+        'final_val_loss': val_metrics['val_loss'],
+        'final_val_top_1_acc': val_metrics['top_1_acc'],
+        'final_val_top_5_acc': val_metrics['top_5_acc'],
+        'final_val_top_10_acc': val_metrics['top_10_acc'],
+        'final_val_top_20_acc': val_metrics['top_20_acc'],
+        'generalization_gap': train_eval_metrics['val_loss'] - val_metrics['val_loss'],
+    }
+    
+    # Add other training metrics
+    for k, v in train_metrics.items():
+        if k.startswith('train_') and k not in epoch_metrics:
+            epoch_metrics[k] = v
+    
+    # Add other validation metrics (embedding quality, etc.)
+    for k, v in val_metrics.items():
+        if k not in epoch_metrics and k not in ['val_loss', 'top_1_acc', 'top_5_acc', 'top_10_acc', 'top_20_acc']:
+            epoch_metrics[k] = v
+    
+    return epoch_metrics
+
+
+def _build_final_results(
+    exp_name: str,
+    total_params: int,
+    use_learnt_att_pool: bool,
+    use_bucketing: bool,
+    final_metrics: Dict,
+    evaluation: Dict,
+    epoch_history: List[Dict],
+    total_time: float
+) -> Dict[str, Any]:
+    """Build final experiment results dictionary."""
+    return {
+        'experiment': exp_name,
+        'parameters': total_params,
+        'use_learned_pooling': use_learnt_att_pool,
+        'use_bucketing': use_bucketing,
+        'train_loss_mean': final_metrics['train_loss'],
+        'train_loss_learned': final_metrics['train_loss_improvement'],
+        'train_loss_final': final_metrics['eval_in_train_loss_final'],
+        'val_loss_final': final_metrics['final_val_loss'],
+        'generalization_gap': final_metrics['generalization_gap'],
+        'final_train_top_5_acc': final_metrics['eval_in_train_top_5_acc'],
+        'final_train_top_10_acc': final_metrics['eval_in_train_top_10_acc'],
+        'final_train_top_20_acc': final_metrics['eval_in_train_top_20_acc'],
+        'final_val_top_5_acc': final_metrics['final_val_top_5_acc'],
+        'final_val_top_10_acc': final_metrics['final_val_top_10_acc'],
+        'final_val_top_20_acc': final_metrics['final_val_top_20_acc'],
+        'training_time_sec': total_time,
+        'precision@10': evaluation['performance']['precision@10'],
+        'recall@10': evaluation['performance']['recall@10'],
+        'f1@10': evaluation['performance']['f1@10'],
+        'balanced_top10_acc': evaluation['performance']['balanced_top10_acc'],
+        'tail_top10_acc': evaluation['performance']['tail_top10_acc'],
+        'cost_usd': evaluation['resources']['cost_usd'],
+        'peak_memory_gb': evaluation['resources']['total_peak_gb'],
+        'full_evaluation': evaluation,
+        'all_epochs': epoch_history
+    }
+
+
+# In[40]:
 
 
 def run_single_experiment(
@@ -6337,371 +7824,152 @@ def run_single_experiment(
     device: torch.device,
     epochs: int = 4,
     code_frequencies: Optional[np.ndarray] = None,
-    log_dir: str = "logs",  # base logging directory
+    log_dir: str = "logs",
     experiment_round: Optional[str] = None,
-    check_embeddings_every: int = 2,  # check embeddings every N epochs
+    check_embeddings_every: int = 2,
     log_metrics_every: int = 100,
-    resume_from: Optional[str] = None,  # midpoint path used for resuming training
-    checkpoint_dir: Optional[str] = None,  # add check point directory
+    resume_from: Optional[str] = None,
+    checkpoint_dir: Optional[str] = None,
     embedding_size: Optional[int] = None,
-    local_rank: Optional[int] = None,  # If provided, use DDP
-    world_size: Optional[int] = None
-) -> Dict[str, any]:
+    local_rank: Optional[int] = None,
+    world_size: Optional[int] = None,
+    outcomes_df: Optional[pd.DataFrame] = None,
+    run_downstream_eval: bool = False,
+    save_model: bool = True
+) -> Dict[str, Any]:
     """
-    Run a SINGLE experiment.
-    
-    Args:
-        exp_name: Experiment identifier
-        moe_config: MoE configuration (None for dense models)
-        use_learnt_att_pool: Whether to use learned attention pooling
-        train_data: Training DataFrame
-        val_data: Validation DataFrame
-        device: Torch device
-        epochs: Number of epochs
-        code_frequencies: Pre-computed code frequencies (optional)
-    
-    Returns:
-        Dictionary with:
-        - experiment: name
-        - parameters: model size
-        - final_train_loss: final training loss
-        - final_val_loss: final validation loss
-        - final_top_10_acc: final top-10 accuracy
-        - training_time_sec: total training time
-        - all_epochs: list of per-epoch metrics
+    Run a single experiment with optional downstream evaluation.
+    V2: clean up the messy implemenation and put the V1 to legacy
+    This is the main entry point for training a model variant.
     """
-    
     # ============================================================
-    # DDP SETUP
+    # 1. SETUP
     # ============================================================
-    use_ddp = local_rank is not None and world_size is not None and world_size > 1
+    # DDP is disabled for now
+    use_ddp = False
+    is_main = True
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    if use_ddp:
-        device = torch.device(f'cuda:{local_rank}')
-        is_main = (local_rank == 0)
-    else:
-        # Single GPU mode (backward compatible)
-        local_rank = 0
-        world_size = 1
-        is_main = True
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Only main process prints and logs
-    def log_info(msg):
-        if is_main:
-            print(msg)
-    
-    log_info(f"\n{'='*80}")
-    log_info(f"EXPERIMENT: {exp_name}")
-    if use_ddp:
-        log_info(f"DDP Mode: {world_size} GPUs (this is rank {local_rank})")
-    log_info(f"{'='*80}")
-    
-    
-    # Determine if resume from check point
     is_resume = resume_from is not None
-    # Build hierarchical log directory
-    if experiment_round is not None:
-        effective_log_dir = os.path.join(log_dir, experiment_round)
-    else:
-        # 1. Get the current date and time as a datetime object
-        current_datetime = datetime.now()
-        datetime_string = current_datetime.strftime("%Y-%m-%d_%H-%M-%S")
-        log_folder_ame = f"exp_{datetime_string}"
-        effective_log_dir = os.path.join(log_dir, log_folder_ame)
-
-    if checkpoint_dir is None:
-        checkpoint_dir = os.path.join(effective_log_dir, exp_name, 'checkpoints')
+    effective_log_dir, checkpoint_dir = _setup_experiment_directories(
+        log_dir, experiment_round, exp_name, checkpoint_dir
+    )
     
-    # ============================================================
-    # SETUP LOGGING
-    # ============================================================
-    
-    if is_main:
-        logger = setup_experiment_logging(exp_name, effective_log_dir, resume=is_resume) 
-        metrics_logger = MetricsLogger(exp_name, effective_log_dir, resume=is_resume) 
-    else:
-        logger = None
-        metrics_logger = None
+    # Setup logging
+    logger = setup_experiment_logging(exp_name, effective_log_dir, resume=is_resume)
+    metrics_logger = MetricsLogger(exp_name, effective_log_dir, resume=is_resume)
     loss_tracker = LossTracker(window_size=100)
-    if is_main:
-        if is_resume:
-            logger.info(f"🔄 RESUMING {exp_name} training from checkpoint: {resume_from}")
-        else:
-            logger.info(f"Starting experiment: {exp_name}")
-
+    
+    logger.info(f"\n{'='*80}")
+    logger.info(f"EXPERIMENT: {exp_name}")
+    logger.info(f"{'='*80}")
+    
     # ============================================================
-    # AUTO-CALCULATE DIMENSIONS (NEW LOGIC)
+    # 2. MODEL CREATION
     # ============================================================
-    # Default to 256 if not specified
     eff_d_model = embedding_size if embedding_size is not None else 256
-    
-    # Determine if this experiment uses SwiGLU (Flash/MoE variants do, baseline doesn't)
     uses_swiglu = exp_name not in ['exp1_dense_baseline']
-    
-    # Auto-calculate nhead and nhid based on best practices
     dims = _calculate_model_dimensions(eff_d_model, use_swiglu=uses_swiglu)
-    eff_nhead = dims['nhead']
-    eff_nhid = dims['nhid']
     
-    if is_main and embedding_size is not None:
-        logger.info(f"⚡ OVERRIDE: embedding_size={eff_d_model}")
-        logger.info(f"   Auto-calculated: nhead={eff_nhead} (head_dim={dims['head_dim']}), nhid={eff_nhid}")
-        
-        
-    # ============================================================
-    # MODEL CREATION
-    # ============================================================
-    if (exp_name == 'exp1_dense_baseline') or (moe_config is None and exp_name not in ['exp1_dense_baseline', 'exp2_dense_flash', 'exp2b_flash_learned_pool']):
-        # if exp1_dense_baseline or MoE or unknown experiments - check moe_config fallback to general model
-        config = BaseConfig(embedding_size=eff_d_model, nhid=eff_nhid)
-        model = BaselineTransformer(config).to(device)
-        use_mixed_precision = False
-        use_bucketing = False
-        if is_main:
-            logger.info(f"Model: Baseline Transformer (FP32)")
-            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead=16 (hardcoded)")
-        
-    elif exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']:
-        config = FlashAttentionConfig(
-            embedding_size=eff_d_model, 
-            nhid=eff_nhid,
-            nhead=eff_nhead, 
-            use_swiglu=True,
-            dtype=torch.float16,
-            use_learnt_att_pool=use_learnt_att_pool
-        )
-        model = FlashAttentionTransformer(config).to(device)
-        use_mixed_precision = True
-        use_bucketing = True
-        if is_main:
-            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-            logger.info(f"Model: Flash Attention Transformer (FP16)")
-            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
-            logger.info(f"  Daily Encoder: {pooling_str}")
-        
-    else:
-        # MoE variant
-        config = FlashAttentionConfig(
-            embedding_size=eff_d_model, 
-            nhid=eff_nhid,
-            nhead=eff_nhead,
-            use_swiglu=True,
-            dtype=torch.float16,
-            use_learnt_att_pool=use_learnt_att_pool
-        )
-        if moe_config:
-            import copy
-            moe_config = copy.deepcopy(moe_config)
-            moe_config.d_model = eff_d_model # sync with MOE
-            moe_config.d_ff = eff_nhid  # MoE FFN uses same expansion
-            
-        model = FlashMoETransformer(config, moe_config).to(device)
-        use_mixed_precision = True
-        use_bucketing = True
-
-        if is_main:
-            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-            logger.info(f"Model: Flash + MoE Transformer (FP16)")
-            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
-            logger.info(f"  Daily Encoder: {pooling_str}")
-            logger.info(f"  MoE: {moe_config.num_experts} experts, top-{moe_config.top_k}")
-
+    model, config, use_mixed_precision, use_bucketing = _create_model(
+        exp_name=exp_name,
+        eff_d_model=eff_d_model,
+        eff_nhid=dims['nhid'],
+        eff_nhead=dims['nhead'],
+        moe_config=moe_config,
+        use_learnt_att_pool=use_learnt_att_pool,
+        device=device,
+        logger=logger
+    )
+    
     total_params = sum(p.numel() for p in model.parameters())
-    if is_main:
-        logger.info(f"Total parameters: {total_params:,}")
-    
-    # ============================================================
-    # WRAP MODEL WITH DDP
-    # ============================================================
-    if use_ddp:
-        # Synchronize all processes before wrapping
-        dist.barrier()
-        
-        model = DDP(
-            model, 
-            device_ids=[local_rank],
-            output_device=local_rank,
-            find_unused_parameters=False  # Set True if you have unused params
-        )
-        
-        if is_main:
-            logger.info(f"✅ Model wrapped with DDP on {world_size} GPUs")
-            logger.info(f"   Per-GPU batch size: {config.batch_size}")
-            logger.info(f"   Effective batch size: {config.batch_size * world_size}")
-    
-    # Log config (main process only)
-    if is_main:
-        config_dict = {
-            'experiment': exp_name,
-            'embedding_size': eff_d_model,
-            'nhid': eff_nhid,
-            'nhead': eff_nhead,
-            'batch_size': config.batch_size,
-            'effective_batch_size': config.batch_size * world_size,
-            'use_ddp': use_ddp,
-            'world_size': world_size,
-            'use_mixed_precision': use_mixed_precision,
-            'use_bucketing': use_bucketing,
-            'use_learnt_att_pool': use_learnt_att_pool,
-            'moe_config': {
-                'num_experts': moe_config.num_experts if moe_config else None,
-                'top_k': moe_config.top_k if moe_config else None,
-                'num_shared_experts': moe_config.num_shared_experts if moe_config else None,
-                'load_balance_strategy': moe_config.load_balance_strategy if moe_config else None,
-                'aux_loss_weight': moe_config.aux_loss_weight if moe_config else None,
-                'use_moe_from_layer': moe_config.use_moe_from_layer if moe_config else None,
-            } if moe_config else None
-        }
-        metrics_logger.log_config(config_dict)
+    logger.info(f"Total parameters: {total_params:,}")
 
-    # Compute code frequencies if not provided
+    # ============================================================
+    # DATAPARALLEL WRAPPER FOR MULTI-GPU
+    # ============================================================    
+    num_gpus = torch.cuda.device_count()
+    use_data_parallel = num_gpus > 1
+    
+    if use_data_parallel:
+        logger.info(f" Enabling DataParallel with {num_gpus} GPUs")
+        # Scale batch size proportionally (effective batch = batch_size * num_gpus)
+        effective_batch_size = config.batch_size * num_gpus
+        
+        # Scale learning rate (square root scaling - more conservative)
+        base_lr = config.learning_rate  # 1e-4 from your config
+        scaled_lr = base_lr * math.sqrt(num_gpus)  # ~2e-4 for 4 GPUs
+        # Alternative: Linear scaling (more aggressive)
+        # scaled_lr = base_lr * num_gpus  # 4e-4 for 4 GPUs
+        
+        logger.info(f"   Per-GPU batch size: {config.batch_size}")
+        logger.info(f"   Effective batch size: {effective_batch_size}")
+        logger.info(f"   Base learning rate: {base_lr}")
+        logger.info(f"   Scaled learning rate: {scaled_lr:.2e}")
+        logger.info(f"   Per-GPU batch size: {config.batch_size}")
+        logger.info(f"   Effective batch size: {config.batch_size * num_gpus}")        
+        # Wrap model - it's already on device, DataParallel will handle distribution
+        model = nn.DataParallel(model)    
+    else:
+        scaled_lr = config.learning_rate 
+        
+    # Log config
+    metrics_logger.log_config({
+        'experiment': exp_name,
+        'embedding_size': eff_d_model,
+        'nhid': dims['nhid'],
+        'nhead': dims['nhead'],
+        'batch_size': config.batch_size,
+        'use_mixed_precision': use_mixed_precision,
+        'use_bucketing': use_bucketing,
+        'use_learnt_att_pool': use_learnt_att_pool,
+        'moe_config': vars(moe_config) if moe_config else None
+    })
+    
+    # ============================================================
+    # 3. DATA PREPARATION
+    # ============================================================
     if code_frequencies is None:
         code_frequencies = compute_code_frequencies(train_data, config, device)
     
-    # ============================================================
-    # TRAINING SETUP
-    # ============================================================
-    
-    # Create Datasets and DataLoaders
-    train_dataset = ClinicalDataset(train_data, config)
-    val_dataset = ClinicalDataset(val_data, config)
-
-    # Create samplers
-    if use_ddp:
-        train_sampler = DistributedSampler(
-            train_dataset,
-            num_replicas=world_size,
-            rank=local_rank,
-            shuffle=True,
-            drop_last=True
-        )
-        val_sampler = DistributedSampler(
-            val_dataset,
-            num_replicas=world_size,
-            rank=local_rank,
-            shuffle=False,
-            drop_last=False
-        )
-    else:
-        train_sampler = None
-        val_sampler = None
-    
-    if use_bucketing and not use_ddp:
-        if is_main:
-            logger.info("Bucketing is ENABLED via BatchSampler.")
-        train_batch_sampler = BucketingBatchSampler(
-            data=train_data, # Sampler still needs the original df to get lengths
-            batch_size=config.batch_size,
-            shuffle=True
-        )
-        train_loader = DataLoader(
-            train_dataset,
-            batch_sampler=train_batch_sampler,
-            num_workers=max(1, os.cpu_count() // max(world_size, 1) // 2),
-            pin_memory=True,
-            collate_fn=clinical_collate_fn
-        )
-    else: # For the baseline, we use a standard DataLoader
-        if is_main:
-            if use_ddp:
-                logger.info("Using DistributedSampler (bucketing disabled for DDP).")
-            else:
-                logger.info("Using standard DataLoader (no bucketing).")
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config.batch_size,
-            shuffle=(train_sampler is None),  # Only shuffle if no sampler
-            sampler=train_sampler,  
-            num_workers=max(1, os.cpu_count() // max(world_size, 1)),
-            pin_memory=True,
-            drop_last=True,
-            collate_fn=clinical_collate_fn,
-            persistent_workers=True if num_workers > 0 else False
-        )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.batch_size,
-        shuffle=False, # No need to bucket or shuffle validation data
-        sampler=val_sampler,
-        num_workers=max(1, os.cpu_count() // max(world_size, 1) // 2),
-        pin_memory=True,
-        collate_fn=clinical_collate_fn
+    train_loader, val_loader = _create_dataloaders(
+        train_data, val_data, config, use_bucketing, logger=logger
     )
-    if is_main:
-        logger.info(f"Using DataLoader with {train_loader.num_workers} workers.")
-        
-    # Set up optimizer, scheduler and scaler
+    
+    # ============================================================
+    # 4. OPTIMIZER SETUP
+    # ============================================================
     optimizer = optim.AdamW(
         model.parameters(),
-        lr=config.learning_rate,
+        lr=scaled_lr,
         weight_decay=config.weight_decay
     )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
     criterion = nn.BCEWithLogitsLoss()
-
+    
     # ============================================================
-    # RESUME FROM CHECKPOINT (NEW)
+    # 5. RESUME FROM CHECKPOINT (if applicable)
     # ============================================================
-    start_epoch = 0
-    global_step = 0
-    best_val_loss = float('inf')
+    start_epoch, global_step, best_val_loss = 0, 0, float('inf')
     
     if is_resume:
-        # Load checkpoint (handles DDP module prefix)
-        checkpoint = torch.load(resume_from, map_location=device)
-        
-        # Load model state
-        if use_ddp:
-            model.module.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        
-        if scheduler and checkpoint.get('scheduler_state_dict'):
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        
-        if scaler and checkpoint.get('scaler_state_dict'):
-            scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        
-        start_epoch = checkpoint['epoch'] + 1
-        global_step = checkpoint.get('global_step', 0)
-        
-        if checkpoint.get('metrics'):
-            best_val_loss = min(m.get('val_loss', float('inf')) for m in checkpoint['metrics'] if 'val_loss' in m)
-        
-        if is_main:
-            logger.info(f"✅ Resumed from epoch {start_epoch}, step {global_step}")
-            logger.info(f"   Previous best val loss: {best_val_loss:.4f}")
-        
-        # Synchronize after loading
-        if use_ddp:
-            dist.barrier()
-    
+        start_epoch, global_step, best_val_loss = _resume_from_checkpoint(
+            resume_from, model, optimizer, scheduler, scaler, device, logger
+        )
     
     # ============================================================
-    # TRAINING LOOP
+    # 6. TRAINING LOOP
     # ============================================================
-    if is_main:
-        logger.info(f"Training for {epochs} epochs...")
-        
+    logger.info(f"Training for {epochs} epochs...")
     epoch_history = []
     start_time = time.time()
     
     for epoch in range(start_epoch, epochs):
-        
-        # CRITICAL for DDP: Set epoch on sampler for proper shuffling
-        if use_ddp and train_sampler is not None:
-            train_sampler.set_epoch(epoch)
-        
-        if is_main:
-            logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
-        
+        logger.info(f"\n--- Epoch {epoch+1}/{epochs} ---")
         loss_tracker.reset_epoch()
-
+        
         # Train
         train_metrics = train_epoch(
             model=model,
@@ -6722,19 +7990,10 @@ def run_single_experiment(
             is_main=is_main,
             use_ddp=use_ddp
         )
-        
-        if use_ddp:
-            # Sync metrics but preserve global_step
-            local_global_step = train_metrics['global_step']
-            train_metrics = sync_metrics(train_metrics, device)
-            # global_step should be total across all ranks
-            train_metrics['global_step'] = local_global_step * world_size
-            dist.barrier()
-
         global_step = train_metrics['global_step']
-        # Evaluation on training set to have inparallel training - val loss 
-        if is_main:
-            logger.info("  Evaluating on training subset...")
+        
+        # Evaluate
+        logger.info("  Evaluating on training subset...")
         train_eval_metrics = evaluate(
             model=model,
             dataloader=train_loader,
@@ -6742,15 +8001,11 @@ def run_single_experiment(
             config=config,
             device=device,
             use_mixed_precision=use_mixed_precision,
-            max_batches=100,  # ✅ Only 50 batches for efficiency
+            max_batches=100,
             verbose=False
         )
-        if use_ddp:
-            train_eval_metrics = sync_metrics(train_eval_metrics, device)
         
-        if is_main:
-            logger.info("  Evaluating on validation set...")
-
+        logger.info("  Evaluating on validation set...")
         val_metrics = evaluate(
             model=model,
             dataloader=val_loader,
@@ -6759,194 +8014,146 @@ def run_single_experiment(
             device=device,
             use_mixed_precision=use_mixed_precision,
         )
-        if use_ddp:
-            val_metrics = sync_metrics(val_metrics, device)
-            
-        # Embedding quality (main process only for efficiency)
-        if is_main and epoch % check_embeddings_every == 0:
+        
+        # Embedding quality check
+        if epoch % check_embeddings_every == 0:
             logger.info("Computing embedding quality...")
             emb_metrics = compute_embedding_quality_epoch(
-                model.module if use_ddp else model,  # Unwrap DDP
-                val_data,
-                config, 
-                device, 
+                model, val_data, config, device,
                 num_samples=200,
-                use_mixed_precision=use_mixed_precision 
+                use_mixed_precision=use_mixed_precision
             )
             val_metrics.update(emb_metrics)
             logger.info(f"    Embedding std: {emb_metrics['embedding_std_mean']:.4f}")
             logger.info(f"    NN overlap: {emb_metrics['nn_target_overlap']:.3f}")
         
-        # Combine metrics
-        epoch_metrics = {
-            'epoch': epoch + 1,
-            # Training trajectory (from tracker)
-            'train_loss': train_metrics['train_loss'],              # Learning average
-            'train_loss_mean': train_metrics['train_loss_mean'],    # Same as above
-            'train_loss_first': train_metrics['train_loss_first'],  # Epoch start
-            'train_loss_last': train_metrics['train_loss_last'],    # Epoch end (≈final)
-            'train_loss_std': train_metrics['train_loss_std'],      # Stability
-            'train_loss_improvement': train_metrics['train_loss_improvement'],  # Learning delta
-            
-            # Final model performance on TRAIN data
-            'eval_in_train_loss_final': train_eval_metrics['val_loss'],     # Comparable to val
-            'eval_in_train_top_1_acc': train_eval_metrics['top_1_acc'],
-            'eval_in_train_top_5_acc': train_eval_metrics['top_5_acc'],
-            'eval_in_train_top_10_acc': train_eval_metrics['top_10_acc'],
-            'eval_in_train_top_20_acc': train_eval_metrics['top_20_acc'],            
-            # Validation (final model)
-            'final_val_loss': val_metrics['val_loss'],
-            'final_val_top_1_acc': val_metrics['top_1_acc'],
-            'final_val_top_5_acc': val_metrics['top_5_acc'],
-            'final_val_top_10_acc': val_metrics['top_10_acc'],
-            'final_val_top_20_acc': val_metrics['top_20_acc'],
-            'generalization_gap': train_eval_metrics['val_loss'] - val_metrics['val_loss'],
-        }
-        # Add other training metrics (batch-level averages)
-        for k, v in train_metrics.items():
-            if k.startswith('train_') and k not in epoch_metrics:
-                epoch_metrics[k] = v
-
-        # Add other validation metrics (embedding quality, etc.)
-        for k, v in val_metrics.items():
-            if k not in epoch_metrics and k not in ['val_loss', 'top_1_acc', 'top_5_acc', 'top_10_acc', 'top_20_acc']:
-                epoch_metrics[k] = v
+        # Build epoch metrics
+        epoch_metrics = _build_epoch_metrics(epoch, train_metrics, train_eval_metrics, val_metrics)
         epoch_history.append(epoch_metrics)
         
+        # Save checkpoint
+        is_best = epoch_metrics['final_val_loss'] < best_val_loss
+        if is_best:
+            best_val_loss = epoch_metrics['final_val_loss']
         
-        # ============================================================
-        # SAVE CHECKPOINTS (main process only)
-        # ============================================================
-        if is_main:
-            is_best = epoch_metrics['final_val_loss'] < best_val_loss
-            if is_best:
-                best_val_loss = epoch_metrics['final_val_loss']
-            
-            # Save unwrapped model state
-            model_to_save = model.module if use_ddp else model
-            
-            save_checkpoint(
-                checkpoint_dir=checkpoint_dir,
-                epoch=epoch,
-                global_step=global_step,
-                model=model_to_save,  # Unwrapped!
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
-                metrics=epoch_history,
-                is_best=is_best
-            )
-            logger.info(f"Checkpoint saved (epoch {epoch+1}, step {global_step})")
-
-            # Log epoch summary
-            logger.info(f"\n--- Epoch {epoch+1} Summary ---")
-            logger.info(f"Training Progress:")
-            logger.info(f"  Loss (learning avg): {train_metrics['train_loss']:.4f}")
-            logger.info(f"  Loss (first batch):  {train_metrics['train_loss_first']:.4f}")
-            logger.info(f"  Loss (last batch):   {train_metrics['train_loss_last']:.4f}")
-            logger.info(f"  Improvement:         {train_metrics['train_loss_improvement']:.4f}")
-            
-            logger.info(f"\nFinal Model Performance:")
-            logger.info(f"  Train loss (final):  {train_eval_metrics['val_loss']:.4f}")
-            logger.info(f"  Val loss:            {val_metrics['val_loss']:.4f}")
-            logger.info(f"  Train Top-10:        {train_eval_metrics['top_10_acc']:.3f}")
-            logger.info(f"  Val Top-10:          {val_metrics['top_10_acc']:.3f}")
-            
-            metrics_logger.log_epoch(epoch + 1, epoch_metrics)
-            
-            loss_tracker.save_trajectory(
-                filepath=os.path.join(effective_log_dir, exp_name, f'loss_trajectory_epoch{epoch}.json')
-            )
-        
-        # Synchronize all processes at epoch end
-        if use_ddp:
-            dist.barrier()
-            
-    total_time = time.time() - start_time
-    
-    if is_main:
-        logger.info(f"\nTraining completed in {total_time:.1f}s")
-            
-    # ========================================================================
-    # COMPREHENSIVE EVALUATION
-    # ========================================================================
-    if is_main:
-        model_to_eval = model.module if use_ddp else model 
-        evaluation = comprehensive_evaluation(
-            model=model_to_eval,
-            val_dataloader=val_loader,
-            config=config,
-            device=device,
-            training_time_sec=total_time,
-            epoch_history=epoch_history,
-            code_frequencies=code_frequencies,
-            moe_config=moe_config,
-            use_mixed_precision=use_mixed_precision
+        save_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            epoch=epoch,
+            global_step=global_step,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            metrics=epoch_history,
+            is_best=is_best
         )
-
-        # ============================================================
-        # FINAL RESULTS
-        # ============================================================
-        final_metrics = epoch_history[-1]
-
-        results = {
-            'experiment': exp_name,
-            'parameters': total_params,
-            'use_learned_pooling': use_learnt_att_pool,
-            'use_bucketing': use_bucketing,
-
-            'train_loss_mean': final_metrics['train_loss'],        # Learning average
-            'train_loss_learned': final_metrics['train_loss_improvement'],
-            'train_loss_final': final_metrics['eval_in_train_loss_final'],     # Final model on train
-            'val_loss_final': final_metrics['final_val_loss'],                     # Final model on val
-            'generalization_gap': final_metrics['generalization_gap'], # Overfitting indicator
-
-            # Evaluation in training and in final eval set
-            'final_train_top_5_acc': final_metrics['eval_in_train_top_5_acc'],
-            'final_train_top_10_acc': final_metrics['eval_in_train_top_10_acc'],
-            'final_train_top_20_acc': final_metrics['eval_in_train_top_20_acc'],
-            'final_val_top_5_acc': final_metrics['final_val_top_5_acc'],
-            'final_val_top_10_acc': final_metrics['final_val_top_10_acc'],
-            'final_val_top_20_acc': final_metrics['final_val_top_20_acc'],
-
-            'training_time_sec': total_time,
-            'precision@10': evaluation['performance']['precision@10'],
-            'recall@10': evaluation['performance']['recall@10'],
-            'f1@10': evaluation['performance']['f1@10'],
-            'balanced_top10_acc': evaluation['performance']['balanced_top10_acc'],
-            'tail_top10_acc': evaluation['performance']['tail_top10_acc'],
-            'cost_usd': evaluation['resources']['cost_usd'],
-            'peak_memory_gb': evaluation['resources']['total_peak_gb'],
-            'full_evaluation': evaluation,
-            'all_epochs': epoch_history
-        }
-
-        # Save complete results to JSON for later comparison
-        results_path = metrics_logger.save_final_results(results)
-        logger.info(f"Complete results saved to {results_path}")    
-
-        # Save metrics
-        metrics_logger.save()
-        logger.info(f"Metrics saved to {log_dir}/{exp_name}/")
-
-        # Print summary
-        summary = metrics_logger.get_summary()
-        logger.info(f"\n{'='*80}")
-        logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
-        logger.info(f"{'='*80}")
-        logger.info(f"Final Top-10 Acc in val: {final_metrics['final_val_top_10_acc']:.3f}")
-        logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f} (epoch {summary['best_epoch']})")
-        logger.info(f"Training Time: {total_time:.1f}s")
-        logger.info(f"{'='*80}\n")
-
-    if use_ddp:
-        dist.barrier()
+        
+        # Log summary
+        logger.info(f"\n--- Epoch {epoch+1} Summary ---")
+        logger.info(f"  Train loss: {train_metrics['train_loss']:.4f} → {train_metrics['train_loss_last']:.4f}")
+        logger.info(f"  Val loss: {val_metrics['val_loss']:.4f}, Top-10: {val_metrics['top_10_acc']:.3f}")
+        
+        metrics_logger.log_epoch(epoch + 1, epoch_metrics)
+        loss_tracker.save_trajectory(
+            filepath=os.path.join(effective_log_dir, exp_name, f'loss_trajectory_epoch{epoch}.json')
+        )
     
-    if is_main:
-        return results
-    else:
-        return {'experiment': exp_name, 'rank': local_rank}
-
+    total_time = time.time() - start_time
+    logger.info(f"\nTraining completed in {total_time:.1f}s")
+    
+    # ============================================================
+    # 7. FINAL EVALUATION
+    # ============================================================
+    evaluation = comprehensive_evaluation(
+        model=model,
+        val_dataloader=val_loader,
+        config=config,
+        device=device,
+        training_time_sec=total_time,
+        epoch_history=epoch_history,
+        code_frequencies=code_frequencies,
+        moe_config=moe_config,
+        use_mixed_precision=use_mixed_precision
+    )
+    
+    # Build results
+    results = _build_final_results(
+        exp_name, total_params, use_learnt_att_pool, use_bucketing,
+        epoch_history[-1], evaluation, epoch_history, total_time
+    )
+    
+    # ============================================================
+    # 8. SAVE MODEL (if requested)
+    # ============================================================
+    if save_model:
+        model_name = generate_model_name(
+            exp_name=exp_name,
+            experiment_round=experiment_round,
+            batch_size=config.batch_size,
+            epochs=epochs,
+            embedding_size=eff_d_model
+        )
+        results['model_name'] = model_name
+        
+        model_save_dir = os.path.join(effective_log_dir, exp_name, 'saved_models')
+        model_path = save_trained_model(
+            model=model,
+            config=config,
+            model_name=model_name,
+            save_dir=model_save_dir,
+            exp_results=results,
+            checkpoint_dir=checkpoint_dir,
+            is_best=True
+        )
+        logger.info(f"Model saved as: {model_name}")
+        results['model_path'] = model_path
+    
+    # ============================================================
+    # 9. DOWNSTREAM EVALUATION (if requested)
+    # ============================================================
+    if run_downstream_eval and outcomes_df is not None:
+        logger.info("\n" + "="*80)
+        logger.info("RUNNING DOWNSTREAM EVALUATION")
+        logger.info("="*80)
+        
+        downstream_results = run_downstream_evaluation(
+            model=model,
+            model_config=config,
+            features_df=val_data,
+            outcomes_df=outcomes_df,
+            device=device,
+            use_mixed_precision=use_mixed_precision,
+            downstream_config=DownstreamConfig(task_name="medicaid_ip_risk")
+        )
+        
+        results['downstream_evaluation'] = downstream_results
+        logger.info(f"Downstream Test AUC-ROC: {downstream_results['test_auc_roc']:.4f}")
+        logger.info(f"Downstream Test F1: {downstream_results['test_f1']:.4f}")
+        
+        # Update saved results
+        if save_model:
+            results_path = os.path.join(model_save_dir, f"{model_name}_results.json")
+            with open(results_path, 'w') as f:
+                json.dump(MetricsLogger.convert_to_serializable(results), f, indent=2)
+    
+    # ============================================================
+    # 10. FINALIZE
+    # ============================================================
+    results_path = metrics_logger.save_final_results(results)
+    logger.info(f"Complete results saved to {results_path}")
+    
+    metrics_logger.save()
+    
+    summary = metrics_logger.get_summary()
+    logger.info(f"\n{'='*80}")
+    logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
+    logger.info(f"{'='*80}")
+    logger.info(f"Final Top-10 Acc: {epoch_history[-1]['final_val_top_10_acc']:.3f}")
+    logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f}")
+    logger.info(f"Training Time: {total_time:.1f}s")
+    logger.info(f"{'='*80}\n")
+    
+    return results
 
 def run_selected_experiments(
     experiment_names: List[str],
@@ -6957,7 +8164,10 @@ def run_selected_experiments(
     experiment_round: Optional[str] = None,
     embedding_size: Optional[int] = None,
     local_rank: Optional[int] = None,      
-    world_size: Optional[int] = None       
+    world_size: Optional[int] = None,
+    outcomes_df: Optional[pd.DataFrame] = None,
+    run_downstream_eval: bool = False,
+    save_model: bool = True
 ) -> pd.DataFrame:
     """
     Run SELECTED experiments (flexible subset).
@@ -7027,7 +8237,10 @@ def run_selected_experiments(
             experiment_round=experiment_round,
             embedding_size=embedding_size,
             local_rank=local_rank,      
-            world_size=world_size 
+            world_size=world_size,
+            outcomes_df = outcomes_df,
+            run_downstream_eval = run_downstream_eval,
+            save_model = save_model
         )
         
         all_results.append(results)
@@ -7082,9 +8295,114 @@ def run_all_experiments(
     )
 
 
+# ##### Test
+
+# In[43]:
+
+
+df_val.head(200).acute_ip_flag.value_counts()
+
+
+# In[44]:
+
+
+def test_run_single_experiment_with_downstream():
+    """
+    Test run_single_experiment with downstream evaluation enabled.
+    
+    This is the full integration test:
+    - Run a mini experiment
+    - Save the model
+    - Run downstream evaluation
+    - Verify all results are captured
+    """
+    print("\n" + "="*80)
+    print("TEST 22: run_single_experiment with Downstream Evaluation")
+    print("="*80)
+    
+    cleanup_gpu_memory_hard()
+    
+    # Check if real data is available
+    train_sample = df_train.head(320).copy()
+    val_sample = df_val.head(200).copy()
+    val_sample.loc[100:150, 'acute_ip_flag'] = 1
+
+    # Prepare data
+    if 'target' in train_sample.columns and 'target_cd' not in train_sample.columns:
+        train_sample = train_sample.rename(columns={'target': 'target_cd'})
+    if 'target' in val_sample.columns and 'target_cd' not in val_sample.columns:
+        val_sample = val_sample.rename(columns={'target': 'target_cd'})
+            
+    # Create synthetic outcomes
+    print("  Creating synthetic outcomes...")
+    individual_ids = val_sample['individual_id'].unique()
+    
+    print(f"  Train samples: {len(train_sample)}")
+    print(f"  Val samples: {len(val_sample)}")
+    
+    # Run experiment with downstream evaluation
+    print("\n  Running experiment with downstream eval...")
+    
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = run_single_experiment(
+            exp_name='exp2_dense_flash',
+            moe_config=None,
+            use_learnt_att_pool=False,
+            train_data=train_sample,
+            val_data=val_sample,
+            device=device,
+            epochs=1,
+            experiment_round='test_downstream',
+            log_dir=tmpdir,
+            outcomes_df=val_sample[['individual_id', 'index_dt', 'acute_ip_flag']],
+            run_downstream_eval=True,
+            save_model=True
+        )
+        
+        # Validate results
+        print("\n  Validating experiment results...")
+        
+        # Check standard results
+        assert 'experiment' in result, "Missing experiment name"
+        assert 'parameters' in result, "Missing parameters"
+        assert 'val_loss_final' in result, "Missing val_loss_final"
+        print(f"    Experiment: {result['experiment']} ✅")
+        print(f"    Parameters: {result['parameters']:,} ✅")
+        
+        # Check model was saved
+        if 'model_name' in result:
+            print(f"    Model name: {result['model_name']} ✅")
+        if 'model_path' in result:
+            assert os.path.exists(result['model_path']), "Model file not found"
+            print(f"    Model saved: {result['model_path']} ✅")
+        
+        # Check downstream results
+        if 'downstream_evaluation' in result:
+            ds_results = result['downstream_evaluation']
+            print(f"\n  Downstream Evaluation Results:")
+            print(f"    Test AUC-ROC: {ds_results.get('test_auc_roc', 'N/A'):.4f}")
+            print(f"    Test F1:      {ds_results.get('test_f1', 'N/A'):.4f}")
+            print("    ✅ Downstream evaluation captured in results")
+        else:
+            print("    ⚠️ No downstream_evaluation in results (check if outcomes matched)")
+    
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    print("\n✅ TEST 22 PASSED: Full integration with downstream evaluation works\n")
+test_run_single_experiment_with_downstream()
+
+
+# In[ ]:
+
+
+
+
+
 # ### Memory management
 
-# In[26]:
+# In[33]:
 
 
 import torch
@@ -7326,7 +8644,7 @@ def load_checkpoint_multigpu(
 
 # ### Time and cost estimation
 
-# In[27]:
+# In[38]:
 
 
 import numpy as np
@@ -7550,7 +8868,7 @@ for members in [100_000, 500_000, 1_000_000, 5_000_000, 12_000_000]:
 
 # ### Final tests
 
-# In[59]:
+# In[4]:
 
 
 """
@@ -8070,7 +9388,138 @@ def test_moe_expert_routing_correctness():
 test_moe_expert_routing_correctness()
 
 
-# #### Model integration pipeline
+# #### DDP module test
+
+# In[45]:
+
+
+import os
+import sys
+import argparse
+import time
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Tuple, Optional
+
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
+from torch import optim
+def print_rank(msg: str, rank: int = None):
+    """Print message with rank prefix. Only prints if rank matches or rank is None."""
+    current_rank = get_rank()
+    if rank is None or rank == current_rank:
+        print(f"    [Rank {current_rank}] {msg}")
+
+
+def print_main(msg: str):
+    """Print only on main process (rank 0)."""
+    if is_main_process():
+        print(msg)
+
+
+def barrier_with_timeout(timeout_sec: int = 30):
+    """Barrier with timeout to detect hangs."""
+    if not is_dist_initialized():
+        return
+    
+    start = time.time()
+    dist.barrier()
+    elapsed = time.time() - start
+    
+    if elapsed > timeout_sec * 0.5:  # Warn if barrier took too long
+        print_main(f"    ⚠️ Warning: Barrier took {elapsed:.1f}s")
+
+
+# In[46]:
+
+
+def test_ddp_initialization(verbose: bool = False) -> bool:
+    """
+    Test that DDP initializes correctly on all GPUs.
+    
+    WHAT WE TEST:
+    - Each process gets a unique rank (0, 1, 2, 3)
+    - world_size matches number of GPUs
+    - Each process is assigned to correct GPU
+    - dist.barrier() synchronizes all processes
+    
+    WHY THIS MATTERS:
+    If initialization fails, nothing else will work. This is the foundation.
+    
+    EXPECTED OUTPUT:
+        [Rank 0] ✓ Initialized: world_size=4, device=cuda:0
+        [Rank 1] ✓ Initialized: world_size=4, device=cuda:1
+        [Rank 2] ✓ Initialized: world_size=4, device=cuda:2
+        [Rank 3] ✓ Initialized: world_size=4, device=cuda:3
+        ✓ Barrier synchronization works
+    """
+    print_main("\n[TEST 1] DDP Initialization")
+    
+    passed = True
+    
+    # Check basic initialization
+    if not is_dist_initialized():
+        print_main("    ❌ FAIL: DDP not initialized")
+        return False
+    
+    rank = get_rank()
+    world_size = get_world_size()
+    device = torch.device(f'cuda:{rank}')
+    
+    # Verify rank is valid
+    if rank < 0 or rank >= world_size:
+        print_main(f"    ❌ FAIL: Invalid rank {rank} for world_size {world_size}")
+        passed = False
+    
+    # Verify device is accessible
+    try:
+        torch.cuda.set_device(rank)
+        _ = torch.zeros(1, device=device)
+        print_rank(f"✓ Initialized: world_size={world_size}, device={device}")
+    except Exception as e:
+        print_rank(f"❌ FAIL: Cannot access device: {e}")
+        passed = False
+    
+    # Test barrier synchronization
+    barrier_with_timeout(10)
+    print_main("    ✓ Barrier synchronization works")
+    
+    # Collect pass/fail from all ranks
+    passed_tensor = torch.tensor([1 if passed else 0], device=device)
+    dist.all_reduce(passed_tensor, op=dist.ReduceOp.MIN)
+    
+    all_passed = passed_tensor.item() == 1
+    
+    if all_passed:
+        print_main("    ✅ TEST 1 PASSED")
+    else:
+        print_main("    ❌ TEST 1 FAILED")
+test_ddp_initialization()
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# #### Model integration component
 
 # In[ ]:
 
@@ -9278,7 +10727,7 @@ test_full_experiment_simulation()
 
 # #### Training with real data
 
-# In[28]:
+# In[61]:
 
 
 import google.auth
@@ -9289,7 +10738,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[33]:
+# In[62]:
 
 
 # Device setup
@@ -9297,46 +10746,74 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[18]:
+# In[69]:
 
 
 # Load data
 input_sql = """
-select * from
-anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_OOT_o3_score_ending
-where dt_cnt >= 10
+select 
+a.*, 
+'Medicaid' as lob,
+b.acute_ip_flag
+from
+edp-prod-storage.edp_ent_sdoheir_cns.a834793_Medicaid_o3_train_ending a
+left join edp-prod-storage.edp_ent_sdoheir_cns.a964286_Medicaid_outcome_ip_4_te_experiment b
+on a.individual_id = b.individual_id
 """
 input_data = client.query(input_sql).to_dataframe() 
 # input_data = client.query(input_sql).to_dataframe() 
 
 
-# In[ ]:
+# In[88]:
 
 
-df_train = input_data.sample(900000, random_state=42, replace=False)
-df_remain = input_data.drop(df_train.index)
-df_val = df_remain.sample(100000, random_state=42, replace=False)
-df_test = df_remain.drop(df_val.index)
+input_data['acute_ip_flag'] = input_data['acute_ip_flag'].fillna(0)
 
 
-# In[29]:
+# In[89]:
 
 
-import pandas as pd
-df_train = pd.read_feather("sample_data/mdcd_train_1m.feather")
-df_val = pd.read_feather("sample_data/mdcd_val_10k.feather")
+# Straitify the dataframe and sample a clean held-out test dataset for final evaluatio
+individual_labels = (
+    input_data
+    .groupby('individual_id')['acute_ip_flag']
+    .max()  # If any visit is positive, individual is positive
+    .reset_index()
+)
+# first split the held-out test dataset for complete cleaning
+holdout_ratio = 0.05
+ids_trainval, ids_holdout = train_test_split(
+    individual_labels['individual_id'].values,
+    test_size=holdout_ratio,
+    random_state=44,
+    stratify=individual_labels['acute_ip_flag'].values
+)
+# second split - train/Val from remaining
+# training for transformer pretraining
+# validation for transformer validation and probe classifier training
+trainval_labels = individual_labels[
+    individual_labels['individual_id'].isin(ids_trainval)
+]
+val_ratio = 0.2
+ids_train, ids_val = train_test_split(
+    trainval_labels['individual_id'].values,
+    test_size=val_ratio / (1 - holdout_ratio),  # Adjust ratio
+    random_state=44,
+    stratify=trainval_labels['acute_ip_flag'].values
+)
+
+# create the final training and validaiton dataset
+train_data = input_data[input_data['individual_id'].isin(ids_train)].copy()
+val_data = input_data[input_data['individual_id'].isin(ids_val)].copy()
+holdout_test_data = input_data[input_data['individual_id'].isin(ids_holdout)].copy()
 
 
-# In[56]:
+# In[90]:
 
 
-df_train.shape
-
-
-# In[57]:
-
-
-df_val.shape
+train_data.to_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_train.feather")
+val_data.to_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_val_mdcd_ip_probe.feather")
+holdout_test_data.to_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_heldout_mdcd_ip_probe.feather")
 
 
 # #### If flash_attention works?
@@ -9473,14 +10950,18 @@ check_gpu_availability()
 cleanup_gpu_memory_hard()
 
 # Define your experiment round name
-round_name = "exp_round2_ablation_swiglu_aux_layer_nov16_2025"
+# round_name = "exp_round2_ablation_swiglu_aux_layer_nov16_2025" # random init, sample size 64000, batch_size = 16
+
+# round 2-1 increasing the training dataset; see performance difference
+round_name = "exp_round2-1_ablation_swiglu_aux_layer_dec1_2025" # kaiming init, larger sample size 320k, batch_size = 32
 # Minimal dataset
-train_tiny = df_train.sample(64000)
-val_tiny = df_val.sample(3200)
+train_tiny = df_train.sample(320000)
+val_tiny = df_val.sample(32000)
 # Select experiments to run
 exp_names = [
+    'exp2b_flash_learned_pool',
     'exp3_standard_moe',      # Baseline MoE (GELU experts, aux=0.01, layer=2)
-    'exp3a_moe_swiglu',       # + SwiGLU in experts
+    # 'exp3a_moe_swiglu',       # + SwiGLU in experts
     'exp3b_moe_swiglu_learned_pool',  # + SwiGLU + learned pooling
     'exp3c_moe_swiglu_learned_pool_layer4',  # + Start MoE at layer 4
     'exp3d_moe_swiglu_learned_pool_layer4_aux001',  # + Reduce aux to 0.001,
@@ -9500,6 +10981,12 @@ results_df = run_selected_experiments(
 
 
 # In[44]:
+
+
+results_df
+
+
+# In[47]:
 
 
 results_df
@@ -9658,7 +11145,7 @@ results_df_1 = run_selected_experiments(
 
 
 results_df_3 = pd.concat([
-                        result_df_1
+                        result_df_1,
                         result_df_2], axis = 0)
 
 

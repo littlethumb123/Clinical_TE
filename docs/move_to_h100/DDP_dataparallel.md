@@ -1,11 +1,3 @@
-Let me thoroughly understand your codebase first before explaining the differences.
-
-[5 tools called]
-
-Now I have a complete understanding of your code. Let me provide a comprehensive explanation.
-
----
-
 # DataParallel vs DistributedDataParallel: Complete Comparison for Your Codebase
 
 ## Your Current Architecture
@@ -135,6 +127,8 @@ Based on my analysis of `moe_flashattn_2.py`:
 | **Multi-Node** | ❌ No | ✅ Yes |
 | **Debugging** | ✅ Easy (single process) | ❌ Harder (multiple processes) |
 | **Production Use** | ⚠️ Prototyping only | ✅ Industry standard |
+| **Python GIL** | Limits parallelism | Bypassed (separate processes) |
+| **NVLink utilization (H100)** | ~10% (falls back to PCIe paths) | ~80% (NCCL optimized) |
 
 ### Efficiency Numbers (Typical for 4 GPUs):
 
