@@ -1,3 +1,92 @@
+### **GCP bash command**
+Here are the bash commands to inspect your Vertex AI Workbench instance's memory and storage:
+
+#### Memory Status (RAM)
+
+```bash
+# Quick overview of memory usage
+free -h
+
+# Detailed memory info
+cat /proc/meminfo
+
+# Real-time memory and CPU monitoring
+top -o %MEM
+# or use htop for a nicer interface (if installed)
+htop
+```
+
+#### Storage Capacity (Disk Usage)
+
+```bash
+# Overall disk usage summary
+df -h
+
+# Show disk usage of current directory and subdirectories
+du -sh *
+
+# Find largest directories from root (top 20)
+du -h / 2>/dev/null | sort -rh | head -20
+
+# Check specific directory (e.g., home)
+du -sh /home/*
+
+# Find largest files (top 20 files over 100MB)
+find / -type f -size +100M -exec ls -lh {} \; 2>/dev/null | sort -k5 -rh | head -20
+```
+
+#### What's Taking Up the Most Memory (Processes)
+
+```bash
+# Top 10 memory-consuming processes
+ps aux --sort=-%mem | head -11
+
+# More detailed view with memory in MB
+ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -20
+
+# Check GPU memory (if using GPU instance)
+nvidia-smi
+
+# Memory usage by user
+ps -eo user,%mem --sort=-%mem | awk '{arr[$1]+=$2} END {for (i in arr) print i, arr[i]"%"}' | sort -k2 -rh
+```
+
+#### Combined Quick Diagnostic Script
+
+```bash
+echo "=== MEMORY STATUS ==="
+free -h
+echo ""
+echo "=== DISK USAGE ==="
+df -h
+echo ""
+echo "=== TOP 10 MEMORY PROCESSES ==="
+ps aux --sort=-%mem | head -11
+echo ""
+echo "=== LARGEST DIRECTORIES IN HOME ==="
+du -sh /home/* 2>/dev/null | sort -rh | head -10
+echo ""
+echo "=== GPU STATUS (if available) ==="
+nvidia-smi 2>/dev/null || echo "No GPU or nvidia-smi not available"
+```
+
+#### Checking Python/Jupyter Specific Memory
+
+```bash
+# Find large Jupyter checkpoints
+find /home -name ".ipynb_checkpoints" -exec du -sh {} \; 2>/dev/null
+
+# Find large conda/pip cache
+du -sh ~/.cache/pip 2>/dev/null
+du -sh ~/.conda 2>/dev/null
+du -sh /opt/conda 2>/dev/null
+
+# List Python processes and their memory
+ps aux | grep -E 'python|jupyter' | grep -v grep
+```
+
+These commands will help you identify memory bottlenecks and storage hogs on your Vertex AI Workbench instance.
+
 
 ### 📂 **What Gets Saved (Every Single Epoch)**
 

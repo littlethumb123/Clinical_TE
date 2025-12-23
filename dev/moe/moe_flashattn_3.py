@@ -1,61 +1,301 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# ### Versioning
+
+# #### Version 3 change logs from V1 and V2
+
+# ##### Mixture-of-Experts (MoE) Experimentation Framework for Hierarchical Clinical Transformer
+# 
+# - Version Summary
+#     - Version 1 & 2 (`moe_flashattn_2.py`)
+#         - Initial implementation of 5-experiment MoE ablation study
+#         - Base framework with Flash Attention and MoE integration
+#         - Single GPU training support
+#         - Pre-training focused evaluation metrics
+# 
+#     - Version 3 (`moe_flashattn_3.py`)
+#         - **Distributed Data Parallel (DDP) support** for multi-GPU training
+#         - **Line of Business (LOB) feature** added as input embedding
+#         - **Medicaid IP Risk downstream task evaluation** using linear probe methodology
+#         - **Refactored experiment running** with modular helper functions
+#         - **Model saving/loading utilities** for inference and deployment
+# 
+# - Experiment Overview
+# 
+# | Experiment | Model | Head Config | Activation | Load Balance | Precision | Daily Encoder |
+# |------------|-------|-------------|------------|--------------|-----------|---------------|
+# | **Exp 1: Dense Baseline** | BaselineTransformer | nhead=16, head_dim=16 | GELU only | N/A | FP32 | Standard transformer |
+# | **Exp 2: Dense Flash** | FlashAttentionTransformer | nhead=8, head_dim=32 | SwiGLU | N/A | FP16 | Flash Attention |
+# | **Exp 3: Standard Top-K MoE** | FlashMoETransformer | nhead=8, head_dim=32 | SwiGLU + GELU experts | Switch | FP16 | Flash Attention |
+# | **Exp 4: Shared Expert MoE** | FlashMoETransformer | nhead=8, head_dim=32 | SwiGLU + GELU experts | Switch | FP16 | Flash Attention |
+# | **Exp 5: Fine-Grained MoE** | FlashMoETransformer | nhead=8, head_dim=32 | SwiGLU + GELU experts | Switch | FP16 | Flash Attention |
+# | **Exp 6: Auxiliary-Free MoE** | FlashMoETransformer | nhead=8, head_dim=32 | SwiGLU + GELU experts | DeepSeek | FP16 | Flash Attention |
+# 
+# - Experiment Variants
+# 
+# | Experiment Name | Type | Key Features | Rationale|
+# |----------------|------|--------------|-----------------|
+# | **Baselines** ||||
+# | `exp1_dense_baseline` | Dense | Standard Transformer, FP32 | Reference baseline |
+# | `exp2_dense_flash` | Dense | Flash Attention, Max-Pool | Flash attention baseline |
+# | `exp2b_flash_learned_pool` | Dense | Flash Attention, Learned Pooling | Best dense model |
+# | **Standard MoE** ||||
+# | `exp3_standard_moe` | MoE | 8 experts, top-2, GELU | Basic MoE test |
+# | `exp3a_moe_swiglu` | MoE | 8 experts, top-2, SwiGLU | SwiGLU vs GELU |
+# | `exp3b_moe_swiglu_learned_pool` | MoE | + Learned pooling | Best MoE variant |
+# | `exp3c_moe_swiglu_learned_pool_layer4` | MoE | MoE from layer 4 | Later MoE layers |
+# | `exp3d_moe_swiglu_learned_pool_layer4_aux001` | MoE | aux_loss=0.001, layer 4 | Lower aux loss |
+# | `exp3e_moe_swiglu_learned_pool_layer2_aux001` | MoE | aux_loss=0.001, layer 2 | Lower aux loss |
+# | **Shared Expert MoE** ||||
+# | `exp4_shared_expert` | MoE | 1 shared + 7 routed | Shared expert test |
+# | **Fine-grained MoE** ||||
+# | `exp5_fine_grained` | MoE | 16 experts, top-5, smaller | Fine-grained routing |
+# | **Auxiliary-free MoE (DeepSeek)** ||||
+# | `exp6_auxiliary_free` | MoE | DeepSeek balancing, no aux loss | Aux-free MoE |
+# | `exp6a_auxiliary_free_layer4` | MoE | DeepSeek, MoE from layer 4 | Later DeepSeek |
+# | `exp6b_auxiliary_free_no-share-exp` | MoE | DeepSeek, no shared experts | Pure DeepSeek |
+# ---
+# 
+# ##### Version 3 Modifications
+# 
+# 1. Line of Business (LOB) Feature Support
+# 
+# **Configuration** (`BaseConfig`):
+# ```python
+# lob_vocab: int = 4  # LOB categories (0=padding, 1=Commercial, 2=Medicare, 3=Medicaid)
+# ```
+# 
+# **Data Processing**:
+# - New `conv_lob()` function maps LOB strings to indices
+# - `ClinicalDataset` now processes LOB column alongside age, gender, codes
+# - Input tensor dimension: **83** (age, gender, lob, 80 codes) vs **82** in v2
+# 
+# **Model Architecture**:
+# - All models (`BaselineTransformer`, `FlashAttentionTransformer`, `FlashMoETransformer`) now include:
+#   ```python
+#   self.embedding_lob = nn.Embedding(config.lob_vocab, config.embedding_size)
+#   ```
+# - LOB embedding added to combined representation:
+#   ```python
+#   cd = cd_res + cd + gender_cd + age_in_months + lob_emb
+#   ```
+# 
+# ---
+# 
+# 2a. **Data Parallelism (active for experimentation)**
+# 
+# Automatically enabled when `torch.cuda.device_count() > 1`:
+# 
+# ```python
+# num_gpus = torch.cuda.device_count()
+# use_data_parallel = num_gpus > 1
+# 
+# if use_data_parallel:
+#     model = nn.DataParallel(model)
+# ```
+# 
+# **Features**:
+# | Feature | Implementation |
+# |---------|----------------|
+# | Auto-detection | Enables when multiple GPUs available |
+# | Batch scaling | Effective batch = `batch_size * num_gpus` |
+# | Learning rate scaling | Square root scaling: `lr * sqrt(num_gpus)` |
+# | Checkpoint handling | Unwraps `model.module` for compatible saves |
+# 
+# **Scaling Example** (4 GPUs):
+# - Per-GPU batch size: 32
+# - Effective batch size: 128
+# - Base LR: 1e-4 → Scaled LR: 2e-4
+# 
+# **Helper Functions**:
+# | Function | Purpose |
+# |----------|---------|
+# | `save_checkpoint_multigpu()` | Save checkpoint compatible with DataParallel wrapper |
+# | `load_checkpoint_multigpu()` | Load checkpoint into wrapped or unwrapped model |
+# | `monitor_gpu_memory_usage()` | Track per-GPU memory for DataParallel |
+# 
+# ---
+# 
+# 2b. **Core DDP Functions (not used)**:
+# | Function | Description |
+# |----------|-------------|
+# | `setup_ddp()` | Initialize DDP, returns (local_rank, world_size, is_main) |
+# | `cleanup_ddp()` | Clean up distributed process group |
+# | `is_dist_initialized()` | Check if DDP is initialized |
+# | `get_world_size()` | Get number of processes (1 if single GPU) |
+# | `get_rank()` | Get current process rank |
+# | `is_main_process()` | Check if rank 0 |
+# | `reduce_tensor()` | Reduce tensor across all processes |
+# | `sync_metrics()` | Synchronize metrics across processes |
+# 
+# **Utility Functions**:
+# | Function | Description |
+# |----------|-------------|
+# | `print_rank()` | Print message with rank prefix |
+# | `print_main()` | Print only on main process |
+# | `barrier_with_timeout()` | Barrier with timeout for hang detection |
+# 
+# **Training Integration**:
+# - `train_epoch()` now accepts `is_main` and `use_ddp` parameters
+# - `run_single_experiment()` accepts `local_rank` and `world_size`
+# - DataLoader worker count scales with world size
+# 
+# ---
+# 
+# 3. Downstream Task Evaluation (Medicaid IP Risk)
+# 
+# **Configuration** (`DownstreamConfig`):
+# ```python
+# @dataclass
+# class DownstreamConfig:
+#     task_name: str = "medicaid_ip_risk"
+#     test_size: float = 0.1          # 10% for test
+#     val_size: float = 0.1           # 10% for validation
+#     random_state: int = 42
+#     n_cv_folds: int = 5             # Cross-validation folds
+#     max_iter: int = 1000            # Max LogReg iterations
+#     class_weight: str = 'balanced'  # Handle class imbalance
+# ```
+# 
+# **DownstreamEvaluator Class**:
+# 
+# | Method | Description |
+# |--------|-------------|
+# | `extract_embeddings()` | Extract member-level embeddings from trained transformer |
+# | `prepare_downstream_data()` | Join features with outcomes, create stratified splits |
+# | `train_linear_probe()` | Train logistic regression on frozen embeddings |
+# | `evaluate_probe()` | Compute comprehensive metrics on a data split |
+# | `evaluate()` | Full pipeline: extract → prepare → train → evaluate |
+# 
+# **Evaluation Metrics**:
+# - Standard: Accuracy, AUC-ROC, AUC-PR, F1, Precision, Recall, Brier Score
+# - Top-percentile: Lift@1%, True Positives@1%, Precision@1%, Recall@1%, F1@1%
+# - Dataset stats: Prevalence, sample counts
+# 
+# - [IP model tech report](https://aetnao365.sharepoint.com/:p:/r/sites/ClinicalEvaluationsTeam/Shared%20Documents/General/07%20Medicaid%20Projects/Predictive%20Models/Medicaid%20Inpatient%20Predictive%20Model/_Presentations/IP_model_refresh_2024_technical.pptx?d=w694afa0fbc6a440ab16928fa1092d9ca&csf=1&web=1&e=kv7eJJ) [Embedding presentation](https://aetnao365.sharepoint.com/:p:/r/sites/ClinicalEvaluationsTeam/_layouts/15/Doc.aspx?sourcedoc=%7B8427C238-2B55-4C46-908E-E5B55F58309D%7D&file=CLOB_embeddings_future_directions_20240430.pptx&action=edit&mobileredirect=true) and [Chiara PSS](https://teams.microsoft.com/l/message/19:meeting_ZjcwNWZkNzEtZTA0Mi00N2MyLTk1MWQtZGYzZGVhZWZiZWY4@thread.v2/1766165538582?context=%7B%22contextType%22%3A%22chat%22%7D)
+# ---
+# 
+# 4. Model Saving/Loading Utilities
+# 
+# **Functions**:
+# | Function | Purpose |
+# |----------|---------|
+# | `generate_model_name()` | Standardized naming: `{round}_{exp}_bs{batch}_ep{epochs}_d{embedding}_{timestamp}` |
+# | `save_trained_model()` | Lightweight save for inference (state dict + config + results) |
+# | `load_trained_model()` | Load model for inference or downstream evaluation |
+# | `run_downstream_evaluation()` | Convenience wrapper for downstream evaluation |
+# 
+# **Directory Structure** (post-training):
+# ```
+# logs/{experiment_round}/{exp_name}/
+# ├── checkpoints/                    # Training resume (save_checkpoint)
+# │   ├── checkpoint_latest.pt
+# │   ├── checkpoint_best.pt
+# │   └── checkpoint_epoch{N}.pt
+# ├── saved_models/                   # Inference (save_trained_model)
+# │   ├── {model_name}_final.pt
+# │   ├── {model_name}_config.json
+# │   └── {model_name}_results.json
+# ├── epoch_metrics.json
+# ├── batch_metrics.json
+# ├── config.json
+# ├── final_results.json
+# └── {exp_name}.log
+# ```
+# 
+# ---
+# 
+# - 5. Refactored Experiment Running
+# 
+# **Helper Functions**:
+# | Function | Purpose |
+# |----------|---------|
+# | `_setup_experiment_directories()` | Set up logging and checkpoint directories |
+# | `_create_model()` | Create model based on experiment type |
+# | `_create_dataloaders()` | Create train/val dataloaders with optional bucketing |
+# | `_resume_from_checkpoint()` | Resume training from checkpoint |
+# | `_build_epoch_metrics()` | Build comprehensive epoch metrics dictionary |
+# | `_build_final_results()` | Build final experiment results dictionary |
+# | `_model_has_moe()` | Check if model has MoE layers |
+# 
+# **Enhanced `run_single_experiment()` Parameters**:
+# ```python
+# def run_single_experiment(
+#     # ... existing parameters ...
+#     local_rank: Optional[int] = None,       # DDP: local GPU rank
+#     world_size: Optional[int] = None,       # DDP: total GPUs
+#     outcomes_df: Optional[pd.DataFrame] = None,  # Downstream outcomes
+#     run_downstream_eval: bool = False,      # Enable downstream evaluation
+#     save_model: bool = True                 # Save model after training
+# ) -> Dict[str, Any]:
+# ```
+# 
+# ---
+# 
+# - 6. Corresponding Test Functions
+# 
+# | Test Function | Coverage |
+# |---------------|----------|
+# | `test_conv_lob()` | LOB string conversion |
+# | `test_clinical_dataset_with_lob()` | Dataset with LOB support |
+# | `test_model_forward_with_lob()` | Model forward pass with LOB input |
+# | `test_ddp_initialization()` | DDP initialization on all GPUs |
+# | `test_model_saving_and_loading()` | Model save/load cycle |
+# | `test_downstream_evaluator_with_real_data()` | Downstream evaluation pipeline |
+# | `test_run_single_experiment_with_downstream()` | End-to-end with downstream |
+# 
+# ---
+# 
+# ##### Data Changes
+# 
+# | Version | Training Data | Validation Data |
+# |---------|--------------|-----------------|
+# | v2 | `sample_data/mdcd_train_1m.feather` | `sample_data/mdcd_val_10k.feather` |
+# | v3 | `sample_data/extrinsic_mdcd_ip/te_pretrain_train.feather` | `sample_data/extrinsic_mdcd_ip/te_pretrain_val_mdcd_ip_probe.feather` |
+# 
+# **Required Columns** (v3):
+# - Existing: `age_in_months`, `gender_cd`, `cd`, `target_cd`, `dt_cnt`
+# - New: `lob` (Line of Business)
+# - For downstream: `individual_id`, `index_dt`, `acute_ip_flag`
+# 
+
+# #### Version 3 reflection
+
+# ##### Why Round 4 experimentations with downstream tasks did not perform well
+# -    
+
+# In[ ]:
 
 
-"""
-Version 1 and 2
-Data: 
-Mixture-of-Experts (MoE) Experimentation Framework for Hierarchical Clinical Transformer
-
-This module implements a comprehensive 5-experiment ablation study to evaluate MoE integration
-into the hierarchical clinical transformer architecture (min_transformer.py).
-
-Experiment Overview:
-- Exp 1: Dense Baseline (reference performance)
-    - Model: 
-        - Head config: nhead=16, head_dim=16 (fixed, matches original)
-        - Activation: GELU only
-        - Load balance: N/A (no MoE)
-        - Mixed precision: FP32 (use_mixed_precision=False)
-        - Daily encoder: Standard transformer
-- Exp 2: Dense Flash
-    - Model: FlashAttentionTransformer
-        - Head config: nhead=8, head_dim=32 (from FlashAttentionConfig)
-        - Activation: SwiGLU (config.use_swiglu=True)
-        - Load balance: N/A (no MoE)
-        - Mixed precision: FP16 (use_mixed_precision=True)
-        - Daily encoder: Flash Attention
-- Exp 3: Standard Top-K MoE (8 experts, top-2)
-        - Similar to Exp2
-- Exp 4: Shared Expert MoE (1 shared + 7 routed)
-        - Similar to Exp2
-- Exp 5: Fine-Grained MoE (1 shared + 15 routed, smaller experts)
-        - Similar to Exp2
-- Exp 6: Auxiliary-Free MoE (DeepSeek bias-based load balancing)
-    - Model: FlashMoETransformer
-        - Head config: nhead=8, head_dim=32
-        - Activation: SwiGLU in temporal layers, GELU in experts
-        - Load balance: Switch (exp 3-5) or DeepSeek (exp 6)
-        - Mixed precision: FP16
-        - Daily encoder: Flash Attention
-
-Based on:
-- DeepSeek-MoE ablation methodology
-- Switch Transformer load balancing
-- BEHRT clinical evaluation metrics
 
 
-Version 3
-- Distributed data parallel
-- Implement the LOB columns
-- Use Medicaid IP risk as downstream tasks and include the metrics to the model
-- Refactor the run_single_experiment
+
+# In[ ]:
 
 
-"""
 
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# ### Import
 
 # In[43]:
 
@@ -113,7 +353,7 @@ Version 3
 # ============================================================================
 
 
-# In[1]:
+# In[35]:
 
 
 import pandas as pd
@@ -123,7 +363,13 @@ df_val = pd.read_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_val_mdcd_ip_
 # df_test = pd.read_feather("sample_data/mdcd_test_10k.feather")
 
 
-# In[2]:
+# In[9]:
+
+
+df_train.columns
+
+
+# In[1]:
 
 
 """
@@ -167,7 +413,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[3]:
+# In[2]:
 
 
 # import for downstream evaluation
@@ -192,7 +438,7 @@ from datetime import datetime
 
 # ### Configurations
 
-# In[4]:
+# In[63]:
 
 
 # ============================================================================
@@ -259,7 +505,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[5]:
+# In[64]:
 
 
 @dataclass
@@ -270,14 +516,23 @@ class BaseConfig:
     Parameters match your updated specifications:
     - len_dy: 200 days (sequence length)
     - len_cd: 80 codes per day
+    - cd_cnt:
+        - derive from 
+            SELECT COUNT(*) AS cd_cnt
+            FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_member_w2ind`;
     - target_cd_cnt: 8850 target codes
+        - derive from the following target_cd_cnt = total_codes = max(ind) + 1
+            -- SELECT 
+            --     'w2ind_target (OUTPUT)' AS vocabulary,
+            --     COUNT(*) AS total_codes
+            -- FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_member_w2ind_target`
     - Multi-label loss (BCEWithLogitsLoss)
     """
     # Data dimensions (from your specifications)
     len_dy: int = 200          # Days in sequence (updated from 70)
     len_cd: int = 80           # Codes per day (updated from 25)
-    cd_cnt: int = 84010        # Input vocabulary size
-    target_cd_cnt: int = 8850  # Target vocabulary (updated from 2767)
+    cd_cnt: int = 75516        # Input vocabulary size
+    target_cd_cnt: int = 6297  # Target vocabulary (updated from 2767, 8850(experiment))
 
     # Model architecture
     embedding_size: int = 256  # Embedding dimension
@@ -291,7 +546,7 @@ class BaseConfig:
     lob_vocab: int = 4        # LOB categories (0=padding, 1=Commercial, 2=Medicare, 3=Medicaid)
     
     # Training
-    batch_size: int = 32     # Batch size (change from 16 to 32)
+    batch_size: int = 64     # Batch size (change from 16 to 32 and to 64)
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
     gradient_clip: float = 1.0  # Gradient clipping norm
@@ -377,7 +632,7 @@ class MoEConfig:
 
 
 
-# In[6]:
+# In[5]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -614,7 +869,7 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
 
 # ### DDP Utilitiy
 
-# In[7]:
+# In[6]:
 
 
 # ============================================================================
@@ -756,7 +1011,7 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
 
 # ### RPE and Swiglu
 
-# In[8]:
+# In[6]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -914,7 +1169,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[9]:
+# In[7]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1180,7 +1435,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[10]:
+# In[8]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1281,7 +1536,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[11]:
+# In[9]:
 
 
 # ============================================================================
@@ -1695,7 +1950,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[12]:
+# In[10]:
 
 
 # ============================================================================
@@ -1876,7 +2131,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[13]:
+# In[11]:
 
 
 # ============================================================================
@@ -2099,7 +2354,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[14]:
+# In[12]:
 
 
 # ============================================================================
@@ -2500,7 +2755,7 @@ test_model_forward_with_lob()
 
 # #### Preprocess data with data loader
 
-# In[15]:
+# In[13]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2562,7 +2817,7 @@ class ClinicalDataset(Dataset):
         }
 
 
-# In[16]:
+# In[14]:
 
 
 def clinical_collate_fn(batch):
@@ -2663,7 +2918,7 @@ test_clinical_dataset_with_lob()
 
 # #### Data preparation
 
-# In[17]:
+# In[15]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -2940,7 +3195,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function
 
-# In[18]:
+# In[16]:
 
 
 def compute_loss(
@@ -3048,7 +3303,7 @@ def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, con
             x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
             
             # Forward in TRAINING mode
-            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+            if _model_has_moe(model):
                 output, _ = model(x, return_moe_losses=False)
             else:
                 output = model(x)
@@ -3091,7 +3346,7 @@ def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, con
             
             x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
             
-            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+            if _model_has_moe(model):
                 output, _ = model(x, return_moe_losses=False)
             else:
                 output = model(x)
@@ -3112,7 +3367,7 @@ def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, con
             
             x = torch.cat([age.unsqueeze(-1), gender.unsqueeze(-1), codes], dim=-1)
             
-            if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+            if _model_has_moe(model):
                 output, _ = model(x, return_moe_losses=False)
             else:
                 output = model(x)
@@ -3478,7 +3733,7 @@ test_conv_lob()
 
 # #### Loss logger
 
-# In[19]:
+# In[17]:
 
 
 class LossTracker:
@@ -3604,7 +3859,7 @@ class LossTracker:
 
 # #### Train and evaluation
 
-# In[20]:
+# In[18]:
 
 
 def _model_has_moe(model):
@@ -3670,7 +3925,16 @@ def train_epoch(
         # Only main process prints progress
         if is_main and batch_idx % log_interval == 0:
             print(f'  Batch {batch_idx}/{len(dataloader)}')
-        
+            
+        # Middle check multi-GPU works
+        if batch_idx == 0 and is_main:
+            num_gpus = torch.cuda.device_count()
+            if num_gpus > 1:
+                print(f"\n🔍 GPU UTILIZATION CHECK (Batch 0):")
+                for gpu_id in range(num_gpus):
+                    mem_alloc = torch.cuda.memory_allocated(gpu_id) / 1024**3
+                    mem_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
+                    print(f"   GPU {gpu_id}: {mem_alloc:.2f} GB allocated, {mem_reserved:.2f} GB reserved")        
         optimizer.zero_grad()
         
         # Get batch data
@@ -3705,6 +3969,9 @@ def train_epoch(
                 
                 # Add auxiliary loss if MoE
                 aux_loss = moe_losses.get('aux_loss', torch.tensor(0.0, device=device))
+                # Reduce aux_loss to scalar for DataParallel compatibility, otherwise this is 4dim tensor
+                if aux_loss.numel() > 1:
+                    aux_loss = aux_loss.mean()  # Average across GPUs
                 if moe_config and moe_config.load_balance_strategy == 'switch':
                     total_loss = pred_loss + moe_config.aux_loss_weight * aux_loss
                 else:
@@ -3724,6 +3991,8 @@ def train_epoch(
             
             pred_loss = compute_loss(output, y, dt_cnt, config, criterion, device)
             aux_loss = moe_losses.get('aux_loss', torch.tensor(0.0, device=device))
+            if aux_loss.numel() > 1:
+                aux_loss = aux_loss.mean()  # Average across GPUs
             
             if moe_config and moe_config.load_balance_strategy == 'switch':
                 total_loss = pred_loss + moe_config.aux_loss_weight * aux_loss
@@ -3753,10 +4022,13 @@ def train_epoch(
         # increment global step
         global_step += 1
         
-        # Track losses
-        total_pred_loss += pred_loss.item()
-        total_aux_loss += aux_loss.item()
-        loss_tracker.log_batch(pred_loss.item(), global_step)
+        # Track losses - handle DataParallel multi-GPU tensors
+        pred_loss_scalar = pred_loss.mean().item() if pred_loss.numel() > 1 else pred_loss.item()
+        aux_loss_scalar = aux_loss.mean().item() if aux_loss.numel() > 1 else aux_loss.item()
+        
+        total_pred_loss += pred_loss_scalar
+        total_aux_loss += aux_loss_scalar
+        loss_tracker.log_batch(pred_loss_scalar, global_step)
         
         # ========================================================================
         # STEP 6a: COMPUTE & LOG REAL-TIME METRICS (every log_interval batches)
@@ -3769,8 +4041,9 @@ def train_epoch(
                 )
                 batch_metrics_buffer.append(batch_metrics)
                 
-                # Log to console
-                print(f"    Loss: {pred_loss.item():.4f} | "
+                # Log to console - use safe scalar conversion
+                loss_display = pred_loss.mean().item() if pred_loss.numel() > 1 else pred_loss.item()
+                print(f"    Loss: {loss_display:.4f} | "
                       f"R@10: {batch_metrics['recall@10']:.3f} | "
                       f"R@20: {batch_metrics['recall@20']:.3f} | "
                       f"P@10: {batch_metrics['precision@10']:.3f} | "
@@ -3919,13 +4192,13 @@ def evaluate(
             loss = 0.0
             if use_mixed_precision:
                 with torch.cuda.amp.autocast(dtype=torch.float16):
-                    if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                    if _model_has_moe(model):
                         output, _ = model(x, return_moe_losses=False)
                     else:
                         output = model(x)
                     loss = compute_loss(output, y, dt_cnt, config, criterion, device)
             else:
-                if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                if _model_has_moe(model):
                     output, _ = model(x, return_moe_losses=False)
                 else:
                     output = model(x)
@@ -4217,7 +4490,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[45]:
+# In[19]:
 
 
 def save_checkpoint(
@@ -4229,7 +4502,9 @@ def save_checkpoint(
     scheduler: Any,
     scaler: Optional[GradScaler],
     metrics: Dict,
-    is_best: bool = False
+    is_best: bool = False,
+    keep_last_n: int = 2,  # Only keep last N epoch checkpoints
+    save_optimizer: bool = True  # Option to skip optimizer for final save
 ):
     """
     Save checkpoint - PyTorch official pattern.
@@ -4241,6 +4516,8 @@ def save_checkpoint(
     - checkpoint_epoch{N}.pt (every epoch)
     - checkpoint_best.pt (when val loss improves)
     """
+    import glob
+    import shutil
     
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
@@ -4255,7 +4532,25 @@ def save_checkpoint(
         'metrics': metrics,
         'timestamp': time.time()
     }
-    
+    # ============================================================
+    # ROLLING CLEANUP: Remove old epoch checkpoints BEFORE saving
+    # Prevents disk full errors during long training runs
+    # ============================================================
+    existing_checkpoints = sorted(
+        glob.glob(os.path.join(checkpoint_dir, 'checkpoint_epoch*.pt')),
+        key=lambda x: int(x.split('epoch')[-1].replace('.pt', ''))
+    )    
+    # Remove oldest checkpoints to maintain only (keep_last_n - 1)
+    # only keep (keep_last_n - 1) because we're about to add one more
+    while len(existing_checkpoints) >= keep_last_n:
+        oldest = existing_checkpoints.pop(0)
+        if os.path.exists(oldest):
+            try:
+                os.remove(oldest)
+                print(f"🗑️ Removed old checkpoint: {os.path.basename(oldest)}")
+            except OSError as e:
+                print(f"⚠️ Could not remove {oldest}: {e}")    
+                
     # Save latest (for resume)
     latest_path = os.path.join(checkpoint_dir, 'checkpoint_latest.pt')
     torch.save(checkpoint, latest_path)
@@ -4268,7 +4563,7 @@ def save_checkpoint(
     # Save best (when val loss improves)
     if is_best:
         best_path = os.path.join(checkpoint_dir, 'checkpoint_best.pt')
-        torch.save(checkpoint, best_path)
+        shutil.copy(epoch_path, best_path)
         if metrics and isinstance(metrics, list) and len(metrics) > 0:
             last_val_loss = metrics[-1].get('val_loss', 0)
             print(f"✅ New best! Val loss: {last_val_loss:.4f}")
@@ -4301,7 +4596,10 @@ def load_checkpoint(
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only = False)
     
     # Restore states
-    model.load_state_dict(checkpoint['model_state_dict'])
+    if isinstance(model, nn.DataParallel):
+        model.module.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
     if scheduler and checkpoint.get('scheduler_state_dict'):
@@ -4734,7 +5032,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[22]:
+# In[20]:
 
 
 class MetricsLogger:
@@ -4864,7 +5162,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[23]:
+# In[21]:
 
 
 def compute_batch_metrics_lightweight(
@@ -5027,7 +5325,8 @@ def compute_embedding_quality_epoch(
     Returns:
         Dict with 'embedding_std_mean', 'nn_target_overlap'
     """
-    model.eval()
+    actual_model = model.module if isinstance(model, nn.DataParallel) else model
+    actual_model.eval()
     metrics = {}
     
     # Sample validation data
@@ -5042,7 +5341,7 @@ def compute_embedding_quality_epoch(
     )    
     all_embeddings = []
     all_targets = []
-    with EmbeddingExtractor(model) as extractor:
+    with EmbeddingExtractor(actual_model) as extractor:
         with torch.no_grad():  
             for batch in val_loader:  # ← Use DataLoader instead of manual iteration
                 age = batch['age'].to(device)
@@ -5065,15 +5364,15 @@ def compute_embedding_quality_epoch(
                 if use_mixed_precision:
                     dtype = getattr(config, 'dtype', torch.float16)
                     with torch.cuda.amp.autocast(dtype=dtype):
-                        if isinstance(model, FlashMoETransformer):
-                            _ = model(x, return_moe_losses=False)
+                        if _model_has_moe(actual_model):
+                            _ = actual_model(x, return_moe_losses=False)
                         else:
-                            _ = model(x)  # Works for Baseline AND FlashAttention
+                            _ = actual_model(x)  # Works for Baseline AND FlashAttention
                 else:
-                    if isinstance(model, FlashMoETransformer):
-                        _ = model(x, return_moe_losses=False)
+                    if _model_has_moe(model):
+                        _ = actual_model(x, return_moe_losses=False)
                     else:
-                        _ = model(x)
+                        _ = actual_model(x)
 
                 # Get patient embeddings (last valid day)    
                 patient_embs = extractor.get_patient_embedding(dt_cnt)
@@ -5149,8 +5448,14 @@ def compute_moe_batch_metrics(
         return {}
     
     metrics = {}
-    usage = moe_losses['expert_usage'].cpu().numpy()
+    usage = moe_losses['expert_usage']
     
+    # Handle DataParallel, expert_usage might be [num_gpus, num_experts]
+    # Average across GPUs
+    if usage.dim() > 1:
+        usage = usage.mean(dim=0)  
+        
+    usage = usage.cpu().numpy()
     # 1. Load balance CV
     if usage.mean() > 0:
         metrics['expert_load_cv'] = usage.std() / usage.mean()
@@ -5172,14 +5477,15 @@ def compute_moe_batch_metrics(
     
     # 4. Aux loss
     if 'aux_loss' in moe_losses:
-        metrics['aux_loss'] = moe_losses['aux_loss'].item()
+        aux = moe_losses['aux_loss']
+        metrics['aux_loss'] = aux.mean().item() if aux.numel() > 1 else aux.item()
     
     return metrics
 
 
 # #### Primary metrics
 
-# In[24]:
+# In[22]:
 
 
 """
@@ -6109,12 +6415,12 @@ def comprehensive_evaluation(
             # Forward
             if use_mixed_precision:
                 with torch.cuda.amp.autocast(dtype=torch.float16):
-                    if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                    if _model_has_moe(model):
                         output, _ = model(x, return_moe_losses=False)
                     else:
                         output = model(x)
             else:
-                if hasattr(model, 'forward') and 'return_moe_losses' in model.forward.__code__.co_varnames:
+                if _model_has_moe(model):
                     output, _ = model(x, return_moe_losses=False)
                 else:
                     output = model(x)
@@ -6293,7 +6599,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Extract embedding for each member
 
-# In[25]:
+# In[23]:
 
 
 # ============================================================================
@@ -6323,7 +6629,8 @@ class EmbeddingExtractor:
     """
     
     def __init__(self, model: nn.Module):
-        self.model = model
+        self.wrapped_model = model
+        self.model = model.module if isinstance(model, nn.DataParallel) else model
         self.embeddings = None
         self._hook_handle = None
         
@@ -6376,7 +6683,7 @@ class EmbeddingExtractor:
         emb = self.embeddings
         
         # Normalize shape to [batch, len_dy, embedding_size]
-        if isinstance(self.model, BaselineTransformer):
+        if isinstance(self.model, BaselineTransformer):  # Uses unwrapped model
             # Baseline returns [len_dy, batch, embedding_size]
             emb = emb.permute(1, 0, 2)
         
@@ -6532,7 +6839,16 @@ test_embedding_extractor()
 
 # ### Downstream Evaluation
 
-# In[35]:
+# In[24]:
+
+
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.calibration import CalibratedClassifierCV
+from dataclasses import dataclass, field
+
+
+# In[25]:
 
 
 # ============================================================================
@@ -6541,7 +6857,14 @@ test_embedding_extractor()
 # Implements linear probe evaluation for IP risk prediction
 # Separate from training for clean evaluation with proper train/val/test splits
 # ============================================================================
-from utils.metrics import lift_at_percentage, true_positives_at_percentage, num_samples_at_percentage, precision_at_percentage, recall_at_percentage, f1_at_percentage
+from utils.metrics import (lift_at_percentage, 
+                           true_positives_at_percentage, 
+                           num_samples_at_percentage, 
+                           precision_at_percentage, 
+                           recall_at_percentage, 
+                           f1_at_percentage, 
+                           pr_auc_at_percentage, 
+                           roc_auc_at_percentage)
 @dataclass
 class DownstreamConfig:
     """Configuration for downstream task evaluation."""
@@ -6549,11 +6872,15 @@ class DownstreamConfig:
     test_size: float = 0.1        # 10% for test
     val_size: float = 0.1         # 10% of remaining for validation (= 8% of total)
     random_state: int = 42
+    percentiles: List[float] = field(default_factory=lambda: [0.1, 0.01])
     n_cv_folds: int = 5           # optional, this takes long time; cross-validation folds for probe
     max_iter: int = 1000          # Max iterations for logistic regression
     class_weight: str = 'balanced'  # Handle class imbalance
-
-
+    model_type: str = 'xgboost'  # 'logistic', 'xgboost', 'lightgbm'
+    calibrate_proba: bool = True  # Whether to calibrate probabilities
+    lob_name: Optional[str] = None  # e.g., 'commercial', 'medicare', 'medicaid'
+    outcome_column: str = 'acute_ip_flag'  # Column name for outcome in outcomes_df
+    
 class DownstreamEvaluator:
     """
     Evaluates transformer embeddings on downstream classification tasks.
@@ -6685,6 +7012,7 @@ class DownstreamEvaluator:
         """
         print("Preparing downstream data...")
         
+        outcome_col = downstream_config.outcome_column
         # Extract embeddings
         embeddings, individual_ids, index_dts = self.extract_embeddings(features_df)
         
@@ -6703,20 +7031,20 @@ class DownstreamEvaluator:
         
         # Left join embeddings with outcomes
         merged = emb_df.merge(
-            outcomes_df[['individual_id', 'index_dt', 'acute_ip_flag']],
+            outcomes_df[['individual_id', 'index_dt', outcome_col]],
             on=['individual_id'],
             how='left'
         )
         
         # Handle missing outcomes (default to 0)
-        merged['acute_ip_flag'] = merged['acute_ip_flag'].fillna(0).astype(int)
+        merged[outcome_col] = merged[outcome_col].fillna(0).astype(int)
         
         print(f"  Matched {len(merged)} records")
-        print(f"  Label distribution: {merged['acute_ip_flag'].value_counts().to_dict()}")
+        print(f"  Label distribution: {merged[outcome_col].value_counts().to_dict()}")
         
         # Get embeddings and labels
         X = embeddings[merged['embedding_idx'].values]
-        y = merged['acute_ip_flag'].values
+        y = merged[outcome_col].values
         
         # Stratified train/test split
         X_trainval, X_test, y_trainval, y_test = train_test_split(
@@ -6780,13 +7108,151 @@ class DownstreamEvaluator:
         print("  Linear probe trained successfully")
         return classifier, scaler
     
+    ##############################################
+    # Xgboost and lightbgm
+    ##############################################
+    def _compute_scale_pos_weight(self, y_train: np.ndarray) -> float:
+        """
+        Compute scale_pos_weight for handling class imbalance.
+        
+        Formula: scale_pos_weight = n_negative / n_positive
+        """
+        n_positive = np.sum(y_train == 1)
+        n_negative = np.sum(y_train == 0)
+        
+        if n_positive == 0:
+            return 1.0
+        
+        scale_pos_weight = n_negative / n_positive
+        print(f"  Class distribution: {n_negative} neg / {n_positive} pos")
+        print(f"  Computed scale_pos_weight: {scale_pos_weight:.2f}")
+        return scale_pos_weight
+    
+    
+    def train_xgboost_probe(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        downstream_config: DownstreamConfig
+    ) -> Tuple[Any, StandardScaler, Any]:
+        """
+        Train XGBoost classifier with proper imbalance handling and calibration.
+        
+        Returns:
+            - classifier: XGBoost model (or calibrated wrapper)
+            - scaler: StandardScaler
+            - calibrator: CalibratedClassifierCV if calibration enabled, else None
+        """
+        print("Training XGBoost probe...")
+        
+        # Standardize features (less critical for trees, but keeps consistency)
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        
+        # Compute scale_pos_weight for imbalance
+        scale_pos_weight = self._compute_scale_pos_weight(y_train)
+        
+        # XGBoost with default hyperparameters + imbalance handling
+        classifier = xgb.XGBClassifier(
+            n_estimators=100,          # Default
+            max_depth=6,               # Default
+            learning_rate=0.2,         # Default
+            scale_pos_weight=scale_pos_weight,  # Handle imbalance
+            objective='binary:logistic',
+            eval_metric='logloss',
+            random_state=downstream_config.random_state,
+            n_jobs=-1,
+            verbosity=0
+        )
+        
+        classifier.fit(X_train_scaled, y_train)
+        print("  XGBoost base model trained")
+        
+        # Calibration using validation set
+        calibrator = None
+        if downstream_config.calibrate_proba:
+            print("  Calibrating probabilities with isotonic regression...")
+            # Use isotonic regression for better calibration on large datasets
+            # cv='prefit' means we use the already-fitted classifier
+            calibrator = CalibratedClassifierCV(
+                classifier, 
+                method='isotonic',  # Better for large datasets
+                cv='prefit'
+            )
+            calibrator.fit(X_val_scaled, y_val)
+            print("  Probability calibration complete")
+        
+        return classifier, scaler, calibrator
+
+    def train_lightgbm_probe(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        downstream_config: DownstreamConfig
+    ) -> Tuple[Any, StandardScaler, Any]:
+        """
+        Train LightGBM classifier with proper imbalance handling and calibration.
+        
+        Returns:
+            - classifier: LightGBM model (or calibrated wrapper)
+            - scaler: StandardScaler
+            - calibrator: CalibratedClassifierCV if calibration enabled, else None
+        """
+        print("Training LightGBM probe...")
+        
+        # Standardize features
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        
+        # Compute scale_pos_weight for imbalance
+        scale_pos_weight = self._compute_scale_pos_weight(y_train)
+        
+        # LightGBM with default hyperparameters + imbalance handling
+        classifier = lgb.LGBMClassifier(
+            n_estimators=100,          # Default
+            max_depth=-1,              # Default (no limit)
+            learning_rate=0.1,         # Default
+            num_leaves=31,             # Default
+            scale_pos_weight=scale_pos_weight,  # Handle imbalance
+            objective='binary',
+            random_state=downstream_config.random_state,
+            n_jobs=-1,
+            verbose=-1
+        )
+        
+        classifier.fit(X_train_scaled, y_train)
+        print("  LightGBM base model trained")
+        
+        # Calibration using validation set
+        calibrator = None
+        if downstream_config.calibrate_proba:
+            print("  Calibrating probabilities with isotonic regression...")
+            calibrator = CalibratedClassifierCV(
+                classifier,
+                method='isotonic',
+                cv='prefit'
+            )
+            calibrator.fit(X_val_scaled, y_val)
+            print("  Probability calibration complete")
+        
+        return classifier, scaler, calibrator    
+    
+    
     def evaluate_probe(
         self,
-        classifier: LogisticRegression,
+        classifier: Any,
         scaler: StandardScaler,
         X: np.ndarray,
         y: np.ndarray,
-        split_name: str = "test"
+        percentiles: List[float] = [0.01, 0.1],
+        split_name: str = "test",
+        calibrator: Any = None
     ) -> Dict[str, float]:
         """
         Evaluate the linear probe on a dataset split.
@@ -6804,8 +7270,14 @@ class DownstreamEvaluator:
         X_scaled = scaler.transform(X)
         
         # Predictions
-        y_pred = classifier.predict(X_scaled)
-        y_prob = classifier.predict_proba(X_scaled)[:, 1]
+        if calibrator is not None:
+            # Use calibrated probabilities
+            y_prob = calibrator.predict_proba(X_scaled)[:, 1]
+            y_pred = (y_prob >= 0.5).astype(int)
+        else:
+            y_pred = classifier.predict(X_scaled)
+            y_prob = classifier.predict_proba(X_scaled)[:, 1]
+        
         
         # Compute metrics
         metrics = {
@@ -6820,20 +7292,25 @@ class DownstreamEvaluator:
             f'{split_name}_n_samples': int(len(y)),
             f'{split_name}_n_positive': int(y.sum()),
         }
-        for pct in [0.01]:
+        for pct in percentiles:
             pct_str = f"{int(pct * 100)}pct"  # e.g., "1pct", "5pct", "10pct", "20pct"
             # Lift at top X%
-            metrics[f'{split_name}_lift_{pct_str}'] = lift_at_percentage(y_array, y_prob, pct)
+            metrics[f'{split_name}_lift_{pct_str}'] = lift_at_percentage(y, y_prob, pct)
+            # ROC_AUC at top X%
+            metrics[f'{split_name}_roc_auc_{pct_str}'] = roc_auc_at_percentage(y, y_prob, pct) 
+            # PR_AUC at top X%
+            metrics[f'{split_name}_pr_auc_{pct_str}'] = pr_auc_at_percentage(y, y_prob, pct) 
             # True positives at top X%
-            metrics[f'{split_name}_true_positives_{pct_str}'] = true_positives_at_percentage(y_array, y_prob, pct)
+            metrics[f'{split_name}_true_positives_{pct_str}'] = true_positives_at_percentage(y, y_prob, pct)
             # Number of samples at top X%
-            metrics[f'{split_name}_n_samples_{pct_str}'] = num_samples_at_percentage(y_array, pct)
+            metrics[f'{split_name}_n_samples_{pct_str}'] = num_samples_at_percentage(y, pct)
             # Precision at top X% (how many in top X% are actual positives)
-            metrics[f'{split_name}_precision_{pct_str}'] = precision_at_percentage(y_array, y_prob, pct)
+            metrics[f'{split_name}_precision_{pct_str}'] = precision_at_percentage(y, y_prob, pct)
             # Recall at top X% (what fraction of all positives are captured)
-            metrics[f'{split_name}_recall_{pct_str}'] = recall_at_percentage(y_array, y_prob, pct)
+            metrics[f'{split_name}_recall_{pct_str}'] = recall_at_percentage(y, y_prob, pct)
             # F1 at top X%
-            metrics[f'{split_name}_f1_{pct_str}'] = f1_at_percentage(y_array, y_prob, pct)        
+            metrics[f'{split_name}_f1_{pct_str}'] = f1_at_percentage(y, y_prob, pct)      
+            
         return metrics
     
     def evaluate(
@@ -6858,6 +7335,7 @@ class DownstreamEvaluator:
         
         print(f"\n{'='*60}")
         print(f"DOWNSTREAM EVALUATION: {downstream_config.task_name}")
+        print(f"Model Type: {downstream_config.model_type}")
         print(f"{'='*60}")
         
         # Prepare data
@@ -6865,17 +7343,29 @@ class DownstreamEvaluator:
             features_df, outcomes_df, downstream_config
         )
         
-        # Train linear probe
-        classifier, scaler = self.train_linear_probe(X_train, y_train, downstream_config)
+        # Train LR, xgboost, lightgbm
+        calibrator = None
+        if downstream_config.model_type == 'xgboost':
+            classifier, scaler, calibrator = self.train_xgboost_probe(
+                X_train, y_train, X_val, y_val, downstream_config
+            )
+        elif downstream_config.model_type == 'lightgbm':
+            classifier, scaler, calibrator = self.train_lightgbm_probe(
+                X_train, y_train, X_val, y_val, downstream_config
+            )
+        else:  # default: logistic regression
+            classifier, scaler = self.train_linear_probe(X_train, y_train, downstream_config)
         
-        # Evaluate on all splits
-        train_metrics = self.evaluate_probe(classifier, scaler, X_train, y_train, 'train')
-        val_metrics = self.evaluate_probe(classifier, scaler, X_val, y_val, 'val')
-        test_metrics = self.evaluate_probe(classifier, scaler, X_test, y_test, 'test')
+        # Evaluate on all splits'
+        train_metrics = self.evaluate_probe(classifier, scaler, X_train, y_train, downstream_config.percentiles, 'train', calibrator)
+        val_metrics = self.evaluate_probe(classifier, scaler, X_val, y_val, downstream_config.percentiles, 'val', calibrator)
+        test_metrics = self.evaluate_probe(classifier, scaler, X_test, y_test, downstream_config.percentiles, 'test', calibrator)
         
         # Combine results
         results = {
             'task_name': downstream_config.task_name,
+            'model_type': downstream_config.model_type,
+            'calibrated': downstream_config.calibrate_proba and calibrator is not None,
             'embedding_dim': X_train.shape[1],
             **train_metrics,
             **val_metrics,
@@ -6883,175 +7373,25 @@ class DownstreamEvaluator:
         }
         
         # Print summary
-        print(f"\n--- Linear Probe Results ---")
+        print(f"\n--- {downstream_config.model_type.upper()} Probe Results ---")
         print(f"Train AUC-ROC: {train_metrics['train_auc_roc']:.4f}")
         print(f"Val AUC-ROC:   {val_metrics['val_auc_roc']:.4f}")
         print(f"Test AUC-ROC:  {test_metrics['test_auc_roc']:.4f}")
         print(f"Test F1:       {test_metrics['test_f1']:.4f}")
         print(f"Test Recall:   {test_metrics['test_recall']:.4f}")
+        print(f"\n--- Top 10% Metrics ---")
+        print(f"Test Precision@10%: {test_metrics['test_precision_10pct']:.4f}")
+        print(f"Test Recall@10%:    {test_metrics['test_recall_10pct']:.4f}")
+        print(f"Test Specificity@10%: {test_metrics['test_specificity_10pct']:.4f}")
+        print(f"Test F1@10%:        {test_metrics['test_f1_10pct']:.4f}")
+        print(f"Test Lift@10%:      {test_metrics['test_lift_10pct']:.2f}x")
         print(f"{'='*60}\n")
         
         return results
 
 
 
-# In[36]:
-
-
-def generate_model_name(
-    exp_name: str,
-    experiment_round: Optional[str] = None,
-    batch_size: int = 32,
-    epochs: int = 1,
-    embedding_size: int = 256 # 256 by default
-) -> str:
-    """
-    Generate a standardized model name for saving/loading.
-    
-    Format: {experiment_round}_{exp_name}_bs{batch_size}_ep{epochs}_d{embedding_size}_{timestamp}
-    
-    Example: round3_exp3_standard_moe_bs32_ep10_d256_20241211_143022
-    """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    parts = []
-    if experiment_round:
-        parts.append(experiment_round)
-    parts.append(exp_name)
-    parts.append(f"bs{batch_size}")
-    parts.append(f"ep{epochs}")
-    parts.append(f"d{embedding_size}")
-    parts.append(timestamp)
-    
-    return "_".join(parts)
-
-
-def save_trained_model(
-    model: nn.Module,
-    config: BaseConfig,
-    model_name: str,
-    save_dir: str,
-    exp_results: Dict[str, any],
-    checkpoint_dir: Optional[str] = None,  # Link to checkpoint for resume
-    is_best: bool = False
-) -> str:
-    """
-    Save trained model for inference/downstream evaluation.
-    
-    This is SEPARATE from save_checkpoint() which is for training resume.
-    This creates lightweight, portable model files for:
-    - Loading in production
-    - Running downstream evaluations
-    - Sharing/deploying models
-    
-    Directory structure after training:
-    logs/{experiment_round}/{exp_name}/
-    ├── checkpoints/                    # Training resume (save_checkpoint)
-    │   ├── checkpoint_latest.pt
-    │   ├── checkpoint_best.pt
-    │   └── checkpoint_epoch{N}.pt
-    ├── saved_models/                   # Inference (save_trained_model)
-    │   ├── {model_name}_final.pt       # Lightweight: just weights
-    │   ├── {model_name}_config.json
-    │   └── {model_name}_results.json
-    ├── epoch_metrics.json              # MetricsLogger
-    ├── batch_metrics.json
-    ├── config.json
-    ├── final_results.json
-    └── {exp_name}.log                  # Python logger
-    
-    Args:
-        model: Trained model
-        config: Model configuration
-        model_name: Generated model name (for traceability)
-        save_dir: Directory to save model files
-        exp_results: Experiment results dictionary
-        checkpoint_dir: Path to checkpoint directory (for linking)
-        is_best: Whether this is the best model
-        
-    Returns:
-        Path to saved model
-    """
-    os.makedirs(save_dir, exist_ok=True)
-    
-    # 1. Save lightweight model (just state dict + model info)
-    model_path = os.path.join(save_dir, f"{model_name}_final.pt")
-    save_dict = {
-        'model_state_dict': model.state_dict(),
-        'model_name': model_name,
-        'model_type': type(model).__name__,
-        'embedding_size': config.embedding_size,
-        'nlayers': config.nlayers,
-        # Link back to full checkpoint for resume if needed
-        'checkpoint_dir': checkpoint_dir,
-        'timestamp': datetime.now().isoformat()
-    }
-    torch.save(save_dict, model_path)
-    print(f"Model saved to: {model_path}")
-    
-    # 2. Save config (human-readable)
-    config_path = os.path.join(save_dir, f"{model_name}_config.json")
-    config_dict = {}
-    for k, v in config.__dict__.items():
-        if isinstance(v, torch.dtype):
-            config_dict[k] = str(v)
-        elif callable(v):
-            config_dict[k] = str(v)
-        else:
-            config_dict[k] = v
-    with open(config_path, 'w') as f:
-        json.dump(config_dict, f, indent=2)
-    
-    # 3. Save results (with downstream metrics if available)
-    results_path = os.path.join(save_dir, f"{model_name}_results.json")
-    with open(results_path, 'w') as f:
-        json.dump(MetricsLogger.convert_to_serializable(exp_results), f, indent=2)
-    
-    # 4. Also save as "best" for easy access
-    if is_best:
-        best_path = os.path.join(save_dir, f"{model_name}_best.pt")
-        torch.save(save_dict, best_path)
-        print(f"Best model saved to: {best_path}")
-    
-    return model_path
-
-
-def load_trained_model(
-    model_path: str,
-    model_class: type,
-    config: BaseConfig,
-    device: torch.device
-) -> nn.Module:
-    """
-    Load a trained model from checkpoint.
-    
-    Args:
-        model_path: Path to saved .pt file
-        model_class: Class of the model (BaselineTransformer, FlashAttentionTransformer, etc.)
-        config: Model configuration
-        device: Device to load model to
-        
-    Returns:
-        Loaded model
-    """
-    checkpoint = torch.load(model_path, map_location=device)
-    
-    # Create model instance
-    if model_class == FlashMoETransformer:
-        # MoE models need additional config
-        moe_config = MoEConfig(d_model=config.embedding_size, d_ff=config.nhid)
-        model = model_class(config, moe_config)
-    else:
-        model = model_class(config)
-    
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-    
-    print(f"Model loaded from: {model_path}")
-    print(f"Model type: {checkpoint.get('model_type', 'Unknown')}")
-    
-    return model
+# In[ ]:
 
 
 def run_downstream_evaluation(
@@ -7084,12 +7424,313 @@ def run_downstream_evaluation(
         device=device,
         use_mixed_precision=use_mixed_precision
     )
-    
+    if not downstream_config:
+        downstream_config = DownstreamConfig(task_name="medicaid_ip_risk", 
+                                             model_type = 'xgboost'
+                                            )    
     return evaluator.evaluate(
         features_df=features_df,
         outcomes_df=outcomes_df,
         downstream_config=downstream_config
     )
+
+def run_downstream_evaluation_from_saved_model(
+    model_path: str,
+    features_df: pd.DataFrame,
+    outcomes_df: pd.DataFrame,
+    device: torch.device,
+    downstream_config: Optional[DownstreamConfig] = None,
+    log_dir: str = "logs/downstream",
+) -> Dict[str, Any]:
+    """
+    Run downstream evaluation using a pretrained model loaded from disk.
+    
+    This is the standalone downstream evaluation pipeline that can be run
+    independently of pretraining.
+    
+    Args:
+        model_path: Path to saved model (.pt file)
+        features_df: DataFrame with transformer input columns + individual_id, index_dt
+        outcomes_df: DataFrame with individual_id, index_dt, and outcome column
+        device: Torch device
+        downstream_config: Configuration for downstream evaluation
+        log_dir: Directory to save evaluation logs
+        
+    Returns:
+        Dictionary with downstream evaluation metrics
+    """
+    if downstream_config is None:
+        downstream_config = DownstreamConfig()
+    
+    # ============================================================
+    # 1. LOAD MODEL AND CONFIG
+    # ============================================================
+    print(f"\n{'='*80}")
+    print(f"DOWNSTREAM EVALUATION FROM SAVED MODEL")
+    print(f"{'='*80}")
+    print(f"Model path: {model_path}")
+    print(f"LOB: {downstream_config.lob_name or 'Not specified'}")
+    print(f"Task: {downstream_config.task_name}")
+    print(f"Model type: {downstream_config.model_type}")
+    
+    # Load checkpoint
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Determine model class from checkpoint
+    model_type = checkpoint.get('model_type', 'FlashAttentionTransformer')
+    config_dict = checkpoint.get('config', {})
+    moe_config_dict = checkpoint.get('moe_config', None)
+    
+    # Reconstruct config
+    if 'FlashMoE' in model_type:
+        config = FlashAttentionConfig(
+            embedding_size=config_dict.get('embedding_size', 256),
+            nhid=config_dict.get('nhid', 512),
+            nhead=config_dict.get('nhead', 8),
+            nlayers=config_dict.get('nlayers', 6),
+            dropout=config_dict.get('dropout', 0.1),
+        )
+        if moe_config_dict is not None:
+            moe_config = MoEConfig(
+                d_model=moe_config_dict.get('d_model', config.embedding_size),
+                d_ff=moe_config_dict.get('d_ff', config.nhid),
+                num_experts=moe_config_dict.get('num_experts', 8),
+                num_shared_experts=moe_config_dict.get('num_shared_experts', 0),
+                top_k=moe_config_dict.get('top_k', 2),
+                expert_dropout=moe_config_dict.get('expert_dropout', 0.05),
+                load_balance_strategy=moe_config_dict.get('load_balance_strategy', 'switch'),
+                aux_loss_weight=moe_config_dict.get('aux_loss_weight', 0.01),
+                bias_lr=moe_config_dict.get('bias_lr', 1e-5),
+                bias_momentum=moe_config_dict.get('bias_momentum', 0.9),
+                z_loss_weight=moe_config_dict.get('z_loss_weight', 0.0),
+                use_moe_from_layer=moe_config_dict.get('use_moe_from_layer', 2),
+                use_swiglu_experts=moe_config_dict.get('use_swiglu_experts', False),
+            )
+            print(f"  Restored MoE config: {moe_config_dict.get('num_experts')} experts, "
+                  f"top-{moe_config_dict.get('top_k')}, from layer {moe_config_dict.get('use_moe_from_layer')}")
+        else:
+            print("  Warning: moe_config not found in checkpoint, using defaults")
+            moe_config = MoEConfig(
+                d_model=config.embedding_size,
+                d_ff=config.nhid
+            )            
+        model_class = FlashMoETransformer
+        model = model_class(config, moe_config)
+    elif 'FlashAttention' in model_type:
+        config = FlashAttentionConfig(
+            embedding_size=config_dict.get('embedding_size', 256),
+            nhid=config_dict.get('nhid', 512),
+            nhead=config_dict.get('nhead', 8),
+        )
+        model_class = FlashAttentionTransformer
+        model = model_class(config)
+    else:
+        config = BaseConfig(
+            embedding_size=config_dict.get('embedding_size', 256),
+            nhid=config_dict.get('nhid', 512),
+        )
+        model_class = BaselineTransformer
+        model = model_class(config)
+    
+    # Load state dict
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()
+    
+    print(f"Model loaded: {model_type}")
+    print(f"Embedding size: {config.embedding_size}")
+    print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Determine if mixed precision was used during training
+    use_mixed_precision = 'Flash' in model_type
+    
+    # ============================================================
+    # 2. RUN DOWNSTREAM EVALUATION
+    # ============================================================
+    evaluator = DownstreamEvaluator(
+        model=model,
+        model_config=config,
+        device=device,
+        use_mixed_precision=use_mixed_precision
+    )
+    
+    results = evaluator.evaluate(
+        features_df=features_df,
+        outcomes_df=outcomes_df,
+        downstream_config=downstream_config
+    )
+    
+    # Add metadata
+    results['model_path'] = model_path
+    results['model_type'] = model_type
+    results['lob_name'] = downstream_config.lob_name
+    
+    # ============================================================
+    # 3. SAVE RESULTS
+    # ============================================================
+    os.makedirs(log_dir, exist_ok=True)
+    
+    lob_suffix = f"_{downstream_config.lob_name}" if downstream_config.lob_name else ""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_filename = f"downstream_{downstream_config.task_name}{lob_suffix}_{timestamp}.json"
+    results_path = os.path.join(log_dir, results_filename)
+    
+    with open(results_path, 'w') as f:
+        json.dump(MetricsLogger.convert_to_serializable(results), f, indent=2)
+    
+    print(f"\nResults saved to: {results_path}")
+    print(f"{'='*80}\n")
+    
+    return results
+
+
+# In[ ]:
+
+
+@dataclass
+class LOBData:
+    """Container for LOB-specific data."""
+    lob_name: str
+    features_df: pd.DataFrame
+    outcomes_df: pd.DataFrame
+    downstream_config: Optional[DownstreamConfig] = None
+
+
+def run_multi_lob_downstream_evaluation(
+    model_path: str,
+    lob_data_list: List[LOBData],
+    device: torch.device,
+    base_downstream_config: Optional[DownstreamConfig] = None,
+    log_dir: str = "logs/downstream",
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Run downstream evaluation for MULTIPLE LOBs using a single pretrained model.
+    
+    This is the main entry point for multi-LOB downstream evaluation after
+    pretraining a cross-LOB transformer model.
+    
+    Args:
+        model_path: Path to pretrained model (.pt file)
+        lob_data_list: List of LOBData objects, each containing:
+            - lob_name: Name of the LOB (e.g., 'commercial', 'medicare', 'medicaid')
+            - features_df: DataFrame with transformer input features for this LOB
+            - outcomes_df: DataFrame with outcomes for this LOB
+            - downstream_config: Optional LOB-specific config (overrides base_config)
+        device: Torch device
+        base_downstream_config: Base configuration (can be overridden per-LOB)
+        log_dir: Directory to save evaluation logs
+        
+    Returns:
+        Dictionary mapping LOB names to their evaluation results
+    """
+    print(f"\n{'='*80}")
+    print(f"MULTI-LOB DOWNSTREAM EVALUATION")
+    print(f"{'='*80}")
+    print(f"Model: {model_path}")
+    print(f"LOBs to evaluate: {[lob.lob_name for lob in lob_data_list]}")
+    print(f"{'='*80}\n")
+    
+    if base_downstream_config is None:
+        base_downstream_config = DownstreamConfig()
+    
+    all_results = {}
+    
+    for lob_data in lob_data_list:
+        print(f"\n{'─'*60}")
+        print(f"Processing LOB: {lob_data.lob_name}")
+        print(f"{'─'*60}")
+        
+        # Use LOB-specific config or fall back to base config
+        if lob_data.downstream_config is not None:
+            downstream_config = lob_data.downstream_config
+        else:
+            # Clone base config and set LOB name
+            downstream_config = DownstreamConfig(
+                task_name=base_downstream_config.task_name,
+                test_size=base_downstream_config.test_size,
+                val_size=base_downstream_config.val_size,
+                random_state=base_downstream_config.random_state,
+                percentiles=base_downstream_config.percentiles,
+                n_cv_folds=base_downstream_config.n_cv_folds,
+                max_iter=base_downstream_config.max_iter,
+                class_weight=base_downstream_config.class_weight,
+                model_type=base_downstream_config.model_type,
+                calibrate_proba=base_downstream_config.calibrate_proba,
+                lob_name=lob_data.lob_name,
+                outcome_column=base_downstream_config.outcome_column,
+            )
+        
+        # Ensure LOB name is set
+        downstream_config.lob_name = lob_data.lob_name
+        
+        # Create LOB-specific log directory
+        lob_log_dir = os.path.join(log_dir, lob_data.lob_name)
+        
+        # Run evaluation for this LOB
+        try:
+            lob_results = run_downstream_evaluation_from_saved_model(
+                model_path=model_path,
+                features_df=lob_data.features_df,
+                outcomes_df=lob_data.outcomes_df,
+                device=device,
+                downstream_config=downstream_config,
+                log_dir=lob_log_dir,
+            )
+            all_results[lob_data.lob_name] = lob_results
+            
+            print(f"  ✓ {lob_data.lob_name} - Test AUC-ROC: {lob_results['test_auc_roc']:.4f}")
+            
+        except Exception as e:
+            print(f"  ✗ {lob_data.lob_name} - Error: {str(e)}")
+            all_results[lob_data.lob_name] = {'error': str(e)}
+    
+    # ============================================================
+    # AGGREGATE SUMMARY
+    # ============================================================
+    print(f"\n{'='*80}")
+    print("MULTI-LOB EVALUATION SUMMARY")
+    print(f"{'='*80}")
+    
+    summary_table = []
+    for lob_name, results in all_results.items():
+        if 'error' not in results:
+            summary_table.append({
+                'LOB': lob_name,
+                'N': results.get('test_n_samples', 0),
+                'Prevalence': results.get('test_prevalence', 0),
+                'AUC-ROC': results.get('test_auc_roc', 0),
+                'PR-AUC': results.get('test_auc_pr', 0),
+                'F1': results.get('test_f1', 0),
+                'Precision@10%': results.get('test_precision_10pct', 0),
+                'Recall@10%': results.get('test_recall_10pct', 0),
+                'Lift@10%': results.get('test_lift_10pct', 0),
+            })
+    
+    if summary_table:
+        summary_df = pd.DataFrame(summary_table)
+        print(summary_df.to_string(index=False))
+    
+    # Save aggregate summary
+    summary_path = os.path.join(log_dir, f"multi_lob_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(summary_path, 'w') as f:
+        json.dump(MetricsLogger.convert_to_serializable(all_results), f, indent=2)
+    
+    print(f"\nAggregate summary saved to: {summary_path}")
+    print(f"{'='*80}\n")
+    
+    return all_results
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
 
 
 # #### Test
@@ -7382,13 +8023,204 @@ test_downstream_evaluator_with_real_data()
 
 
 
-# In[ ]:
+# ### Save and load trained TE
+
+# In[26]:
+
+
+def generate_model_name(
+    exp_name: str,
+    experiment_round: Optional[str] = None,
+    batch_size: int = 32,
+    epochs: int = 1,
+    embedding_size: int = 256 # 256 by default
+) -> str:
+    """
+    Generate a standardized model name for saving/loading.
+    
+    Format: {experiment_round}_{exp_name}_bs{batch_size}_ep{epochs}_d{embedding_size}_{timestamp}
+    
+    Example: round3_exp3_standard_moe_bs32_ep10_d256_20241211_143022
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    parts = []
+    if experiment_round:
+        parts.append(experiment_round)
+    parts.append(exp_name)
+    parts.append(f"bs{batch_size}")
+    parts.append(f"ep{epochs}")
+    parts.append(f"d{embedding_size}")
+    parts.append(timestamp)
+    
+    return "_".join(parts)
+
+
+def save_trained_model(
+    model: nn.Module,
+    config: BaseConfig,
+    model_name: str,
+    save_dir: str,
+    exp_results: Dict[str, any],
+    checkpoint_dir: Optional[str] = None,  # Link to checkpoint for resume
+    is_best: bool = False,
+    moe_config: Optional[MoEConfig] = None
+) -> str:
+    """
+    Save trained model for inference/downstream evaluation.
+    
+    This is SEPARATE from save_checkpoint() which is for training resume.
+    This creates lightweight, portable model files for:
+    - Loading in production
+    - Running downstream evaluations
+    - Sharing/deploying models
+    
+    Directory structure after training:
+    logs/{experiment_round}/{exp_name}/
+    ├── checkpoints/                    # Training resume (save_checkpoint)
+    │   ├── checkpoint_latest.pt
+    │   ├── checkpoint_best.pt
+    │   └── checkpoint_epoch{N}.pt
+    ├── saved_models/                   # Inference (save_trained_model)
+    │   ├── {model_name}_final.pt       # Lightweight: just weights
+    │   ├── {model_name}_config.json
+    │   └── {model_name}_results.json
+    ├── epoch_metrics.json              # MetricsLogger
+    ├── batch_metrics.json
+    ├── config.json
+    ├── final_results.json
+    └── {exp_name}.log                  # Python logger
+    
+    Args:
+        model: Trained model
+        config: Model configuration
+        model_name: Generated model name (for traceability)
+        save_dir: Directory to save model files
+        exp_results: Experiment results dictionary
+        checkpoint_dir: Path to checkpoint directory (for linking)
+        is_best: Whether this is the best model
+        
+    Returns:
+        Path to saved model
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 1. Save lightweight model (just state dict + model info)
+    model_path = os.path.join(save_dir, f"{model_name}_final.pt")
+    actual_model = model.module if isinstance(model, nn.DataParallel) else model
+    save_dict = {
+        'model_state_dict': actual_model.state_dict(),
+        'model_name': model_name,
+        'model_type': type(actual_model).__name__,
+        'embedding_size': config.embedding_size,
+        'nlayers': config.nlayers,
+        # Link back to full checkpoint for resume if needed
+        'checkpoint_dir': checkpoint_dir,
+        'timestamp': datetime.now().isoformat(),
+        'config': {
+            'embedding_size': config.embedding_size,
+            'nhid': config.nhid,
+            'nhead': getattr(config, 'nhead', 8),
+            'nlayers': config.nlayers,
+            'dropout': config.dropout,
+        },
+        'moe_config': vars(moe_config) if moe_config else None, 
+    }
+    torch.save(save_dict, model_path)
+    print(f"Model saved to: {model_path}")
+    
+    # 2. Save config (human-readable)
+    config_path = os.path.join(save_dir, f"{model_name}_config.json")
+    config_dict = {}
+    for k, v in config.__dict__.items():
+        if isinstance(v, torch.dtype):
+            config_dict[k] = str(v)
+        elif callable(v):
+            config_dict[k] = str(v)
+        else:
+            config_dict[k] = v
+    with open(config_path, 'w') as f:
+        json.dump(config_dict, f, indent=2)
+    
+    # 3. Save results (with downstream metrics if available)
+    results_path = os.path.join(save_dir, f"{model_name}_results.json")
+    with open(results_path, 'w') as f:
+        json.dump(MetricsLogger.convert_to_serializable(exp_results), f, indent=2)
+    
+    # 4. Also save as "best" for easy access
+    if is_best:
+        best_path = os.path.join(save_dir, f"{model_name}_best.pt")
+        torch.save(save_dict, best_path)
+        print(f"Best model saved to: {best_path}")
+    
+    return model_path
+
+
+def load_trained_model(
+    model_path: str,
+    model_class: type,
+    config: BaseConfig,
+    device: torch.device
+) -> nn.Module:
+    """
+    Load a trained model from checkpoint.
+    
+    Args:
+        model_path: Path to saved .pt file
+        model_class: Class of the model (BaselineTransformer, FlashAttentionTransformer, etc.)
+        config: Model configuration
+        device: Device to load model to
+        
+    Returns:
+        Loaded model
+    """
+    checkpoint = torch.load(model_path, map_location=device)
+    moe_config_dict = checkpoint.get('moe_config', None) 
+    
+    # Create model instance
+    if model_class == FlashMoETransformer:
+        # Additional configurations for MOE
+        if moe_config_dict is not None:
+            moe_config = MoEConfig(
+                d_model=moe_config_dict.get('d_model', config.embedding_size),
+                d_ff=moe_config_dict.get('d_ff', config.nhid),
+                num_experts=moe_config_dict.get('num_experts', 8),
+                num_shared_experts=moe_config_dict.get('num_shared_experts', 0),
+                top_k=moe_config_dict.get('top_k', 2),
+                expert_dropout=moe_config_dict.get('expert_dropout', 0.05),
+                load_balance_strategy=moe_config_dict.get('load_balance_strategy', 'switch'),
+                aux_loss_weight=moe_config_dict.get('aux_loss_weight', 0.01),
+                bias_lr=moe_config_dict.get('bias_lr', 1e-5),
+                bias_momentum=moe_config_dict.get('bias_momentum', 0.9),
+                z_loss_weight=moe_config_dict.get('z_loss_weight', 0.0),
+                use_moe_from_layer=moe_config_dict.get('use_moe_from_layer', 2),
+                use_swiglu_experts=moe_config_dict.get('use_swiglu_experts', False),
+            )
+        else:
+            moe_config = MoEConfig(d_model=config.embedding_size, d_ff=config.nhid)
+        model = model_class(config, moe_config)
+    else:
+        model = model_class(config)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()
+    
+    print(f"Model loaded from: {model_path}")
+    print(f"Model type: {checkpoint.get('model_type', 'Unknown')}")
+    
+    return model
+
+
+
+
+# In[27]:
 
 
 
 
 
-# In[ ]:
+# In[28]:
 
 
 
@@ -7398,7 +8230,7 @@ test_downstream_evaluator_with_real_data()
 
 # #### Utils
 
-# In[37]:
+# In[29]:
 
 
 def compute_code_frequencies(
@@ -7460,7 +8292,7 @@ def compute_code_frequencies(
     return code_frequencies
 
 
-# In[38]:
+# In[30]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -7526,7 +8358,7 @@ def _calculate_model_dimensions(embedding_size: int,
 
 # #### Run experimentation
 
-# In[39]:
+# In[31]:
 
 
 # ============================================================================
@@ -7703,7 +8535,10 @@ def _resume_from_checkpoint(
     """
     checkpoint = torch.load(resume_path, map_location=device)
     
-    model.load_state_dict(checkpoint['model_state_dict'])
+    if isinstance(model, nn.DataParallel):
+        model.module.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
     if scheduler and checkpoint.get('scheduler_state_dict'):
@@ -7812,7 +8647,7 @@ def _build_final_results(
     }
 
 
-# In[40]:
+# In[32]:
 
 
 def run_single_experiment(
@@ -7833,9 +8668,8 @@ def run_single_experiment(
     embedding_size: Optional[int] = None,
     local_rank: Optional[int] = None,
     world_size: Optional[int] = None,
-    outcomes_df: Optional[pd.DataFrame] = None,
-    run_downstream_eval: bool = False,
     save_model: bool = True
+    
 ) -> Dict[str, Any]:
     """
     Run a single experiment with optional downstream evaluation.
@@ -7907,10 +8741,13 @@ def run_single_experiment(
         logger.info(f"   Effective batch size: {effective_batch_size}")
         logger.info(f"   Base learning rate: {base_lr}")
         logger.info(f"   Scaled learning rate: {scaled_lr:.2e}")
-        logger.info(f"   Per-GPU batch size: {config.batch_size}")
-        logger.info(f"   Effective batch size: {config.batch_size * num_gpus}")        
+        
         # Wrap model - it's already on device, DataParallel will handle distribution
         model = nn.DataParallel(model)    
+        # Verification: Check DataParallel is set up correctly
+        logger.info(f"   DataParallel device_ids: {model.device_ids}")
+        logger.info(f"   DataParallel output_device: {model.output_device}")
+        
     else:
         scaled_lr = config.learning_rate 
         
@@ -8103,44 +8940,28 @@ def run_single_experiment(
             save_dir=model_save_dir,
             exp_results=results,
             checkpoint_dir=checkpoint_dir,
-            is_best=True
+            is_best=True,
+            moe_config = moe_config
         )
         logger.info(f"Model saved as: {model_name}")
         results['model_path'] = model_path
-    
-    # ============================================================
-    # 9. DOWNSTREAM EVALUATION (if requested)
-    # ============================================================
-    if run_downstream_eval and outcomes_df is not None:
-        logger.info("\n" + "="*80)
-        logger.info("RUNNING DOWNSTREAM EVALUATION")
-        logger.info("="*80)
         
-        downstream_results = run_downstream_evaluation(
-            model=model,
-            model_config=config,
-            features_df=val_data,
-            outcomes_df=outcomes_df,
-            device=device,
-            use_mixed_precision=use_mixed_precision,
-            downstream_config=DownstreamConfig(task_name="medicaid_ip_risk")
-        )
-        
-        results['downstream_evaluation'] = downstream_results
-        logger.info(f"Downstream Test AUC-ROC: {downstream_results['test_auc_roc']:.4f}")
-        logger.info(f"Downstream Test F1: {downstream_results['test_f1']:.4f}")
-        
-        # Update saved results
-        if save_model:
-            results_path = os.path.join(model_save_dir, f"{model_name}_results.json")
-            with open(results_path, 'w') as f:
-                json.dump(MetricsLogger.convert_to_serializable(results), f, indent=2)
+        # ============================================================
+        # 8b. CLEANUP CHECKPOINTS (model saved, no longer needed) to RELEASE MEMORY
+        # ============================================================
+        # implement inside the memory management session
+        cleanup_checkpoints_after_training(
+            checkpoint_dir=checkpoint_dir,
+            keep_best=False,  # Set to true if keep checkpoint_best.pt
+            logger=logger
+        ) 
     
     # ============================================================
     # 10. FINALIZE
     # ============================================================
     results_path = metrics_logger.save_final_results(results)
     logger.info(f"Complete results saved to {results_path}")
+    
     
     metrics_logger.save()
     
@@ -8165,8 +8986,6 @@ def run_selected_experiments(
     embedding_size: Optional[int] = None,
     local_rank: Optional[int] = None,      
     world_size: Optional[int] = None,
-    outcomes_df: Optional[pd.DataFrame] = None,
-    run_downstream_eval: bool = False,
     save_model: bool = True
 ) -> pd.DataFrame:
     """
@@ -8238,8 +9057,6 @@ def run_selected_experiments(
             embedding_size=embedding_size,
             local_rank=local_rank,      
             world_size=world_size,
-            outcomes_df = outcomes_df,
-            run_downstream_eval = run_downstream_eval,
             save_model = save_model
         )
         
@@ -8297,12 +9114,6 @@ def run_all_experiments(
 
 # ##### Test
 
-# In[43]:
-
-
-df_val.head(200).acute_ip_flag.value_counts()
-
-
 # In[44]:
 
 
@@ -8355,8 +9166,6 @@ def test_run_single_experiment_with_downstream():
             epochs=1,
             experiment_round='test_downstream',
             log_dir=tmpdir,
-            outcomes_df=val_sample[['individual_id', 'index_dt', 'acute_ip_flag']],
-            run_downstream_eval=True,
             save_model=True
         )
         
@@ -8639,7 +9448,64 @@ def load_checkpoint_multigpu(
     print(f"✅ Checkpoint loaded: {filepath}")
     return checkpoint['epoch'], checkpoint['metrics']
         
-        
+
+    
+    
+def cleanup_checkpoints_after_training(
+    checkpoint_dir: str,
+    keep_best: bool = True,
+    logger: Optional[logging.Logger] = None
+):
+    """
+    Clean up checkpoint files after training is complete.
+    Called after save_trained_model() to reclaim disk space in vertexAI workbench
+    
+    Args:
+        checkpoint_dir: Path to checkpoints directory
+        keep_best: If True, keeps checkpoint_best.pt for reference
+        logger: Logger for output
+    """
+    import glob
+    import shutil
+    
+    if not os.path.exists(checkpoint_dir):
+        return
+    
+    files_removed = 0
+    bytes_freed = 0
+    
+    # Remove all epoch checkpoints
+    for f in glob.glob(os.path.join(checkpoint_dir, 'checkpoint_epoch*.pt')):
+        bytes_freed += os.path.getsize(f)
+        os.remove(f)
+        files_removed += 1
+    
+    # Remove latest checkpoint
+    latest = os.path.join(checkpoint_dir, 'checkpoint_latest.pt')
+    if os.path.exists(latest):
+        bytes_freed += os.path.getsize(latest)
+        os.remove(latest)
+        files_removed += 1
+    
+    # Optionally remove best checkpoint
+    if not keep_best:
+        best = os.path.join(checkpoint_dir, 'checkpoint_best.pt')
+        if os.path.exists(best):
+            bytes_freed += os.path.getsize(best)
+            os.remove(best)
+            files_removed += 1
+    
+    # Remove empty directory
+    remaining = os.listdir(checkpoint_dir)
+    if not remaining:
+        os.rmdir(checkpoint_dir)
+    
+    gb_freed = bytes_freed / (1024 ** 3)
+    msg = f"🗑️ Cleaned up {files_removed} checkpoint files, freed {gb_freed:.2f} GB"
+    if logger:
+        logger.info(msg)
+    else:
+        print(msg)
 
 
 # ### Time and cost estimation
@@ -10723,11 +11589,11 @@ def test_full_experiment_simulation():
 test_full_experiment_simulation()
 
 
-# ### Start experimentation
+# ### Intrinsic evaluation
 
 # #### Training with real data
 
-# In[61]:
+# In[31]:
 
 
 import google.auth
@@ -10738,7 +11604,7 @@ credentials, project= google.auth.default()
 print('credentials:', credentials, ', project:', project)
 
 
-# In[62]:
+# In[5]:
 
 
 # Device setup
@@ -11096,7 +11962,7 @@ results_df = pd.concat([results_df, results_df_1])
 
 # #### Experiment 3 Increase embedding size and training sample size Nov 26
 
-# In[ ]:
+# In[32]:
 
 
 cleanup_gpu_memory_hard()
@@ -11138,12 +12004,6 @@ results_df_1 = run_selected_experiments(
 # In[ ]:
 
 
-
-
-
-# In[ ]:
-
-
 results_df_3 = pd.concat([
                         result_df_1,
                         result_df_2], axis = 0)
@@ -11155,14 +12015,526 @@ results_df_3 = pd.concat([
 results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-moe-init_nov26.xlsx")
 
 
-# In[50]:
+# In[ ]:
 
 
 
+
+
+# ### Downstream evaluation   
+
+# In[37]:
+
+
+import google.auth
+from google.auth import impersonated_credentials
+from google.cloud import bigquery
+client = bigquery.Client()
+credentials, project= google.auth.default()
+print('credentials:', credentials, ', project:', project)
+
+
+# #### Test GPU availability
+
+# In[34]:
+
+
+num_gpus = torch.cuda.device_count()
+print(f"Available GPUs: {num_gpus}")
+
+if num_gpus == 0:
+    raise RuntimeError("No GPUs available!")
+
+# List each GPU
+for i in range(num_gpus):
+    props = torch.cuda.get_device_properties(i)
+    free_mem = torch.cuda.mem_get_info(i)[0] / 1024**3
+    total_mem = props.total_memory / 1024**3
+    print(f"   GPU {i}: {props.name}")
+    print(f"           Memory: {free_mem:.1f} GB free / {total_mem:.1f} GB total")
+
+# Test DataParallel
+if num_gpus > 1:
+    print(f"\nTesting DataParallel...")
+    test_model = torch.nn.Linear(10, 10).cuda()
+    test_model = torch.nn.DataParallel(test_model)
+    test_input = torch.randn(8, 10).cuda()
+    output = test_model(test_input)
+    print(f"   ✅ DataParallel test passed")
+    print(f"   Device IDs: {test_model.device_ids}")
+    del test_model, test_input, output
+    torch.cuda.empty_cache()
+
+
+# In[35]:
+
+
+print("\nClearing GPU memory...")
+gc.collect()
+torch.cuda.empty_cache()
+cleanup_gpu_memory_hard()
+
+
+# #### Formal training v1
+
+# ##### Summary
+
+# - Training size: 320k
+# - Training dataset:
+#     ```sql 
+#     select 
+#     a.*, 
+#     'Medicaid' as lob,
+#     b.acute_ip_flag
+#     from
+#     edp-prod-storage.edp_ent_sdoheir_cns.a834793_Medicaid_o3_train_ending a
+#     left join edp-prod-storage.edp_ent_sdoheir_cns.a964286_Medicaid_outcome_ip_4_te_experiment b
+#     on a.individual_id = b.individual_id
+#     ```
+# - Dimension: 256
+# - Downstream task: 
+#     - Logistic regression
+#     - Medicaid IP
+#     - Pure embeddings
+# - [Downstream eval results](experiment_logs/exp4_320k_1epoch_32batch_dim256_downstream_all_Dec13_external_metrics_only.xlsx)
+# 
+
+# ##### Data ingestion
+
+# In[92]:
+
+
+df_train_sample = df_train.sample(320000, random_state=42)
+df_val_sample = df_val.sample(32000, random_state=42)
+
+
+# In[93]:
+
+
+df_train_sample.rename(columns = {'target': 'target_cd'}, inplace = True)
+df_val_sample.rename(columns = {'target': 'target_cd'}, inplace = True)
+
+
+# In[94]:
+
+
+df_val_sample.acute_ip_flag.value_counts()
+
+
+# ##### Exp1 Baseline dense model
+
+# In[74]:
+
+
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp1_dense_baseline'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 256  # 256, 384, or 512
+EXPERIMENT_ROUND = "exp_round4_downstream_task_multi_gpu_test_v1"
+
+
+# In[75]:
+
+
+cleanup_gpu_memory_hard()
+results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    train_data=df_train_sample,
+    val_data=df_val_sample,
+    device=device,
+    epochs=EPOCHS,
+    embedding_size=EMBEDDING_SIZE,
+    experiment_round=EXPERIMENT_ROUND,
+    log_dir="logs",
+    log_metrics_every=100,  # Log every 100 batches for batch_size of 32
+    check_embeddings_every=1,  # Check embeddings every epoch
+    # Downstream evaluation settings
+    outcomes_df=df_val_sample[['individual_id', 'index_dt', 'acute_ip_flag']],
+    run_downstream_eval=True,  # Enable downstream evaluation
+    save_model=True  # Save final model
+)
+
+
+# In[81]:
+
+
+pd.DataFrame([results]).set_index('experiment')
+
+
+# ##### Exp6 moe with free auxilary loss and all other experiments
+
+# In[95]:
+
+
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp6_auxiliary_free'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 256  # 256, 384, or 512
+EXPERIMENT_ROUND = "exp_round4_downstream_task_multi_gpu_test_v1"
+
+
+# In[96]:
+
+
+results_exp6 = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    train_data=df_train_sample,
+    val_data=df_val_sample,
+    device=device,
+    epochs=EPOCHS,
+    embedding_size=EMBEDDING_SIZE,
+    experiment_round=EXPERIMENT_ROUND,
+    log_dir="logs",
+    log_metrics_every=100,  # Log every 100 batches for batch_size of 32
+    check_embeddings_every=1,  # Check embeddings every epoch
+    # Downstream evaluation settings
+    outcomes_df=df_val_sample[['individual_id', 'index_dt', 'acute_ip_flag']],
+    run_downstream_eval=True,  # Enable downstream evaluation
+    save_model=True  # Save final model
+)
+
+
+# In[101]:
+
+
+pd.DataFrame([results_exp6]).set_index('experiment')
+
+
+# In[113]:
+
+
+cleanup_gpu_memory_hard()
+exp_round4_EXPERIMENTS = [
+    'exp2_dense_flash',  # Flash + Max-Pool
+    'exp2b_flash_learned_pool',  # Flash + Learned Pool
+    'exp3_standard_moe',  # MoE + Max-Pool
+    'exp3b_moe_swiglu_learned_pool',  # MoE + Learned Pool  
+    'exp3e_moe_swiglu_learned_pool_layer2_aux001',  # aux_loss=0.001
+    'exp4_shared_expert',  # Shared expert
+    'exp5_fine_grained',  # Fine-grained
+    'exp6b_auxiliary_free_no-share-exp',
+    'exp6a_auxiliary_free_layer4',
+    'exp6_auxiliary_free',  # DeepSeek-style auxiliary loss
+]
+
+
+# In[114]:
+
+
+results_df = run_selected_experiments(
+    experiment_names=exp_round4_EXPERIMENTS,
+    train_data=df_train_sample,
+    val_data=df_val_sample,
+    device=device,
+    epochs=EPOCHS,
+    embedding_size=EMBEDDING_SIZE,
+    experiment_round=EXPERIMENT_ROUND,
+    outcomes_df=df_val_sample[['individual_id', 'index_dt', 'acute_ip_flag']],
+    run_downstream_eval=True,
+    save_model=True
+)
+
+
+# In[119]:
+
+
+import json
+import pandas as pd
+from pathlib import Path
+
+# Base path and experiment names
+base_path = Path("logs/exp_round4_downstream_task_multi_gpu_test_v1")
+experiments = [
+    'exp2_dense_flash',           # Flash + Max-Pool
+    'exp2b_flash_learned_pool',   # Flash + Learned Pool
+    'exp3_standard_moe',          # MoE + Max-Pool
+    'exp3b_moe_swiglu_learned_pool',  # MoE + Learned Pool  
+    'exp3e_moe_swiglu_learned_pool_layer2_aux001',  # aux_loss=0.001
+    'exp4_shared_expert',         # Shared expert
+    'exp5_fine_grained',          # Fine-grained
+    'exp6b_auxiliary_free_no-share-exp',
+    'exp6a_auxiliary_free_layer4',
+    'exp6_auxiliary_free',        # DeepSeek-style auxiliary loss
+]
+
+# Collect all results
+all_results = []
+missing_experiments = []
+
+for exp_name in experiments:
+    json_path = base_path / exp_name / "final_results.json"
+    
+    if json_path.exists():
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+            # Ensure experiment name is included
+            data['experiment'] = exp_name
+            all_results.append(data)
+        print(f"✓ Loaded: {exp_name}")
+    else:
+        missing_experiments.append(exp_name)
+        print(f"✗ Missing: {json_path}")
+
+# Create DataFrame
+if all_results:
+    df = pd.DataFrame(all_results)
+    
+    # Reorder columns - put experiment name first
+    cols = ['experiment'] + [c for c in df.columns if c != 'experiment']
+    df = df[cols]
+    
+    # Save to Excel
+    output_file = "exp4_320k_1epoch_32batch_dim256_downstream_all_Dec13.xlsx"
+    df.to_excel(output_file, index=False, engine='openpyxl')
+    print(f"\n✓ Saved {len(all_results)} experiments to: {output_file}")
+    
+    # Show summary
+    print(f"\nDataFrame shape: {df.shape}")
+    print(f"Columns: {len(df.columns)}")
+    
+    if missing_experiments:
+        print(f"\n⚠ Missing experiments: {missing_experiments}")
+else:
+    print("No results found!")
+
+
+# In[122]:
+
+
+df.loc[0, 'downstream_evaluation']
+
+
+# In[3]:
+
+
+df_results = pd.read_excel("experiment_logs/exp4_320k_1epoch_32batch_dim256_downstream_all_Dec13.xlsx")
+
+
+# In[7]:
+
+
+import ast
+df_expanded = pd.concat([
+    df_results[['experiment']].reset_index(drop=True),
+    pd.json_normalize(
+        df_results['downstream_evaluation'].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+    )
+], axis=1)
+df_expanded.to_excel("experiment_logs/exp4_320k_1epoch_32batch_dim256_downstream_all_Dec13_external_metrics_only.xlsx")
+
+
+# #### Formal Training 2
+
+# ##### Summary
+
+# - Derived from Formal training 1
+#     - Decouple the transformer retraining and downstream classification, creating flexibility for downstream evaluation for different LOBs
+#     - Change the logistic regerssion to XGboost and lightgbm, calibration applied
+# - Training size: 1.7M across three LOBs
+# - Training dataset:
+#     ```sql 
+#         WITH lob_stats AS (
+#             SELECT 
+#                 lob,
+#                 COUNT(DISTINCT individual_id) AS lob_count,
+#                 SUM(COUNT(DISTINCT individual_id)) OVER () AS total_count
+#             FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_ending`
+#             WHERE dt_cnt >= 10
+#             GROUP BY lob
+#         ),
+#         sample_sizes AS (
+#             SELECT 
+#                 lob,
+#                 lob_count,
+#                 total_count,
+#                 ROUND(lob_count * 1.0 / total_count, 4) AS proportion,
+#                 -- 10% sampling per LOB to maintain proportions
+#                 CAST(ROUND(lob_count * 0.2) AS INT64) AS sample_size_per_lob
+#             FROM lob_stats
+#         ),
+#         ranked_members AS (
+#             SELECT 
+#                 individual_id,
+#                 lob,
+#                 -- Reproducible random ranking using FARM_FINGERPRINT with seed 42
+#                 ROW_NUMBER() OVER (
+#                     PARTITION BY lob 
+#                     ORDER BY FARM_FINGERPRINT(CONCAT(CAST(individual_id AS STRING), '_seed_42'))
+#                 ) AS rn
+#             FROM (
+#                 SELECT DISTINCT individual_id, lob 
+#                 FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_ending`
+#                 WHERE dt_cnt >= 10
+#             ) distinct_members
+#         ),
+#         sampled_member_ids AS (
+#             SELECT rm.individual_id, rm.lob
+#             FROM ranked_members rm
+#             INNER JOIN sample_sizes ss ON rm.lob = ss.lob
+#             WHERE rm.rn <= ss.sample_size_per_lob
+#         )
+#         -- Final output: Full table data for sampled members
+#         SELECT 
+#             t.individual_id,
+#             t.lob,
+#             t.index_dt,
+#             t.gender_cd,
+#             t.age_in_months,
+#             t.cd,
+#             t.target,
+#             t.dt_cnt
+#         FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_ending` t
+#         INNER JOIN sampled_member_ids sm 
+#             ON t.individual_id = sm.individual_id 
+#             AND t.lob = sm.lob
+#         WHERE t.dt_cnt >= 10
+#     ```
+# - Dimension: 
+#     - 256
+#     - 512
+# - Batch_size: 32->64
+
+# ##### Data ingestion
+
+# In[38]:
+
+
+input_sql = """
+select * from
+edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sample
+"""
+input_data = client.query(input_sql).to_dataframe() 
 
 
 # In[48]:
 
 
-get_ipython().system('pip install openpyxl')
+# Clean up data, eliminate members with more than 1 record
+member_counts = input_data.groupby('individual_id').size()
+single_record_members = member_counts[member_counts == 1].index
+df_unique = input_data[input_data['individual_id'].isin(single_record_members)].copy()
+del input_data
+
+
+# In[58]:
+
+
+df_unique.rename(columns = {'target': 'target_cd'}, inplace = True)
+
+
+# In[59]:
+
+
+# Split training and validation dataset
+# Set your desired train/validation split ratio
+TRAIN_RATIO = 0.9  # 80% train, 20% validation
+RANDOM_SEED = 42   # For reproducibility
+# Stratified split by LOB
+train_df, val_df = train_test_split(
+    df_unique,
+    train_size=TRAIN_RATIO,
+    stratify=df_unique['lob'],  # Preserves LOB proportions
+    random_state=RANDOM_SEED
+)
+
+
+# In[52]:
+
+
+print(f"{'LOB':<15} {'Original %':>12} {'Train %':>12} {'Val %':>12}")
+for lob in df_unique['lob'].unique():
+    orig_pct = (df_unique['lob'] == lob).mean() * 100
+    train_pct = (train_df['lob'] == lob).mean() * 100
+    val_pct = (val_df['lob'] == lob).mean() * 100
+    print(f"{lob:<15} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
+
+
+# ##### Baseline dense model
+
+# In[60]:
+
+
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp1_dense_baseline'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 256  # 256, 384, or 512
+EXPERIMENT_ROUND = "exp_round5_3lobs_pretrain_multi_gpu_test_v2"
+
+
+# In[ ]:
+
+
+cleanup_gpu_memory_hard()
+baseline_results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    experiment_round=EXPERIMENT_ROUND,
+    embedding_size=EMBEDDING_SIZE,
+    log_dir='logs',
+    save_model=True
+)
+
+
+# #### Downstream evaluation - Commercial
+
+# In[ ]:
+
+
+model_path = baseline_results['model_path']
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
 
