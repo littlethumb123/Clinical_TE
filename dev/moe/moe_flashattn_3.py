@@ -297,7 +297,7 @@
 
 # ### Import
 
-# In[43]:
+# In[1]:
 
 
 # ============================================================================
@@ -353,7 +353,7 @@
 # ============================================================================
 
 
-# In[35]:
+# In[1]:
 
 
 import pandas as pd
@@ -369,7 +369,7 @@ df_val = pd.read_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_val_mdcd_ip_
 df_train.columns
 
 
-# In[1]:
+# In[2]:
 
 
 """
@@ -391,11 +391,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch import optim
+from torch.utils.checkpoint import checkpoint
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any, Union
 from collections import Counter
 import time
 from datetime import datetime
@@ -407,13 +408,14 @@ from datetime import datetime
 import warnings
 from scipy import stats
 from torch.cuda.amp import GradScaler
+import logging
 warnings.filterwarnings("ignore")
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[2]:
+# In[26]:
 
 
 # import for downstream evaluation
@@ -428,7 +430,8 @@ from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
     classification_report,
-    confusion_matrix
+    confusion_matrix,
+    roc_auc_score
 )
 from sklearn.exceptions import ConvergenceWarning
 import warnings
@@ -438,7 +441,7 @@ from datetime import datetime
 
 # ### Configurations
 
-# In[63]:
+# In[4]:
 
 
 # ============================================================================
@@ -505,7 +508,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[64]:
+# In[5]:
 
 
 @dataclass
@@ -529,8 +532,8 @@ class BaseConfig:
     - Multi-label loss (BCEWithLogitsLoss)
     """
     # Data dimensions (from your specifications)
-    len_dy: int = 200          # Days in sequence (updated from 70)
-    len_cd: int = 80           # Codes per day (updated from 25)
+    len_dy: int = 200          # Days in sequence
+    len_cd: int = 80           # Codes per day
     cd_cnt: int = 75516        # Input vocabulary size
     target_cd_cnt: int = 6297  # Target vocabulary (updated from 2767, 8850(experiment))
 
@@ -546,7 +549,7 @@ class BaseConfig:
     lob_vocab: int = 4        # LOB categories (0=padding, 1=Commercial, 2=Medicare, 3=Medicaid)
     
     # Training
-    batch_size: int = 64     # Batch size (change from 16 to 32 and to 64)
+    batch_size: int = 32     # Batch size per GPU (change from 16 to 32, 64 causes OOM)
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
     gradient_clip: float = 1.0  # Gradient clipping norm
@@ -592,7 +595,8 @@ class FlashAttentionConfig(BaseConfig):
     # CHOICE REQUIRED: Head configuration
     nhead: int = 8            # Option A: 8 heads (head_dim=32)
     # nhead: int = 16         # Option B: 16 heads (head_dim=16)
-    
+    use_gradient_checkpointing: bool = True  # Enable by default for batch_size >= 32
+    checkpoint_every_n_layers: int = 2  # Checkpoint every 2 layers (balance speed/memory)    
     
     
 
@@ -632,7 +636,7 @@ class MoEConfig:
 
 
 
-# In[5]:
+# In[6]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -1009,9 +1013,257 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
     return synced
 
 
+# ### Data parellelism
+
+# In[7]:
+
+
+class DataParallelWrapper(nn.Module):
+    """
+    Wrapper that integrates loss computation into the forward pass.
+    
+    PURPOSE:
+    Standard DataParallel gathers outputs to GPU 0, then loss runs on GPU 0 only.
+    This wrapper computes loss on EACH GPU, then DataParallel averages the losses.
+    
+    MECHANISM:
+    1. Forward pass runs on each GPU
+    2. Loss computation runs on each GPU
+    3. DataParallel gathers LOSS values (scalars) to GPU0
+    4. Losses are automatically averaged across GPUs
+    
+    RESULT:
+    - GPU 0 no longer bottlenecked by loss computation
+    - All GPUs contribute equally to training
+    - ~3-4x speedup with 4 GPUs
+    
+    Compatible with:
+    - BaselineTransformer
+    - FlashAttentionTransformer  
+    - FlashMoETransformer
+    """
+    
+    def __init__(
+        self, 
+        model: nn.Module, 
+        config: 'BaseConfig', 
+        criterion: nn.Module,
+        moe_config: Optional['MoEConfig'] = None
+    ):
+        super().__init__()
+        self.model = model
+        self.config = config
+        self.criterion = criterion
+        self.moe_config = moe_config
+        self.target_cd_cnt = config.target_cd_cnt
+        
+        # Detect model type for proper forward handling
+        self._is_moe = _model_has_moe(model)
+    
+    def forward(
+        self, 
+        x: torch.Tensor,           # [batch, len_dy, features]
+        dt_cnt: torch.Tensor,      # [batch] - valid days per sample
+        targets: torch.Tensor,     # [batch, len_dy, target_cd_cnt] multi-hot
+        return_predictions: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
+        """
+        Forward pass with integrated loss computation.
+        
+        Args:
+            x: Input tensor [batch, len_dy, features]
+            dt_cnt: Valid day counts [batch]
+            targets: Pre-computed multi-hot targets [batch, len_dy, target_cd_cnt]
+            return_predictions: If True, also return predictions for metrics
+        
+        Returns:
+            If return_predictions=False: loss tensor (scalar per GPU, averaged by DP)
+            If return_predictions=True: (loss, {'predictions': output, 'moe_losses': ...})
+        """
+        batch_size = x.shape[0]
+        actual_len_dy = x.shape[1]
+        device = x.device
+        
+        # ====================================================================
+        # STEP 1: MODEL FORWARD (handles both dense and MoE)
+        # ====================================================================
+        if self._is_moe:
+            # MoE models return (output, moe_losses)
+            output, moe_losses = self.model(x, return_moe_losses=True)
+        else:
+            # Dense models return just output
+            output = self.model(x)
+            moe_losses = {}
+        
+        # ====================================================================
+        # STEP 2: LOSS COMPUTATION (same for all models)
+        # ====================================================================
+        output_flat = output.view(batch_size * actual_len_dy, self.target_cd_cnt)
+        if targets.dtype != output_flat.dtype:
+            targets_flat = targets.view(batch_size * actual_len_dy, self.target_cd_cnt).to(output_flat.dtype)
+        else:
+            targets_flat = targets.view(batch_size * actual_len_dy, self.target_cd_cnt)
+        
+        # Create valid day mask
+        valid_mask = torch.zeros(
+            batch_size * actual_len_dy, 
+            dtype=torch.bool, 
+            device=device
+        )
+        
+        for i in range(batch_size):
+            valid_days = min(int(dt_cnt[i].item()), actual_len_dy)
+            if valid_days > 0:
+                start_idx = i * actual_len_dy
+                valid_mask[start_idx:start_idx + valid_days] = True
+                
+        # Compute loss only on valid positions
+        if valid_mask.any():
+            valid_output = output_flat[valid_mask]
+            valid_targets = targets_flat[valid_mask]
+            if valid_targets.dtype != valid_output.dtype:
+                valid_targets = valid_targets.to(valid_output.dtype)
+            pred_loss = self.criterion(valid_output, valid_targets)
+        else:
+            pred_loss = torch.tensor(0.0, device=device, requires_grad=True)
+        
+        # ====================================================================
+        # STEP 3: HANDLE MOE AUXILIARY LOSS
+        # ====================================================================
+        aux_loss = moe_losses.get('aux_loss', torch.tensor(0.0, device=device))
+        
+        # Handle potential multi-element tensor from layer accumulation
+        if isinstance(aux_loss, torch.Tensor) and aux_loss.numel() > 1:
+            aux_loss = aux_loss.mean()
+        
+        # Combine losses based on MoE config
+        if self.moe_config is not None:
+            if self.moe_config.load_balance_strategy == 'switch':
+                # Switch loss: add weighted auxiliary loss
+                total_loss = pred_loss + self.moe_config.aux_loss_weight * aux_loss
+            else:
+                # DeepSeek or other: no auxiliary loss in total
+                # (bias correction happens inside model forward)
+                total_loss = pred_loss
+        else:
+            # Dense model: just prediction loss
+            total_loss = pred_loss
+        
+        # ====================================================================
+        # STEP 4: RETURN (with optional extras for monitoring)
+        # ====================================================================
+        if return_predictions:
+            extras = {
+                'predictions': output,
+                'pred_loss': pred_loss,
+                'aux_loss': aux_loss,
+                'moe_losses': moe_losses  # includes expert_usage for monitoring
+            }
+            return total_loss, extras
+        else:
+            return total_loss
+    
+    # ========================================================================
+    # CHECKPOINT COMPATIBILITY METHODS
+    # ========================================================================
+    
+    def get_inner_model(self) -> nn.Module:
+        """Get the wrapped model for direct access."""
+        return self.model
+    
+    def state_dict(self, *args, **kwargs):
+        """Return inner model state dict (not wrapper state)."""
+        return self.model.state_dict(*args, **kwargs)
+    
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        """Load state dict to inner model."""
+        return self.model.load_state_dict(state_dict, *args, **kwargs)
+
+
+# Model type detection (used elsewhere)
+def _model_has_moe(model: nn.Module) -> bool:
+    """
+    Check if model is MoE variant.
+    
+    Handles:
+    - Direct model
+    - nn.DataParallel wrapped
+    - DataParallelWrapper wrapped
+    - Double-wrapped (DataParallel + DataParallelWrapper)
+    """
+    # Unwrap DataParallel
+    if isinstance(model, nn.DataParallel):
+        model = model.module
+    
+    # Unwrap DataParallelWrapper
+    if isinstance(model, DataParallelWrapper):
+        model = model.model
+    
+    # Check for MoE layers
+    if hasattr(model, 'temporal_layers'):
+        for layer in model.temporal_layers:
+            if isinstance(layer, nn.ModuleDict) and 'ffn' in layer:
+                if isinstance(layer['ffn'], MoELayer):
+                    return True
+    
+    return False
+
+
+# #### Test
+
+# In[36]:
+
+
+config = BaseConfig()
+model = BaselineTransformer(config)
+criterion = nn.BCEWithLogitsLoss()
+wrapped = DataParallelWrapper(model, config, criterion)
+
+# Test detection
+is_wrapped = isinstance(wrapped, DataParallelWrapper) or (
+    isinstance(wrapped, nn.DataParallel) and isinstance(wrapped.module, DataParallelWrapper)
+)
+print(f"Single GPU detection: {is_wrapped}")  # Should be True
+
+# Test with DataParallel
+dp_wrapped = nn.DataParallel(wrapped)
+is_wrapped_dp = isinstance(dp_wrapped, DataParallelWrapper) or (
+    isinstance(dp_wrapped, nn.DataParallel) and isinstance(dp_wrapped.module, DataParallelWrapper)
+)
+print(f"Multi-GPU detection: {is_wrapped_dp}")  # Should be True
+
+
+# In[50]:
+
+
+import torch
+# Force cleanup
+gc.collect()
+torch.cuda.empty_cache()
+
+# Check if CUDA is in error state
+try:
+    torch.cuda.synchronize()
+    print("CUDA state is clean")
+except Exception as e:
+    print(f"CUDA error detected: {e}")
+    print("Please restart the kernel!")
+config = BaseConfig()
+wrapped = DataParallelWrapper(model.cuda(), config, criterion)
+
+# Dummy data
+x = torch.randn(4, 200, 83).cuda()
+dt_cnt = torch.tensor([100, 150, 200, 50]).cuda()
+targets = torch.zeros(4, 200, config.target_cd_cnt).cuda()
+
+loss, extras = wrapped(x, dt_cnt, targets, return_predictions=True)
+print(f"Loss: {loss.item():.4f}")
+print(f"Predictions shape: {extras['predictions'].shape}")
+
+
 # ### RPE and Swiglu
 
-# In[6]:
+# In[8]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -1169,7 +1421,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[7]:
+# In[9]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1435,7 +1687,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[8]:
+# In[10]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1536,7 +1788,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[9]:
+# In[11]:
 
 
 # ============================================================================
@@ -1924,7 +2176,7 @@ test_expert_layer_forward()
 
 
 def test_moe_layer_forward():
-    moe_cfg = MoEConfig(
+    moe_config = MoEConfig(
         d_model=256,
         d_ff=128,
         num_experts=4,
@@ -1935,7 +2187,7 @@ def test_moe_layer_forward():
         expert_dropout=0.0,
         use_moe_from_layer=0
     )
-    moe = MoELayer(moe_cfg).to(device)
+    moe = MoELayer(moe_config).to(device)
     x = torch.randn(12, 3, 256, device=device)  # [seq, batch, dim]
     out, losses = moe(x, train=True)
 
@@ -1950,7 +2202,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[10]:
+# In[12]:
 
 
 # ============================================================================
@@ -2131,7 +2383,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[11]:
+# In[13]:
 
 
 # ============================================================================
@@ -2354,7 +2606,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[12]:
+# In[14]:
 
 
 # ============================================================================
@@ -2378,6 +2630,9 @@ class FlashMoETransformer(nn.Module):
         self.config = config
         self.moe_config = moe_config
         self.use_moe_from_layer = moe_config.use_moe_from_layer if moe_config else 999
+
+        self.use_gradient_checkpointing = getattr(config, 'use_gradient_checkpointing', False)
+        self.checkpoint_every_n_layers = getattr(config, 'checkpoint_every_n_layers', 2)
         
         # Embeddings
         self.embedding_cd = nn.Embedding(config.cd_cnt, config.embedding_size)
@@ -2470,6 +2725,35 @@ class FlashMoETransformer(nn.Module):
         initrange = 0.1
         nn.init.zeros_(self.decoder_cd.bias)
         nn.init.uniform_(self.decoder_cd.weight, -initrange, initrange)
+
+    def _checkpointed_layer_forward(
+        self, 
+        layer_dict: nn.ModuleDict, 
+        cd_input: torch.Tensor, 
+        layer_idx: int
+    ) -> Tuple[torch.Tensor, Dict]:
+        """
+        Wrapper for gradient checkpointing.
+        Must be a separate function that doesn't capture state (for checkpoint compatibility).
+        """
+        def layer_fn(x):
+            residual = x
+            x_norm = layer_dict['norm1'](x)
+            x_attn = layer_dict['attention'](x_norm, is_causal=True)
+            x = residual + x_attn
+            
+            residual = x
+            x_norm = layer_dict['norm2'](x)
+            
+            if isinstance(layer_dict['ffn'], MoELayer):
+                x_ffn, moe_losses = layer_dict['ffn'](x_norm, train=self.training)
+                # Note: moe_losses returned separately since checkpoint doesn't handle dicts
+                return residual + x_ffn
+            else:
+                x_ffn = layer_dict['ffn'](x_norm)
+                return residual + x_ffn
+        
+        return layer_fn
     
     def forward(self, 
                 x: torch.Tensor, 
@@ -2534,27 +2818,58 @@ class FlashMoETransformer(nn.Module):
         expert_usage_list = []
         
         for i, layer in enumerate(self.temporal_layers):
-            # Flash Attention block
-            residual = cd
-            cd_norm = layer['norm1'](cd)
-            cd_attn = layer['attention'](cd_norm, is_causal=True)
-            cd = residual + cd_attn
+
+            # Determine if this layer should be checkpointed
+            should_checkpoint = (
+                self.training and 
+                self.use_gradient_checkpointing and
+                (i % self.checkpoint_every_n_layers == 0)
+            )
             
-            # FFN block (MoE or standard)
-            residual = cd
-            cd_norm = layer['norm2'](cd)
-            
-            # determine if the ffn is MOE or standard FFN
-            if isinstance(layer['ffn'], MoELayer):
-                cd_ffn, moe_losses = layer['ffn'](cd_norm, train=self.training)
-                if self.training and return_moe_losses:
-                    total_aux_loss += moe_losses['aux_loss']
-                    if 'expert_usage' in moe_losses:
-                        expert_usage_list.append(moe_losses['expert_usage'])
+            if should_checkpoint and not isinstance(layer['ffn'], MoELayer):
+                # Use gradient checkpointing for non-MoE layers
+                # (MoE layers have auxiliary losses that complicate checkpointing)
+                def create_custom_forward(layer_module):
+                    def custom_forward(x):
+                        residual = x
+                        x_norm = layer_module['norm1'](x)
+                        x_attn = layer_module['attention'](x_norm, is_causal=True)
+                        x = residual + x_attn
+                        
+                        residual = x
+                        x_norm = layer_module['norm2'](x)
+                        x_ffn = layer_module['ffn'](x_norm)
+                        return residual + x_ffn
+                    return custom_forward
+                
+                cd = checkpoint(
+                    create_custom_forward(layer),
+                    cd,
+                    use_reentrant=False
+                )
             else:
-                cd_ffn = layer['ffn'](cd_norm)
-            
-            cd = residual + cd_ffn
+                # Standard forward (MoE layers or non-checkpointed)
+                # Flash Attention block
+                residual = cd
+                cd_norm = layer['norm1'](cd)
+                cd_attn = layer['attention'](cd_norm, is_causal=True)
+                cd = residual + cd_attn
+
+                # FFN block (MoE or standard)
+                residual = cd
+                cd_norm = layer['norm2'](cd)
+
+                # determine if the ffn is MOE or standard FFN
+                if isinstance(layer['ffn'], MoELayer):
+                    cd_ffn, moe_losses = layer['ffn'](cd_norm, train=self.training)
+                    if self.training and return_moe_losses:
+                        total_aux_loss += moe_losses['aux_loss']
+                        if 'expert_usage' in moe_losses:
+                            expert_usage_list.append(moe_losses['expert_usage'].detach().cpu)
+                else:
+                    cd_ffn = layer['ffn'](cd_norm)
+
+                cd = residual + cd_ffn
         
         # Output
         cd = torch.swapaxes(cd, 0, 1)
@@ -2579,9 +2894,9 @@ class FlashMoETransformer(nn.Module):
 
 
 def test_baseline_transformer_forward():
-    cfg = BaseConfig(len_dy=200, len_cd=80, batch_size=4, device=device.type)
-    dataset = ClinicalDataset(df_train.head(cfg.batch_size), cfg)
-    loader = DataLoader(dataset, batch_size=cfg.batch_size, collate_fn=clinical_collate_fn)
+    config = BaseConfig(len_dy=200, len_cd=80, batch_size=4, device=device.type)
+    dataset = ClinicalDataset(df_train.head(config.batch_size), config)
+    loader = DataLoader(dataset, batch_size=config.batch_size, collate_fn=create_collate_fn(config))
     batch = next(iter(loader))
     
     age = batch['age'].to(device).unsqueeze(-1)
@@ -2589,11 +2904,11 @@ def test_baseline_transformer_forward():
     codes = batch['codes'].to(device)
     x = torch.cat([age, gender, codes], dim=-1)
 
-    model = BaselineTransformer(cfg).to(device)
+    model = BaselineTransformer(config).to(device)
     with torch.no_grad():
         out = model(x)
 
-    assert out.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt)
+    assert out.shape == (config.batch_size, config.len_dy, config.target_cd_cnt)
     print("BaselineTransformer forward ✔️")
 test_baseline_transformer_forward()
 
@@ -2602,7 +2917,7 @@ test_baseline_transformer_forward()
 
 
 def test_flash_attention_transformer_forward():
-    cfg = FlashAttentionConfig(
+    config = FlashAttentionConfig(
         len_dy=32,
         len_cd=40,
         batch_size=4,
@@ -2612,14 +2927,14 @@ def test_flash_attention_transformer_forward():
         dtype=torch.float32,
         nhead=8
     )
-    batch = df_train.head(cfg.batch_size).copy()
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    batch = df_train.head(config.batch_size).copy()
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
 
-    model = FlashAttentionTransformer(cfg).to(device)
+    model = FlashAttentionTransformer(config).to(device)
     with torch.no_grad():
         out = model(x.to(device))
 
-    assert out.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt)
+    assert out.shape == (config.batch_size, config.len_dy, config.target_cd_cnt)
     print("FlashAttentionTransformer forward ✔️")
 test_flash_attention_transformer_forward()
 
@@ -2628,7 +2943,7 @@ test_flash_attention_transformer_forward()
 
 
 def test_flash_moe_transformer_forward():
-    cfg = FlashAttentionConfig(
+    config = FlashAttentionConfig(
         len_dy=32,
         len_cd=40,
         batch_size=4,
@@ -2638,8 +2953,8 @@ def test_flash_moe_transformer_forward():
         dtype=torch.float32,
         nhead=8
     )
-    moe_cfg = MoEConfig(
-        d_model=cfg.embedding_size,
+    moe_config = MoEConfig(
+        d_model=config.embedding_size,
         d_ff=128,
         num_experts=4,
         num_shared_experts=1,
@@ -2649,14 +2964,14 @@ def test_flash_moe_transformer_forward():
         expert_dropout=0.0,
         use_moe_from_layer=0
     )
-    batch = df_train.head(cfg.batch_size).copy()
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    batch = df_train.head(config.batch_size).copy()
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
 
-    model = FlashMoETransformer(cfg, moe_cfg).to(device)
+    model = FlashMoETransformer(config, moe_config).to(device)
     with torch.no_grad():
         out, moe_losses = model(x.to(device), return_moe_losses=True)
 
-    assert out.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt)
+    assert out.shape == (config.batch_size, config.len_dy, config.target_cd_cnt)
     assert 'aux_loss' in moe_losses
     print("FlashMoETransformer forward ✔️")
 test_flash_moe_transformer_forward()
@@ -2677,7 +2992,7 @@ def test_model_forward_with_lob():
     
     cleanup_gpu_memory()
     
-    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    config = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
     batch_size = 4
     len_dy = 50
     len_cd = 20
@@ -2702,44 +3017,44 @@ def test_model_forward_with_lob():
     
     # Test BaselineTransformer
     print("  Testing BaselineTransformer with LOB...")
-    model = BaselineTransformer(cfg).to(device)
+    model = BaselineTransformer(config).to(device)
     model.eval()
     
     with torch.no_grad():
         output = model(x)
     
-    assert output.shape == (batch_size, len_dy, cfg.target_cd_cnt), \
+    assert output.shape == (batch_size, len_dy, config.target_cd_cnt), \
         f"Baseline output shape wrong: {output.shape}"
     print(f"    Output shape: {output.shape} ✅")
     del model
     
     # Test FlashAttentionTransformer
     print("  Testing FlashAttentionTransformer with LOB...")
-    flash_cfg = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
-    model = FlashAttentionTransformer(flash_cfg).to(device)
+    flash_config = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
+    model = FlashAttentionTransformer(flash_config).to(device)
     model.eval()
     
     with torch.no_grad():
         with torch.cuda.amp.autocast(dtype=torch.float16):
             output = model(x)
     
-    assert output.shape == (batch_size, len_dy, flash_cfg.target_cd_cnt), \
+    assert output.shape == (batch_size, len_dy, flash_config.target_cd_cnt), \
         f"Flash output shape wrong: {output.shape}"
     print(f"    Output shape: {output.shape} ✅")
     del model
     
     # Test FlashMoETransformer
     print("  Testing FlashMoETransformer with LOB...")
-    moe_cfg = MoEConfig(d_model=flash_cfg.embedding_size, d_ff=flash_cfg.nhid, 
+    moe_config = MoEConfig(d_model=flash_config.embedding_size, d_ff=flash_config.nhid, 
                         num_experts=4, top_k=2, use_moe_from_layer=0)
-    model = FlashMoETransformer(flash_cfg, moe_cfg).to(device)
+    model = FlashMoETransformer(flash_config, moe_config).to(device)
     model.eval()
     
     with torch.no_grad():
         with torch.cuda.amp.autocast(dtype=torch.float16):
             output, moe_losses = model(x, return_moe_losses=True)
     
-    assert output.shape == (batch_size, len_dy, flash_cfg.target_cd_cnt), \
+    assert output.shape == (batch_size, len_dy, flash_config.target_cd_cnt), \
         f"MoE output shape wrong: {output.shape}"
     print(f"    Output shape: {output.shape} ✅")
     del model
@@ -2755,7 +3070,7 @@ test_model_forward_with_lob()
 
 # #### Preprocess data with data loader
 
-# In[13]:
+# In[15]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -2773,7 +3088,7 @@ class ClinicalDataset(Dataset):
         age_strs = df['age_in_months'].tolist()
         gender_strs = df['gender_cd'].tolist()
         cd_strs = df['cd'].tolist()
-        target_strs = df['target_cd'].tolist()
+        target_strs = df['target'].tolist()
         self.dt_cnt = df['dt_cnt'].tolist()
         lob_strs = df['lob'].tolist()
         
@@ -2817,15 +3132,17 @@ class ClinicalDataset(Dataset):
         }
 
 
-# In[14]:
+# In[16]:
 
 
-def clinical_collate_fn(batch):
+from functools import partial
+def clinical_collate_fn(batch: List[Dict], config: 'BaseConfig') -> Dict[str, Any]:
     """
     Custom collate function for clinical data.
     
     Handles the special case of 'target' which is a nested list with variable-length sublists.
-    PyTorch's default_collate cannot handle this, so we keep it as a Python list.
+    PyTorch's default_collate cannot handle this, so keep it as a Python list.
+    v2: Enhanced collate function that pre-computes multi-hot targets as tensors.
     
     Args:
         batch: List of dictionaries from ClinicalDataset.__getitem__
@@ -2836,13 +3153,29 @@ def clinical_collate_fn(batch):
         - dt_cnt: List of integers
         - target: List of nested lists (NOT converted to tensor)
     """
+    batch_size = len(batch)
+    len_dy = config.len_dy
+    target_cd_cnt = config.target_cd_cnt
+    
     # Extract each field
     ages = torch.stack([item['age'] for item in batch])
     genders = torch.stack([item['gender'] for item in batch])
     lobs = torch.stack([item['lob'] for item in batch])
     codes = torch.stack([item['codes'] for item in batch])
-    dt_cnts = [item['dt_cnt'] for item in batch]  # Keep as list
-    targets = [item['target'] for item in batch]  # Keep as list of lists
+    dt_cnts = torch.tensor([item['dt_cnt'] for item in batch], dtype=torch.long)
+    # Pre-compute multi-hot targets: [batch, len_dy, target_cd_cnt]
+    targets_multihot = torch.zeros(batch_size, len_dy, target_cd_cnt, dtype=torch.float16)
+    
+    for i, item in enumerate(batch):
+        target_list = item['target']  # List[List[int]] - len_dy x variable
+        for day_idx, day_codes in enumerate(target_list):
+            if day_idx < len_dy and day_codes:  # Check bounds and non-empty
+                for code_idx in day_codes:
+                    if 0 <= code_idx < target_cd_cnt:
+                        targets_multihot[i, day_idx, code_idx] = 1.0
+    
+    # Keep original targets for metrics computation (backward compat)
+    targets_list = [item['target'] for item in batch]
     
     return {
         'age': ages,
@@ -2850,13 +3183,21 @@ def clinical_collate_fn(batch):
         'lob': lobs,
         'codes': codes,
         'dt_cnt': dt_cnts,
-        'target': targets
+        'target_multihot': targets_multihot,  # [batch, len_dy, target_cd_cnt]
+        'target': targets_list          # List[List[List[int]]] - kept for metrics
     }
+def create_collate_fn(config: 'BaseConfig'):
+    #     Factory to create collate function with config bound.
+
+    #     Usage:
+    #         collate_fn = create_collate_fn(config)
+    #         DataLoader(..., collate_fn=collate_fn)
+    return partial(clinical_collate_fn, config=config)
 
 
 # ##### Test
 
-# In[17]:
+# In[34]:
 
 
 def test_clinical_dataset_with_lob():
@@ -2873,7 +3214,7 @@ def test_clinical_dataset_with_lob():
     print("TEST 17: ClinicalDataset with LOB")
     print("="*80)
     
-    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    config = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
     
     # Create test data WITH LOB column
     print("  Testing with LOB column present...")
@@ -2883,15 +3224,11 @@ def test_clinical_dataset_with_lob():
     if 'lob' not in test_data.columns:
         test_data['lob'] = 'Medicaid'
     
-    # Rename target to target_cd if needed
-    if 'target' in test_data.columns and 'target_cd' not in test_data.columns:
-        test_data = test_data.rename(columns={'target': 'target_cd'})
-    
-    dataset = ClinicalDataset(test_data, cfg)
-    
+    dataset = ClinicalDataset(test_data, config)
+    collate_fn = create_collate_fn(config)
     # Check LOB tensor exists
     assert hasattr(dataset, 'lobs'), "Dataset missing 'lobs' tensor"
-    assert dataset.lobs.shape == (len(test_data), cfg.len_dy), f"LOB shape wrong: {dataset.lobs.shape}"
+    assert dataset.lobs.shape == (len(test_data), config.len_dy), f"LOB shape wrong: {dataset.lobs.shape}"
     print(f"    LOB tensor shape: {dataset.lobs.shape} ✅")
     
     # Check values are in valid range [0, 3]
@@ -2904,21 +3241,35 @@ def test_clinical_dataset_with_lob():
         dataset,
         batch_size=4,
         shuffle=False,
-        collate_fn=clinical_collate_fn
+        collate_fn=collate_fn
     )
     
     batch = next(iter(dataloader))
     assert 'lob' in batch, "Batch missing 'lob' key"
-    assert batch['lob'].shape == (4, cfg.len_dy), f"Batch LOB shape wrong: {batch['lob'].shape}"
+    assert batch['lob'].shape == (4, config.len_dy), f"Batch LOB shape wrong: {batch['lob'].shape}"
     print(f"    Batch LOB shape: {batch['lob'].shape} ✅")
     
     print("\n✅ TEST 17 PASSED: ClinicalDataset handles LOB correctly\n")
 test_clinical_dataset_with_lob()
 
 
+# In[46]:
+
+
+config = BaseConfig(batch_size=4)
+dataset = ClinicalDataset(df_train.head(10), config)
+collate_fn = create_collate_fn(config)
+loader = DataLoader(dataset, batch_size=4, collate_fn=collate_fn)
+
+batch = next(iter(loader))
+print(f"Keys in batch: {batch.keys()}")
+print(f"target_multihot shape: {batch['target_multihot'].shape}")  # Should be [4, 200, 6297]
+print(f"dt_cnt type: {type(batch['dt_cnt'])}")  # Should be torch.Tensor
+
+
 # #### Data preparation
 
-# In[15]:
+# In[17]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -3103,7 +3454,7 @@ def prepare_tensor(
     age_strs = batch['age_in_months'].tolist()
     gender_strs = batch['gender_cd'].tolist()
     cd_strs = batch['cd'].tolist()
-    target_strs = batch['target_cd'].tolist()
+    target_strs = batch['target'].tolist() # In raw feature table, this is target column
     dt_cnt = batch['dt_cnt'].tolist()
     
     # Pre-allocate output tensors
@@ -3195,13 +3546,13 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function
 
-# In[16]:
+# In[18]:
 
 
 def compute_loss(
     output: torch.Tensor,
     y: List[List[List[int]]],
-    dt_cnt: List[int],
+    dt_cnt,
     config: BaseConfig,
     criterion: nn.Module,
     device: torch.device
@@ -3222,14 +3573,14 @@ def compute_loss(
     
     # Flatten targets
     y_flat = [item for sublist in y for item in sublist]
-    
+    dt_cnt_list = dt_cnt.cpu().tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
     # Filter by valid days
     valid_outputs = []
     valid_y = []
     
     for j in range(batch_size):
         
-        valid_days = min(int(dt_cnt[j]), actual_len_dy)
+        valid_days = min(int(dt_cnt_list[j]), actual_len_dy)
         if valid_days <= 0:
             continue
         # For predictions: Slice outputs using the actual_len_dy stride
@@ -3265,7 +3616,7 @@ def compute_loss(
 
 # ##### Test
 
-# In[133]:
+# In[19]:
 
 
 def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, config, device):
@@ -3315,9 +3666,9 @@ def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, con
             # Count predictions
             batch_size = len(dt_cnt)
             actual_len_dy = output.shape[1]
-            num_valid_days = sum(min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size))
+            num_valid_days = sum(min(dt_cnt[j].item(), actual_len_dy) for j in range(batch_size))
             train_predictions_count.append(num_valid_days * config.target_cd_cnt)
-            train_dt_cnts.extend([min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size)])
+            train_dt_cnts.extend([min(dt_cnt[j].item(), actual_len_dy) for j in range(batch_size)])
     
     train_loss_training = np.mean(train_losses_training_mode)
     
@@ -3378,9 +3729,9 @@ def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, con
             # Count predictions
             batch_size = len(dt_cnt)
             actual_len_dy = output.shape[1]
-            num_valid_days = sum(min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size))
+            num_valid_days = sum(min(dt_cnt[j].item(), actual_len_dy) for j in range(batch_size))
             val_predictions_count.append(num_valid_days * config.target_cd_cnt)
-            val_dt_cnts.extend([min(int(dt_cnt[j]), actual_len_dy) for j in range(batch_size)])
+            val_dt_cnts.extend([min(dt_cnt[j].item(), actual_len_dy) for j in range(batch_size)])
     
     train_loss_eval = np.mean(train_losses_eval_mode)
     val_loss_eval = np.mean(val_losses_eval_mode)
@@ -3451,7 +3802,7 @@ def diagnose_loss_discrepancy_v2(train_loader, val_loader, model, criterion, con
     }
 
 
-# In[135]:
+# In[20]:
 
 
 config = BaseConfig()
@@ -3469,7 +3820,7 @@ train_loader = DataLoader(
     batch_size=config.batch_size,
     shuffle=False,  # Don't shuffle for consistent testing
     num_workers=0,  # Set to 0 for debugging
-    collate_fn=clinical_collate_fn
+    collate_fn=create_collate_fn(config)
 )
 
 val_loader = DataLoader(
@@ -3477,7 +3828,7 @@ val_loader = DataLoader(
     batch_size=config.batch_size,
     shuffle=False,
     num_workers=0,
-    collate_fn=clinical_collate_fn
+    collate_fn=create_collate_fn(config)
 )
 
 # Run diagnosis
@@ -3491,7 +3842,7 @@ diagnose_loss_discrepancy_v2(
 )
 
 
-# In[136]:
+# In[ ]:
 
 
 def diagnose_with_trained_checkpoint():
@@ -3526,9 +3877,9 @@ def diagnose_with_trained_checkpoint():
     val_dataset = ClinicalDataset(val_subset, config)
     
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=False, 
-                              collate_fn=clinical_collate_fn, num_workers=0)
+                              collate_fn=create_collate_fn(config), num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False,
-                            collate_fn=clinical_collate_fn, num_workers=0)
+                            collate_fn=create_collate_fn(config), num_workers=0)
     
     criterion = nn.BCEWithLogitsLoss()
     
@@ -3657,7 +4008,7 @@ def diagnose_with_trained_checkpoint():
 results = diagnose_with_trained_checkpoint()
 
 
-# In[74]:
+# In[ ]:
 
 
 def test_conv_lob():
@@ -3733,7 +4084,7 @@ test_conv_lob()
 
 # #### Loss logger
 
-# In[17]:
+# In[19]:
 
 
 class LossTracker:
@@ -3859,7 +4210,7 @@ class LossTracker:
 
 # #### Train and evaluation
 
-# In[18]:
+# In[20]:
 
 
 def _model_has_moe(model):
@@ -3868,6 +4219,7 @@ def _model_has_moe(model):
     if hasattr(actual_model, 'forward'):
         return 'return_moe_losses' in actual_model.forward.__code__.co_varnames
     return False
+
 # Training each epoch
 def train_epoch(
     model: nn.Module,
@@ -3886,7 +4238,9 @@ def train_epoch(
     global_step: int = 0, 
     loss_tracker: Optional[LossTracker] = None,
     is_main: bool = True,
-    use_ddp: bool = False
+    use_ddp: bool = False,
+    accumulation_steps: int = 1,
+    track_gpu_memory: bool = True
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -3900,15 +4254,16 @@ def train_epoch(
     0. Loss (BCE + aux loss if MoE)
     1. Recall@5, 10, 20, 50 - Clinical utility at different cutoffs
     2. Precision@5, 10, 20, 50 - How many predictions are correct
-    3. mAP@20, mAP@50 - Ranking quality
-    4. Brier score - Calibration quality (critical for embeddings)
-    5 MoE health (if applicable)
+    3. Micro-Recall@10, 20 - Per-code coverage rate
+    4. NDCG@20 - Ranking quality with position discounting
+    5. Positive-Only Brier - Calibration on positive labels
+    6. MoE health (if applicable)
     
     # Track the training procedure with global_step: int = 0,
     
     """
     model.train()
-    
+    gpu_tracker = GPUMemoryTracker(enabled=track_gpu_memory and is_main)
     nbatch = len(dataloader)
     total_pred_loss = 0.0
     total_aux_loss = 0.0
@@ -3917,11 +4272,25 @@ def train_epoch(
     
     if loss_tracker is None:
         loss_tracker = LossTracker()    
+        
+    # Track accumulated loss for proper averaging
+    accumulated_loss = 0.0
+    accumulation_counter = 0
+    
     # ============================================================
     # STEP 2: ITERATE OVER BATCHES (UNIFORM LOGIC)
     # ============================================================
     for batch_idx, batch in enumerate(dataloader):
-        
+
+        should_track = (
+            track_gpu_memory and 
+            is_main and 
+            batch_idx in [2, 50, 100]
+        )
+        if should_track:
+            gpu_tracker.reset_peak()
+            print(f"\n🔍 Detailed GPU tracking for batch {batch_idx}")
+            
         # Only main process prints progress
         if is_main and batch_idx % log_interval == 0:
             print(f'  Batch {batch_idx}/{len(dataloader)}')
@@ -3935,15 +4304,20 @@ def train_epoch(
                     mem_alloc = torch.cuda.memory_allocated(gpu_id) / 1024**3
                     mem_reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
                     print(f"   GPU {gpu_id}: {mem_alloc:.2f} GB allocated, {mem_reserved:.2f} GB reserved")        
-        optimizer.zero_grad()
+        
+        if accumulation_counter == 0:
+            optimizer.zero_grad(set_to_none=True) 
         
         # Get batch data
-        age = batch['age'].to(device, non_blocking=True)
-        gender = batch['gender'].to(device, non_blocking=True)
-        lob = batch['lob'].to(device, non_blocking=True)
-        codes = batch['codes'].to(device, non_blocking=True)
+        # Extract tensors, DataParallel will handle device placement during scatter
+        age = batch['age']
+        gender = batch['gender']
+        lob = batch['lob']
+        codes = batch['codes']
         dt_cnt = batch['dt_cnt']
+        targets_mh = batch['target_multihot']  # Pre-computed multi-hot     
         y = batch['target']
+        
         x = torch.cat([
             age.unsqueeze(-1),
             gender.unsqueeze(-1),
@@ -3951,80 +4325,104 @@ def train_epoch(
             codes
         ], dim=-1)
         
+        # Move to cuda and scatter data to different GPUs
+        x = x.cuda(non_blocking=True)
+        dt_cnt = dt_cnt.cuda(non_blocking=True)
+        targets_mh = targets_mh.cuda(non_blocking=True)
+
+        if should_track:
+            gpu_tracker.record("1_after_data_to_gpu")
+        
         # ============================================================
         # STEP 4: FORWARD PASS
         # ============================================================
         total_loss = torch.tensor(0.0, device=device)
+        need_predictions = is_main and (batch_idx % log_interval == 0)
         if use_mixed_precision:
             with torch.cuda.amp.autocast(dtype=torch.float16):
                 # Model forward
-                if _model_has_moe(model):
-                    output, moe_losses = model(x, return_moe_losses=True)
-                else:
-                    output = model(x)
-                    moe_losses = {}
-                    
-                # Compute loss (vectorized!)
-                pred_loss = compute_loss(output, y, dt_cnt, config, criterion, device)
-                
-                # Add auxiliary loss if MoE
-                aux_loss = moe_losses.get('aux_loss', torch.tensor(0.0, device=device))
-                # Reduce aux_loss to scalar for DataParallel compatibility, otherwise this is 4dim tensor
-                if aux_loss.numel() > 1:
-                    aux_loss = aux_loss.mean()  # Average across GPUs
-                if moe_config and moe_config.load_balance_strategy == 'switch':
-                    total_loss = pred_loss + moe_config.aux_loss_weight * aux_loss
-                else:
-                    total_loss = pred_loss
+                result = model(x, dt_cnt, targets_mh, return_predictions=need_predictions)
         else:
             # Standard precision (baseline)
-            if _model_has_moe(model):
-                output, moe_losses = model(x, return_moe_losses=True)
-            else:
-                output = model(x)
-                moe_losses = {}
-                
-            loss_config = type(config)(
-                **{k: getattr(config, k) for k in config.__dataclass_fields__}
-            )
-            loss_config.len_dy = x.shape[1]       
+            result = model(x, dt_cnt, targets_mh, return_predictions=need_predictions)
             
-            pred_loss = compute_loss(output, y, dt_cnt, config, criterion, device)
-            aux_loss = moe_losses.get('aux_loss', torch.tensor(0.0, device=device))
-            if aux_loss.numel() > 1:
-                aux_loss = aux_loss.mean()  # Average across GPUs
+        if should_track:
+            gpu_tracker.record("2_after_forward")            
             
-            if moe_config and moe_config.load_balance_strategy == 'switch':
-                total_loss = pred_loss + moe_config.aux_loss_weight * aux_loss
-            else:
-                total_loss = pred_loss
-        
+        if isinstance(result, tuple):
+            total_loss, extras = result
+            output = extras.get('predictions', None) if need_predictions else None
+            moe_losses = extras.get('moe_losses', {})
+            pred_loss = extras.get('pred_loss', total_loss)
+            aux_loss = extras.get('aux_loss', torch.tensor(0.0))
+        else:
+            total_loss = result
+            pred_loss = total_loss
+            aux_loss = torch.tensor(0.0, device=device)
+            output = None
+            moe_losses = {}
+
+        # Handle DataParallel multi-element tensors
+        if total_loss.numel() > 1:
+            total_loss = total_loss.mean()
+        if pred_loss.numel() > 1:
+            pred_loss = pred_loss.mean()
+        if aux_loss.numel() > 1:
+            aux_loss = aux_loss.mean()
+        # GRADIENT ACCUMULATION: Scale loss by accumulation steps
+        scaled_loss = total_loss / accumulation_steps                
         # ============================================================
         # STEP 5: BACKWARD PASS
         # ============================================================
         if use_mixed_precision:
-            scaler.scale(total_loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(scaled_loss).backward()
         else:
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip)
-            optimizer.step()
+            scaled_loss.backward()
+            
+        if should_track:
+            gpu_tracker.record("3_after_backward")
+
+        # ============================================================
+        # STEP 6: Optimization
+        # ============================================================
+            
+        # Track accumulated loss
+        accumulated_loss += total_loss.detach()
+        accumulation_counter += 1        
         
-        if scheduler is not None:
-            scheduler.step()
+        if accumulation_counter >= accumulation_steps:
+            if use_mixed_precision:
+                # 1. Unscale gradients for clipping
+                scaler.unscale_(optimizer)
+                # 2. Clip gradients
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip)
+                # 3. Optimizer step (skips if gradients are inf/nan)
+                scaler.step(optimizer)
+                # 4. Update scaler for next iteration
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip)
+                optimizer.step()
         
+            if scheduler is not None:
+                scheduler.step()
+            # Reset accumulation
+            accumulated_loss = 0.0
+            accumulation_counter = 0
+            global_step += 1
+            
+        if should_track:
+            gpu_tracker.print_gpu_use_summary()     
         # ============================================================
         # STEP 6: CLEANUP & LOGGING
         # ============================================================
-        # increment global step
-        global_step += 1
-        
+
         # Track losses - handle DataParallel multi-GPU tensors
-        pred_loss_scalar = pred_loss.mean().item() if pred_loss.numel() > 1 else pred_loss.item()
-        aux_loss_scalar = aux_loss.mean().item() if aux_loss.numel() > 1 else aux_loss.item()
+        # extract scalars and detach to prevent graph retention
+        # deactivate the graph
+        with torch.no_grad():
+            pred_loss_scalar = pred_loss.detach().mean().item() if pred_loss.numel() > 1 else pred_loss.detach().item()
+            aux_loss_scalar = aux_loss.detach().mean().item() if aux_loss.numel() > 1 else aux_loss.detach().item()
         
         total_pred_loss += pred_loss_scalar
         total_aux_loss += aux_loss_scalar
@@ -4035,26 +4433,34 @@ def train_epoch(
         # ========================================================================        
         if is_main and batch_idx % log_interval == 0:
             with torch.no_grad():
+                output_detached = output.detach() if output is not None else None
                 # Compute batch metrics (FAST)
                 batch_metrics = compute_batch_metrics_lightweight(
-                    output, y, dt_cnt, config, device
+                    output_detached, y, 
+                    # convert back to list from tensor
+                    dt_cnt.tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt, 
+                    config, device
                 )
+                # Keep only recent metrics (prevent unbounded growth)
                 batch_metrics_buffer.append(batch_metrics)
+                if len(batch_metrics_buffer) > 100:
+                    batch_metrics_buffer = batch_metrics_buffer[-100:]
                 
-                # Log to console - use safe scalar conversion
-                loss_display = pred_loss.mean().item() if pred_loss.numel() > 1 else pred_loss.item()
-                print(f"    Loss: {loss_display:.4f} | "
+                print(f"    Loss: {pred_loss_scalar:.4f} | "
                       f"R@10: {batch_metrics['recall@10']:.3f} | "
                       f"R@20: {batch_metrics['recall@20']:.3f} | "
+                      f"μR@10: {batch_metrics['micro_recall@10']:.3f} | "
                       f"P@10: {batch_metrics['precision@10']:.3f} | "
-                      f"P@20: {batch_metrics['precision@20']:.3f} | "
-                      f"mAP20: {batch_metrics['mAP@20']:.3f} | "
-                      f"mAP50: {batch_metrics['mAP@50']:.3f} | "
-                      f"Brier: {batch_metrics['brier_score']:.4f}")
+                      f"NDCG@20: {batch_metrics['ndcg@20']:.3f} | "
+                      f"PosBrier: {batch_metrics['positive_brier']:.4f}")
                 
                 # MoE metrics if applicable
                 if moe_losses and 'expert_usage' in moe_losses:
-                    moe_batch_metrics = compute_moe_batch_metrics(moe_losses)
+                    moe_losses_detached = {
+                        k: v.detach() if isinstance(v, torch.Tensor) else v 
+                        for k, v in moe_losses.items()
+                    }
+                    moe_batch_metrics = compute_moe_batch_metrics(moe_losses_detached)
                     moe_metrics_buffer.append(moe_batch_metrics)
                     
                     print(f"    MoE: CV={moe_batch_metrics['expert_load_cv']:.3f} | "
@@ -4064,9 +4470,19 @@ def train_epoch(
                     # WARNING if experts collapsing
                     if moe_batch_metrics['num_collapsed_experts'] > 0:
                         print(f" {moe_batch_metrics['num_collapsed_experts']} experts collapsed!")
-        
+                    del moe_losses_detached
+                del output_detached  # Clean up detached copy
+                        
         # Memory cleanup (NO empty_cache in loop!)
-        del x, output, pred_loss, total_loss
+        del x, targets_mh, dt_cnt
+        if 'extras' in dir() and extras is not None:
+            del extras
+        if 'output' in dir() and output is not None:
+            del output
+        if 'moe_losses' in dir() and moe_losses:
+            del moe_losses
+        del pred_loss, aux_loss, total_loss, scaled_loss, result
+        
         if batch_idx % 100 == 0:
             gc.collect()  # Python GC only
             
@@ -4076,7 +4492,23 @@ def train_epoch(
                     allocated = torch.cuda.memory_allocated(gpu_id) / 1024**3
                     peak = torch.cuda.max_memory_allocated(gpu_id) / 1024**3
                     print(f'    GPU {gpu_id}: {allocated:.2f}GB / {peak:.2f}GB peak')
-    
+
+                    
+                    
+    # Handle remaining gradients at end of epoch
+    if accumulation_counter > 0:
+        if use_mixed_precision:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip)
+            optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        global_step += 1
+                    
     # End-of-epoch cleanup
     if device.type == 'cuda':
         torch.cuda.synchronize()
@@ -4137,27 +4569,16 @@ def evaluate(
     model.eval()
     nbatch = len(dataloader)
     batches_to_process = min(nbatch, max_batches) if max_batches else nbatch
-    # # Handle small validation sets
-    # if len(val_data) < config.batch_size:
-    #     # Special case for small validation sets (testing only)
-    #     print(f"    ℹ️ Small val set ({len(val_data)} samples), processing as single batch")
-    #     nbatch = 1
-    #     batches_to_process = [list(range(len(val_data)))]
-    # else:
-    #     # Standard: floor division, drop last
-    #     nbatch = len(val_data) // config.batch_size
-    #     batches_to_process = [
-    #         list(range(i * config.batch_size, (i + 1) * config.batch_size))
-    #         for i in range(nbatch)
-    #     ]
-    
+    is_wrapped = isinstance(model, DataParallelWrapper) or (
+        isinstance(model, nn.DataParallel) and isinstance(model.module, DataParallelWrapper)
+    )
     if batches_to_process == 0:
         # Dataset too small, no evaluation possible
         return {'val_loss': 0.0, 
-                'top_1_acc': 0.0, 
-                'top_5_acc': 0.0, 
-                'top_10_acc': 0.0, 
-                'top_20_acc': 0.0}
+                'recall@1': 0.0, 
+                'recall@5': 0.0, 
+                'recall@10': 0.0, 
+                'recall@20': 0.0}
         
     total_loss = 0.0
     
@@ -4190,19 +4611,42 @@ def evaluate(
             # Forward
             output = None
             loss = 0.0
-            if use_mixed_precision:
-                with torch.cuda.amp.autocast(dtype=torch.float16):
+            
+            if is_wrapped:
+                # NEW PATH: Use wrapper with integrated loss
+                targets_mh = batch['target_multihot'].to(device, non_blocking=True)
+                dt_cnt_tensor = dt_cnt.to(device) if isinstance(dt_cnt, torch.Tensor) else torch.tensor(dt_cnt, device=device)
+                
+                if use_mixed_precision:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
+                else:
+                    result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
+                
+                if isinstance(result, tuple):
+                    loss_val, extras = result
+                    output = extras.get('predictions')
+                else:
+                    loss_val = result
+                    # Need to get predictions separately - this is a problem!
+                    output = None  # Can't get predictions without modifying wrapper
+                
+                loss = loss_val.mean() if loss_val.numel() > 1 else loss_val
+            else:
+                # ORIGINAL PATH: Direct model call
+                if use_mixed_precision:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        if _model_has_moe(model):
+                            output, _ = model(x, return_moe_losses=False)
+                        else:
+                            output = model(x)
+                        loss = compute_loss(output, y, dt_cnt, config, criterion, device)
+                else:
                     if _model_has_moe(model):
                         output, _ = model(x, return_moe_losses=False)
                     else:
                         output = model(x)
                     loss = compute_loss(output, y, dt_cnt, config, criterion, device)
-            else:
-                if _model_has_moe(model):
-                    output, _ = model(x, return_moe_losses=False)
-                else:
-                    output = model(x)
-                loss = compute_loss(output, y, dt_cnt, config, criterion, device)
             
             total_loss += loss.item()
             
@@ -4211,10 +4655,11 @@ def evaluate(
             # Store predictions for metrics
             output_flat = output.reshape(batch_size_actual * actual_len_dy, config.target_cd_cnt)
             y_flat = [item for sublist in y for item in sublist]
+            dt_cnt_values = dt_cnt.cpu().tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
             
             # Filter by valid days
             for j in range(batch_size_actual):
-                valid_days = min(int(dt_cnt[j]), actual_len_dy)
+                valid_days = min(int(dt_cnt_values[j]), actual_len_dy)
                 if valid_days <= 0:
                     continue
                 start_idx = actual_len_dy * j
@@ -4235,15 +4680,15 @@ def evaluate(
         print("No predictions collected - returning zero metrics")
         return {
             'val_loss': val_loss,
-            'top_1_acc': 0.0,
-            'top_5_acc': 0.0,
-            'top_10_acc': 0.0,
-            'top_20_acc': 0.0
+            'recall@1': 0.0,
+            'recall@5': 0.0,
+            'recall@10': 0.0,
+            'recall@20': 0.0
         }
     all_predictions = torch.cat(all_predictions)
     
-    # Top-K accuracy
-    top_k_results = {}
+    # Recall@K (previously named top_K_acc)
+    recall_results = {}
     for k in [1, 5, 10, 20]:
         top_k_preds = torch.topk(all_predictions, k, dim=-1).indices
         correct = 0
@@ -4256,11 +4701,11 @@ def evaluate(
                 if any(code in top_k_preds[i].tolist() for code in target_codes if code != 0):
                     correct += 1
         
-        top_k_results[f'top_{k}_acc'] = correct / total if total > 0 else 0.0
+        recall_results[f'recall@{k}'] = correct / total if total > 0 else 0.0
     
     results = {
         'val_loss': val_loss,
-        **top_k_results
+        **recall_results
     }
     
     return results
@@ -4386,21 +4831,21 @@ def create_bucketing_dataloader(
 
 
 def test_prepare_tensor_and_multihot():
-    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
-    dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
+    config = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
+    dt_cnt, x, y = prepare_tensor(df_train.head(config.batch_size), config, device)
 
-    assert x.shape == (cfg.batch_size, cfg.len_dy, 2 + cfg.len_cd)
-    assert len(y) == cfg.batch_size
+    assert x.shape == (config.batch_size, config.len_dy, 2 + config.len_cd)
+    assert len(y) == config.batch_size
 
     y_flat = [codes for day_list in y for codes in day_list]
     multihot = create_multihot_targets_vectorized(
         y_flat[:10],
         num_samples=10,
-        vocab_size=cfg.target_cd_cnt,
+        vocab_size=config.target_cd_cnt,
         device=device
     )
 
-    assert multihot.shape == (10, cfg.target_cd_cnt)
+    assert multihot.shape == (10, config.target_cd_cnt)
     print("prepare_tensor + multihot ✔️")
 test_prepare_tensor_and_multihot()
 
@@ -4409,15 +4854,15 @@ test_prepare_tensor_and_multihot()
 
 
 def test_compute_loss_smoke():
-    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
-    dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size), cfg, device)
+    config = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
+    dt_cnt, x, y = prepare_tensor(df_train.head(config.batch_size), config, device)
 
-    model = BaselineTransformer(cfg).to(device)
+    model = BaselineTransformer(config).to(device)
     with torch.no_grad():
         logits = model(x.to(device))
 
     crit = nn.BCEWithLogitsLoss()
-    loss = compute_loss(logits, y, dt_cnt, cfg, crit, device)
+    loss = compute_loss(logits, y, dt_cnt, config, crit, device)
 
     assert loss.ndim == 0 and torch.isfinite(loss)
     print("compute_loss ✔️")
@@ -4428,23 +4873,23 @@ test_compute_loss_smoke()
 
 
 def test_train_epoch_smoke():
-    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, learning_rate=1e-3, device=device.type)
-    model = BaselineTransformer(cfg).to(device)
-    opt = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
+    config = BaseConfig(batch_size=4, len_dy=200, len_cd=80, learning_rate=1e-3, device=device.type)
+    model = BaselineTransformer(config).to(device)
+    opt = optim.AdamW(model.parameters(), lr=config.learning_rate)
     sched = optim.lr_scheduler.StepLR(opt, step_size=1, gamma=0.9)
     crit = nn.BCEWithLogitsLoss()
 
-    train_subset = df_train.head(cfg.batch_size * 2)  # Make sure we have at least one full batch
-    train_dataset = ClinicalDataset(train_subset, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, 
-                              collate_fn=clinical_collate_fn, drop_last=True)
+    train_subset = df_train.head(config.batch_size * 2)  # Make sure we have at least one full batch
+    train_dataset = ClinicalDataset(train_subset, config)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, 
+                              collate_fn=create_collate_fn(config), drop_last=True)
     metrics = train_epoch(
         model=model,
         dataloader=train_loader,
         optimizer=opt,
         scheduler=sched,
         criterion=crit,
-        config=cfg,
+        config=config,
         device=device,
         use_mixed_precision=False,
         use_bucketing=False
@@ -4459,38 +4904,38 @@ test_train_epoch_smoke()
 
 
 def test_evaluate_smoke():
-    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
-    model = BaselineTransformer(cfg).to(device)
+    config = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
+    model = BaselineTransformer(config).to(device)
     crit = nn.BCEWithLogitsLoss()
 
     # Prime the model with one forward so embeddings are on-device
     
-    dt_cnt, x, y = prepare_tensor(df_train.head(cfg.batch_size*2), cfg, device)
+    dt_cnt, x, y = prepare_tensor(df_train.head(config.batch_size*2), config, device)
     with torch.no_grad():
         model(x.to(device))
         
     # --- NEW: Create Dataset and DataLoader for the test ---
-    val_subset = df_val.head(cfg.batch_size)
-    val_dataset = ClinicalDataset(val_subset, cfg)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size, collate_fn=clinical_collate_fn)
+    val_subset = df_val.head(config.batch_size)
+    val_dataset = ClinicalDataset(val_subset, config)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, collate_fn=create_collate_fn(config))
 
     val_metrics = evaluate(
         model=model,
         dataloader=val_loader,
         criterion=crit,
-        config=cfg,
+        config=config,
         device=device,
         use_mixed_precision=False
     )
 
-    assert 'val_loss' in val_metrics and 'top_10_acc' in val_metrics
+    assert 'val_loss' in val_metrics and 'recall@10' in val_metrics
     print("evaluate smoke ✔️")
 test_evaluate_smoke()
 
 
 # ### Training save and reload
 
-# In[19]:
+# In[21]:
 
 
 def save_checkpoint(
@@ -4503,7 +4948,7 @@ def save_checkpoint(
     scaler: Optional[GradScaler],
     metrics: Dict,
     is_best: bool = False,
-    keep_last_n: int = 2,  # Only keep last N epoch checkpoints
+    keep_last_n: int = 1,  # Only keep last N epoch checkpoints
     save_optimizer: bool = True  # Option to skip optimizer for final save
 ):
     """
@@ -4521,6 +4966,16 @@ def save_checkpoint(
     
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
+    # Handle DataParallel
+    if isinstance(model, nn.DataParallel):
+        inner_model = model.module
+    else:
+        inner_model = model   
+    # Handle DataParallelWrapper
+    if isinstance(inner_model, DataParallelWrapper):
+        actual_model = inner_model.model
+    else:
+        actual_model = inner_model
     # Build checkpoint dict
     checkpoint = {
         'epoch': epoch,
@@ -4530,7 +4985,8 @@ def save_checkpoint(
         'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
         'scaler_state_dict': scaler.state_dict() if scaler else None,
         'metrics': metrics,
-        'timestamp': time.time()
+        'timestamp': time.time(),
+        'model_type': type(actual_model).__name__ 
     }
     # ============================================================
     # ROLLING CLEANUP: Remove old epoch checkpoints BEFORE saving
@@ -4594,12 +5050,19 @@ def load_checkpoint(
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only = False)
-    
-    # Restore states
+    # ====== UNWRAP MODEL ======
     if isinstance(model, nn.DataParallel):
-        model.module.load_state_dict(checkpoint['model_state_dict'])
+        inner_model = model.module
     else:
-        model.load_state_dict(checkpoint['model_state_dict'])
+        inner_model = model
+    
+    if isinstance(inner_model, DataParallelWrapper):
+        actual_model = inner_model.model
+    else:
+        actual_model = inner_model
+        
+    # Restore states
+    actual_model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
     if scheduler and checkpoint.get('scheduler_state_dict'):
@@ -4934,7 +5397,7 @@ def test_checkpoint_resume_integration():
         # Check metrics structure
         print(f"\n📈 Metrics Structure:")
         for i, epoch_metrics in enumerate(results_resumed['all_epochs']):
-            required_metrics = ['train_loss', 'val_loss', 'top_10_acc', 'global_step']
+            required_metrics = ['train_loss', 'val_loss', 'recall@10', 'global_step']
             missing = [m for m in required_metrics if m not in epoch_metrics]
             if missing:
                 print(f"   ❌ Epoch {i} missing: {missing}")
@@ -5032,7 +5495,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[20]:
+# In[22]:
 
 
 class MetricsLogger:
@@ -5162,7 +5625,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[21]:
+# In[23]:
 
 
 def compute_batch_metrics_lightweight(
@@ -5178,29 +5641,29 @@ def compute_batch_metrics_lightweight(
     These are FAST approximations that complement loss during training.
     Full comprehensive metrics are computed at epoch end via evaluate().
     
-    Why these metrics:
+    Metrics:
     1. Recall@5, 10, 20, 50 - Clinical utility at different cutoffs
     2. Precision@5, 10, 20, 50 - How many predictions are correct
-    3. mAP@20, mAP@50 - Ranking quality
+    3. Micro-Recall@10, 20 - Per-code hit rate (more granular than sample-level)
+    4. NDCG@20 - Ranking quality with position discounting
+    5. Positive-Only Brier - Calibration on positive labels
+    
     
     Returns:
-        Dict with 'recall@5', 'recall@10', 'recall@20', 'recall@50',
-                    'precision@5', 'precision@10', 'precision@20', 'precision@50',
-                    'mAP@20', 'mAP@50',
-                    'brier_score'
+        Dict with recall, precision, micro_recall, ndcg, positive_brier metrics
     """
     with torch.no_grad():
         batch_size = len(dt_cnt)
         actual_len_dy = output.shape[1]
         output_flat = output.reshape(batch_size * actual_len_dy, config.target_cd_cnt)
         y_flat = [item for sublist in y for item in sublist]
-        
+        dt_cnt_list = dt_cnt.tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
         # Filter valid outputs (only actual days, not padding)
         valid_outputs = []
         valid_y = []
         
         for j in range(batch_size):
-            valid_days = min(int(dt_cnt[j]), actual_len_dy)
+            valid_days = min(int(dt_cnt_list[j]), actual_len_dy)
             if valid_days <= 0:
                 continue            
             # For outputs: use actual_len_dy
@@ -5217,8 +5680,8 @@ def compute_batch_metrics_lightweight(
             return {
                 'recall@5': 0.0, 'recall@10': 0.0, 'recall@20': 0.0, 'recall@50': 0.0,
                 'precision@5': 0.0, 'precision@10': 0.0, 'precision@20': 0.0, 'precision@50': 0.0,
-                'mAP@20': 0.0, 'mAP@50': 0.0,
-                'brier_score': 0.0
+                'micro_recall@10': 0.0, 'micro_recall@20': 0.0,
+                'ndcg@20': 0.0, 'positive_brier': 0.0
             }
         
         predictions = torch.cat(valid_outputs)  # [num_valid_samples, vocab_size]
@@ -5262,40 +5725,59 @@ def compute_batch_metrics_lightweight(
             metrics[f'precision@{k}'] = np.mean(precisions) if precisions else 0.0
         
         # ============================================================
-        # 3. mAP @ K (for K=20, 50)
+        # 3. MICRO-RECALL @ K (for K=10, 20) - Lightweight version
         # ============================================================
-        # Mean Average Precision: Average of precision at each relevant item
-        for k in [20, 50]:
-            aps = []
+        for k in [10, 20]:
+            top_k_preds = sorted_indices[:, :k]
+            total_hits = 0
+            total_true = 0
             
             for i, target_codes in enumerate(valid_y):
-                true_codes = set([c for c in target_codes if c != 0])
+                true_codes = set(c for c in target_codes if c != 0)
                 if len(true_codes) > 0:
-                    hits = 0
-                    precisions_at_k = []
-                    for rank, pred_code in enumerate(sorted_indices[i, :k].tolist(), 1):
-                        if pred_code in true_codes:
-                            hits += 1
-                            precisions_at_k.append(hits / rank)
-                    
-                    if precisions_at_k:
-                        aps.append(np.mean(precisions_at_k))
+                    total_true += len(true_codes)
+                    pred_set = set(top_k_preds[i].tolist())
+                    total_hits += len(true_codes & pred_set)
             
-            metrics[f'mAP@{k}'] = np.mean(aps) if aps else 0.0
-        
+            metrics[f'micro_recall@{k}'] = total_hits / total_true if total_true > 0 else 0.0
+
         # ============================================================
-        # 4. BRIER SCORE (calibration quality)
+        # 4. NDCG @ 20 (Lightweight - single K value for speed)
+        # ============================================================
+        k = 20
+        discounts = 1.0 / np.log2(np.arange(2, k + 2))
+        ndcg_scores = []
+        
+        for i, target_codes in enumerate(valid_y):
+            true_codes = set(c for c in target_codes if c != 0)
+            if len(true_codes) == 0:
+                continue
+            
+            top_k_preds = sorted_indices[i, :k].tolist()
+            dcg = sum(discounts[rank] for rank, pred in enumerate(top_k_preds) if pred in true_codes)
+            num_relevant = min(len(true_codes), k)
+            idcg = sum(discounts[:num_relevant])
+            ndcg = dcg / idcg if idcg > 0 else 0.0
+            ndcg_scores.append(ndcg)
+        
+        metrics['ndcg@20'] = np.mean(ndcg_scores) if ndcg_scores else 0.0
+            
+        # ============================================================
+        # 5. POSITIVE-ONLY BRIER SCORE
         # ============================================================
         probs = torch.sigmoid(predictions)
-        targets_binary = torch.zeros_like(predictions)
+        positive_probs = []
         
         for i, target_codes in enumerate(valid_y):
             for code in target_codes:
-                if code > 0 and code < config.target_cd_cnt:
-                    targets_binary[i, code] = 1
+                if 0 < code < config.target_cd_cnt:
+                    positive_probs.append(probs[i, code].item())
         
-        brier = ((probs - targets_binary) ** 2).mean().item()
-        metrics['brier_score'] = brier
+        if len(positive_probs) > 0:
+            positive_probs = np.array(positive_probs)
+            metrics['positive_brier'] = float(np.mean((positive_probs - 1.0) ** 2))
+        else:
+            metrics['positive_brier'] = 0.0
         
         return metrics
 
@@ -5326,6 +5808,8 @@ def compute_embedding_quality_epoch(
         Dict with 'embedding_std_mean', 'nn_target_overlap'
     """
     actual_model = model.module if isinstance(model, nn.DataParallel) else model
+    if isinstance(actual_model, DataParallelWrapper):
+        actual_model = actual_model.model
     actual_model.eval()
     metrics = {}
     
@@ -5333,12 +5817,16 @@ def compute_embedding_quality_epoch(
     sample_size = min(num_samples, len(val_data))
     val_sample = val_data.sample(sample_size, random_state=42)
     val_dataset = ClinicalDataset(val_sample, config)
+
+    # This runs on single GPU (unwrapped model), not DataParallel
+    # so set up maximum 8 batch size 
+    embedding_batch_size = min(8, config.batch_size)
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=config.batch_size, 
+        batch_size=embedding_batch_size, 
         shuffle=False,
-        collate_fn=clinical_collate_fn
-    )    
+        collate_fn=create_collate_fn(config)
+    )        
     all_embeddings = []
     all_targets = []
     with EmbeddingExtractor(actual_model) as extractor:
@@ -5361,18 +5849,25 @@ def compute_embedding_quality_epoch(
                 # ============================================================
                 # FORWARD PASS - hook captures embeddings automatically
                 # ============================================================
-                if use_mixed_precision:
-                    dtype = getattr(config, 'dtype', torch.float16)
-                    with torch.cuda.amp.autocast(dtype=dtype):
+                try:
+                    if use_mixed_precision:
+                        dtype = getattr(config, 'dtype', torch.float16)
+                        with torch.cuda.amp.autocast(dtype=dtype):
+                            if _model_has_moe(actual_model):
+                                _ = actual_model(x, return_moe_losses=False)
+                            else:
+                                _ = actual_model(x)
+                    else:
                         if _model_has_moe(actual_model):
                             _ = actual_model(x, return_moe_losses=False)
                         else:
-                            _ = actual_model(x)  # Works for Baseline AND FlashAttention
-                else:
-                    if _model_has_moe(model):
-                        _ = actual_model(x, return_moe_losses=False)
-                    else:
-                        _ = actual_model(x)
+                            _ = actual_model(x)
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        print(f"⚠️ OOM in embedding extraction at batch {batch_idx}, skipping...")
+                        torch.cuda.empty_cache()
+                        continue
+                    raise
 
                 # Get patient embeddings (last valid day)    
                 patient_embs = extractor.get_patient_embedding(dt_cnt)
@@ -5388,6 +5883,12 @@ def compute_embedding_quality_epoch(
                         for day_codes in patient_targets:
                             all_codes.update([c for c in day_codes if c > 0])
                         all_targets.append(all_codes)
+                del x, age, gender, codes, lob, patient_embs
+                # Periodic cache clear for long loops
+                if batch_idx % 10 == 0:
+                    torch.cuda.empty_cache()
+    # Final cleanup
+    torch.cuda.empty_cache()
     
     if len(all_embeddings) == 0:
         return {'embedding_std_mean': 0.0, 'nn_target_overlap': 0.0}
@@ -5485,7 +5986,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[22]:
+# In[24]:
 
 
 """
@@ -5558,22 +6059,29 @@ def compute_primary_task_metrics(
     for i, target_codes in enumerate(targets):
         true_codes = [c for c in target_codes if c != 0]
         if len(true_codes) > 0:
-            # Find rank of first true code
-            first_true = true_codes[0]
-            rank = (sorted_indices[i] == first_true).nonzero(as_tuple=True)[0]
-            if len(rank) > 0:
-                reciprocal_ranks.append(1.0 / (rank.item() + 1))
+            # Find rank of BEST-RANKED true code (not arbitrary first)
+            best_rank = float('inf')
+            for code in true_codes:
+                rank_tensor = (sorted_indices[i] == code).nonzero(as_tuple=True)[0]
+                if len(rank_tensor) > 0:
+                    rank = rank_tensor.item()
+                    if rank < best_rank:
+                        best_rank = rank
+            
+            if best_rank < float('inf'):
+                reciprocal_ranks.append(1.0 / (best_rank + 1))
     
-    metrics['mrr'] = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0
-    
+    metrics['mrr'] = np.mean(reciprocal_ranks) if reciprocal_ranks else 0.0   
     # F1@K (Harmonic mean of precision and recall)
     for k in [1, 5, 10, 20, 50]:
         if f'recall@{k}' in metrics and f'precision@{k}' in metrics:
             r = metrics[f'recall@{k}']
             p = metrics[f'precision@{k}']
-            metrics[f'f1@{k}'] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
-            
-            
+            metrics[f'f1@{k}'] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0 
+    # Add micro-recall metrics
+    metrics.update(compute_micro_recall_at_k(predictions, targets, [5, 10, 20, 50]))
+    # Add NDCG metrics
+    metrics.update(compute_ndcg_at_k(predictions, targets, [10, 20, 50])) 
     return metrics
 
 """
@@ -5586,7 +6094,8 @@ CRITICAL for understanding training dynamics:
 def compute_loss_metrics(
     predictions: torch.Tensor,
     targets_multihot: torch.Tensor,  # [num_samples, vocab_size]
-    criterion: nn.Module
+    criterion: nn.Module,
+    targets_list: Optional[List[List[int]]] = None
 ) -> Dict[str, float]:
     """
     Loss and calibration metrics.
@@ -5596,16 +6105,16 @@ def compute_loss_metrics(
            - Primary optimization objective
            - Report both total and per-sample average
         
-        2. Calibration Error (ECE):
-           - How well do predicted probabilities match actual frequencies?
-           - Important for healthcare (confidence matters!)
+        2. Positive-Only Brier Score:
+           - Calibration on positive labels only
+           - Not dominated by true negatives
         
         3. Per-Class Loss Variance:
            - Detect if model ignores certain code categories
            - Important for rare disease detection
     """
     metrics = {}
-    
+    vocab_size = predictions.shape[1]
     # 1. BCE Loss (total and per-sample)
     with torch.no_grad():
         total_loss = criterion(predictions, targets_multihot)
@@ -5618,46 +6127,222 @@ def compute_loss_metrics(
         metrics['bce_loss_mean'] = per_sample_loss.mean().item()
         metrics['bce_loss_std'] = per_sample_loss.std().item()
     
-    # 2. Expected Calibration Error (ECE)
-    # Bin predicted probabilities and check if they match empirical frequencies
-    probs = torch.sigmoid(predictions)
-    
-    num_bins = 10
-    bin_boundaries = torch.linspace(0, 1, num_bins + 1)
-    ece = 0.0
-    
-    for i in range(num_bins):
-        bin_lower = bin_boundaries[i]
-        bin_upper = bin_boundaries[i + 1]
-        
-        # Find predictions in this bin
-        in_bin = (probs > bin_lower) & (probs <= bin_upper)
-        
-        if in_bin.any():
-            # Average predicted probability in bin
-            avg_pred = probs[in_bin].mean().item()
-            # Actual fraction of positives in bin
-            avg_true = targets_multihot[in_bin].mean().item()
-            # Weight by bin size
-            bin_weight = in_bin.sum().item() / in_bin.numel()
-            # ECE contribution
-            ece += bin_weight * abs(avg_pred - avg_true)
-    
-    metrics['ece'] = ece
-    
-    # 3. Brier Score (alternative calibration metric)
-    brier = ((probs - targets_multihot) ** 2).mean().item()
-    metrics['brier_score'] = brier
+    # 2. Positive-Only Brier Score
+    if targets_list is not None:
+        metrics.update(compute_positive_brier_score(predictions, targets_list, vocab_size))
+    else:
+        # Fallback: compute from multihot
+        probs = torch.sigmoid(predictions)
+        positive_mask = targets_multihot > 0.5
+        if positive_mask.any():
+            positive_probs = probs[positive_mask]
+            metrics['positive_brier'] = ((positive_probs - 1.0) ** 2).mean().item()
+        else:
+            metrics['positive_brier'] = 0.0
     
     return metrics
 
-"""
-Stratified Performance (Rare Code Analysis)
-CRITICAL for clinical AI publication:
-- Medical codes have extreme long-tail distribution
-- Rare codes (sepsis, MI, rare diseases) are most important
-- Must show model doesn't just predict common codes
-"""
+
+def compute_micro_recall_at_k(
+    predictions: torch.Tensor,  # [num_samples, vocab_size]
+    targets: List[List[int]],   # Multi-label targets
+    k_values: List[int] = [5, 10, 20, 50]
+) -> Dict[str, float]:
+    """
+    Micro-averaged Recall@K: Total hits / Total true labels across all samples.
+    
+    Unlike sample-level Recall@K (binary hit/miss per sample), this measures
+    what fraction of ALL true codes across the dataset are captured in top-K.
+    
+    Returns:
+        Dict with 'micro_recall@5', 'micro_recall@10', etc.
+    """
+    metrics = {}
+    sorted_indices = torch.argsort(predictions, dim=-1, descending=True)
+    
+    for k in k_values:
+        top_k_preds = sorted_indices[:, :k]
+        total_hits = 0
+        total_true = 0
+        
+        for i, target_codes in enumerate(targets):
+            true_codes = set(c for c in target_codes if c != 0)
+            if len(true_codes) > 0:
+                total_true += len(true_codes)
+                pred_set = set(top_k_preds[i].tolist())
+                total_hits += len(true_codes & pred_set)
+        
+        metrics[f'micro_recall@{k}'] = total_hits / total_true if total_true > 0 else 0.0
+    
+    return metrics
+
+
+def compute_ndcg_at_k(
+    predictions: torch.Tensor,  # [num_samples, vocab_size]
+    targets: List[List[int]],   # Multi-label targets
+    k_values: List[int] = [10, 20, 50]
+) -> Dict[str, float]:
+    """
+    Normalized Discounted Cumulative Gain @ K.
+    
+    NDCG accounts for:
+    1. Position-based discounting (earlier = better)
+    2. Relevance scores (binary in our case)
+    3. Normalized by ideal ranking
+    
+    Returns:
+        Dict with 'ndcg@10', 'ndcg@20', 'ndcg@50'
+    """
+    metrics = {}
+    sorted_indices = torch.argsort(predictions, dim=-1, descending=True)
+    
+    # Precompute discount factors: 1/log2(rank+2) for ranks 0,1,2,...
+    max_k = max(k_values)
+    discounts = 1.0 / np.log2(np.arange(2, max_k + 2))  # [1/log2(2), 1/log2(3), ...]
+    
+    for k in k_values:
+        ndcg_scores = []
+        
+        for i, target_codes in enumerate(targets):
+            true_codes = set(c for c in target_codes if c != 0)
+            if len(true_codes) == 0:
+                continue
+            
+            # DCG: sum of discounted gains for hits in top-k
+            top_k_preds = sorted_indices[i, :k].tolist()
+            dcg = sum(
+                discounts[rank] 
+                for rank, pred in enumerate(top_k_preds) 
+                if pred in true_codes
+            )
+            
+            # Ideal DCG: if we had placed all true codes at top
+            num_relevant = min(len(true_codes), k)
+            idcg = sum(discounts[:num_relevant])
+            
+            ndcg = dcg / idcg if idcg > 0 else 0.0
+            ndcg_scores.append(ndcg)
+        
+        metrics[f'ndcg@{k}'] = np.mean(ndcg_scores) if ndcg_scores else 0.0
+    
+    return metrics
+
+
+def compute_positive_brier_score(
+    predictions: torch.Tensor,   # [num_samples, vocab_size] logits
+    targets: List[List[int]],    # Multi-label targets
+    vocab_size: int
+) -> Dict[str, float]:
+    """
+    Brier score computed ONLY on positive labels.
+    
+    Standard Brier is dominated by true negatives (~99.7% of entries).
+    This variant measures calibration specifically for positive predictions.
+    
+    Returns:
+        Dict with 'positive_brier' (lower is better, 0 = perfect)
+    """
+    probs = torch.sigmoid(predictions)
+    
+    # Collect all predicted probabilities for positive labels
+    positive_probs = []
+    
+    for i, target_codes in enumerate(targets):
+        for code in target_codes:
+            if 0 < code < vocab_size:
+                positive_probs.append(probs[i, code].item())
+    
+    if len(positive_probs) == 0:
+        return {'positive_brier': 0.0}
+    
+    # For positive labels, target = 1, so Brier = (prob - 1)^2
+    positive_probs = np.array(positive_probs)
+    positive_brier = np.mean((positive_probs - 1.0) ** 2)
+    
+    return {'positive_brier': positive_brier}
+
+
+def compute_auroc_auprc(
+    predictions: torch.Tensor,   # [num_samples, vocab_size] logits
+    targets: List[List[int]],    # Multi-label targets
+    vocab_size: int,
+    num_codes_to_sample: int = 500  # Sample codes for efficiency
+) -> Dict[str, float]:
+    """
+    Macro-averaged AUROC and AUPRC across codes.
+    
+    Due to computational cost, we sample a subset of codes:
+    - All codes that appear in targets (ensures coverage)
+    - Random sample of additional codes
+    
+    Returns:
+        Dict with 'macro_auroc', 'macro_auprc', 'num_codes_evaluated'
+    """
+    from sklearn.metrics import roc_auc_score, average_precision_score
+    
+    probs = torch.sigmoid(predictions).cpu().numpy()
+    num_samples = len(predictions)
+    
+    # Build binary target matrix for sampled codes
+    # First, find all codes that appear in targets
+    target_codes_set = set()
+    for target_list in targets:
+        for code in target_list:
+            if 0 < code < vocab_size:
+                target_codes_set.add(code)
+    
+    # If too few positive codes, return 0
+    if len(target_codes_set) < 10:
+        return {'macro_auroc': 0.0, 'macro_auprc': 0.0, 'num_codes_evaluated': 0}
+    
+    # Sample additional codes for negative class representation
+    all_codes = list(target_codes_set)
+    if len(all_codes) < num_codes_to_sample:
+        # Add some random codes not in targets
+        remaining = list(set(range(1, vocab_size)) - target_codes_set)
+        additional = np.random.choice(
+            remaining, 
+            min(num_codes_to_sample - len(all_codes), len(remaining)),
+            replace=False
+        ).tolist()
+        all_codes.extend(additional)
+    
+    # Build target matrix for selected codes
+    code_to_idx = {code: idx for idx, code in enumerate(all_codes)}
+    y_true = np.zeros((num_samples, len(all_codes)), dtype=np.float32)
+    
+    for i, target_list in enumerate(targets):
+        for code in target_list:
+            if code in code_to_idx:
+                y_true[i, code_to_idx[code]] = 1.0
+    
+    # Get predictions for selected codes
+    y_pred = probs[:, all_codes]
+    
+    # Compute per-code metrics (skip codes with no positives or all positives)
+    aurocs = []
+    auprcs = []
+    
+    for j in range(len(all_codes)):
+        col_true = y_true[:, j]
+        col_pred = y_pred[:, j]
+        
+        # Skip if no variance in labels
+        if col_true.sum() == 0 or col_true.sum() == len(col_true):
+            continue
+        
+        try:
+            aurocs.append(roc_auc_score(col_true, col_pred))
+            auprcs.append(average_precision_score(col_true, col_pred))
+        except ValueError:
+            continue
+    
+    return {
+        'macro_auroc': np.mean(aurocs) if aurocs else 0.0,
+        'macro_auprc': np.mean(auprcs) if auprcs else 0.0,
+        'num_codes_evaluated': len(aurocs)
+    }
+
 
 def compute_stratified_metrics(
     predictions: torch.Tensor,
@@ -5666,8 +6351,12 @@ def compute_stratified_metrics(
     vocab_size: int
 ) -> Dict[str, float]:
     """
-    Stratified performance by code frequency.
-    
+    Stratified performance by code frequency(Rare Code Analysis)
+    CRITICAL for clinical AI publication:
+    - Medical codes have extreme long-tail distribution
+    - Rare codes (sepsis, MI, rare diseases) are most important
+    - Must show model doesn't just predict common codes
+
     Returns:
         1. Rare Code Performance:
            - Top-10 accuracy for codes in bottom 20% frequency
@@ -5739,13 +6428,6 @@ def compute_stratified_metrics(
     
     return metrics
 
-"""
-CRITICAL for comparing architectures:
-- Absolute time (wall-clock)
-- Normalized throughput (tokens/sec, samples/sec)
-- Time breakdown (data loading vs compute)
-"""
-
 def compute_training_time_metrics(
     total_train_time: float,  # Seconds
     num_epochs: int,
@@ -5758,7 +6440,10 @@ def compute_training_time_metrics(
 ) -> Dict[str, float]:
     """
     Training time and throughput metrics.
-    
+    CRITICAL for comparing architectures:
+    - Absolute time (wall-clock)
+    - Normalized throughput (tokens/sec, samples/sec)
+    - Time breakdown (data loading vs compute)    
     Returns:
         1. Wall-Clock Time:
            - Total training time
@@ -5833,7 +6518,7 @@ def compute_convergence_metrics(
     
     # Extract validation losses and top-10 accuracy
     val_losses = [epoch['val_loss'] for epoch in epoch_metrics]
-    top10_accs = [epoch.get('top_10_acc', 0.0) for epoch in epoch_metrics]
+    recall_at_10 = [epoch.get('recall@10', epoch.get('final_val_recall@10', 0.0)) for epoch in epoch_metrics]
     
     # 1. Convergence speed
     final_loss = val_losses[-1]
@@ -6275,7 +6960,7 @@ def compute_ablation_metrics(
     
     # Baseline reference
     baseline = all_experiment_results.get('exp1_dense_baseline', {})
-    baseline_acc = baseline.get('final_top_10_acc', 0)
+    baseline_acc = baseline.get('final_val_recall@10', 0)
     baseline_time = baseline.get('training_time_sec', 1)
     
     # ============================================================
@@ -6284,7 +6969,7 @@ def compute_ablation_metrics(
     flash_dense = all_experiment_results.get('exp2_dense_flash', {})
     if flash_dense:
         # Accuracy impact
-        flash_acc_gain = flash_dense['final_top_10_acc'] - baseline_acc
+        flash_acc_gain = flash_dense['final_val_recall@10'] - baseline_acc
         metrics['flash_attn_acc_gain'] = flash_acc_gain
         metrics['flash_attn_acc_gain_percent'] = (flash_acc_gain / baseline_acc) * 100 if baseline_acc > 0 else 0
         
@@ -6298,7 +6983,7 @@ def compute_ablation_metrics(
     flash_learned = all_experiment_results.get('exp2b_flash_learned_pool', {})
     if flash_dense and flash_learned:
         # Accuracy impact
-        pool_acc_gain = flash_learned['final_top_10_acc'] - flash_dense['final_top_10_acc']
+        pool_acc_gain = flash_learned['final_val_recall@10'] - flash_dense['final_val_recall@10']
         metrics['learned_pool_acc_gain'] = pool_acc_gain
         
         # Speed impact
@@ -6311,7 +6996,7 @@ def compute_ablation_metrics(
     moe_standard = all_experiment_results.get('exp3_standard_moe', {})
     if flash_dense and moe_standard:
         # Accuracy impact
-        moe_acc_gain = moe_standard['final_top_10_acc'] - flash_dense['final_top_10_acc']
+        moe_acc_gain = moe_standard['final_val_recall@10'] - flash_dense['final_val_recall@10']
         metrics['moe_acc_gain'] = moe_acc_gain
         
         # Efficiency: accuracy gain per parameter increase
@@ -6342,7 +7027,7 @@ def compute_ablation_metrics(
             continue
         
         # Accuracy improvement per dollar
-        acc_gain = results['final_top_10_acc'] - baseline_acc
+        acc_gain = results['final_val_recall@10'] - baseline_acc
         cost = results.get('cost_usd', 0)
         
         if cost > 0:
@@ -6380,7 +7065,9 @@ def comprehensive_evaluation(
     
     model.eval()
 
-    
+    is_wrapped = isinstance(model, DataParallelWrapper) or (
+        isinstance(model, nn.DataParallel) and isinstance(model.module, DataParallelWrapper)
+    )
     all_predictions = []
     all_targets = []
     all_targets_multihot = []
@@ -6413,17 +7100,33 @@ def comprehensive_evaluation(
             ], dim=-1)
             
             # Forward
-            if use_mixed_precision:
-                with torch.cuda.amp.autocast(dtype=torch.float16):
+            if is_wrapped:
+                targets_mh = batch['target_multihot'].to(device)
+                dt_cnt_tensor = dt_cnt.to(device) if isinstance(dt_cnt, torch.Tensor) else torch.tensor(dt_cnt, device=device)
+                
+                if use_mixed_precision:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
+                else:
+                    result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
+                
+                if isinstance(result, tuple):
+                    _, extras = result
+                    output = extras.get('predictions')
+                else:
+                    output = None
+            else:
+                if use_mixed_precision:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        if _model_has_moe(model):
+                            output, _ = model(x, return_moe_losses=False)
+                        else:
+                            output = model(x)
+                else:
                     if _model_has_moe(model):
                         output, _ = model(x, return_moe_losses=False)
                     else:
                         output = model(x)
-            else:
-                if _model_has_moe(model):
-                    output, _ = model(x, return_moe_losses=False)
-                else:
-                    output = model(x)
             
             # Get actual batch size from output
             batch_size_actual = output.shape[0]
@@ -6435,7 +7138,7 @@ def comprehensive_evaluation(
             
             # Filter valid days
             for j in range(batch_size_actual):
-                valid_days = min(int(dt_cnt[j]), actual_len_dy)
+                valid_days = min(dt_cnt[j].item(), actual_len_dy)
                 if valid_days <= 0:
                     continue
                 output_start = actual_len_dy * j
@@ -6470,7 +7173,8 @@ def comprehensive_evaluation(
     evaluation['performance'] = {
         **compute_primary_task_metrics(all_predictions, all_targets, config.target_cd_cnt),
         **compute_loss_metrics(all_predictions, all_targets_multihot, criterion),
-        **compute_stratified_metrics(all_predictions, all_targets, code_frequencies, config.target_cd_cnt)
+        **compute_stratified_metrics(all_predictions, all_targets, code_frequencies, config.target_cd_cnt),
+        **compute_auroc_auprc(all_predictions, all_targets, config.target_cd_cnt)
     }
     
     # 2. EFFICIENCY METRICS
@@ -6527,6 +7231,185 @@ def comprehensive_evaluation(
     return evaluation
 
 
+# #### Streaming Metrics for evaluation
+
+# In[25]:
+
+
+class StreamingMetrics:
+    """
+    Memory-efficient streaming metrics aggregator for evaluation
+    Computes metrics incrementally without storing all predictions.
+    implemented in round 5 experimentation due to memory constraints
+    
+    Usage:
+        metrics = StreamingMetrics()
+        for batch in dataloader:
+            metrics.update(predictions, targets, loss)
+        results = metrics.compute()
+    """
+    
+    def __init__(self, k_values_topk=(1, 5, 10, 20), k_values_recall=(5, 10, 20, 50)):
+        self.k_values_topk = k_values_topk
+        self.k_values_recall = k_values_recall
+        self.reset()
+    
+    def reset(self):
+        """Reset all accumulators."""
+        # Loss
+        self.total_loss = 0.0
+        self.num_batches = 0
+        
+        # Top-K accuracy (any true code in top-K)
+        self.topk_correct = {k: 0 for k in self.k_values_topk}
+        self.topk_total = {k: 0 for k in self.k_values_topk}
+        
+        # Recall@K (same logic, different K values)
+        self.recall_correct = {k: 0 for k in self.k_values_recall}
+        self.recall_total = {k: 0 for k in self.k_values_recall}
+        
+        # Precision@K (sum of per-sample precisions)
+        self.precision_sum = {k: 0.0 for k in self.k_values_recall}
+        self.precision_count = {k: 0 for k in self.k_values_recall}
+        
+        # mAP@K
+        self.map_sum = {20: 0.0, 50: 0.0}
+        self.map_count = {20: 0, 50: 0}
+        
+        # Brier score
+        self.brier_sum = 0.0
+        self.brier_count = 0
+    
+    def update_loss(self, loss: float):
+        """Update loss accumulator."""
+        self.total_loss += loss
+        self.num_batches += 1
+    
+    def update_batch(
+        self, 
+        sorted_indices: torch.Tensor,  # [num_samples, vocab_size] sorted by score
+        targets: List[List[int]],       # List of target code lists
+        probs: Optional[torch.Tensor] = None,  # [num_samples, vocab_size] for Brier
+        vocab_size: int = 6297
+    ):
+        """
+        Update all metrics with a batch of predictions.
+        
+        Args:
+            sorted_indices: Prediction indices sorted by descending score (on CPU)
+            targets: List of target code lists (one per sample)
+            probs: Sigmoid probabilities for Brier score (optional, on CPU)
+            vocab_size: Vocabulary size for Brier score calculation
+        """
+        for i, target_codes in enumerate(targets):
+            true_codes = set(c for c in target_codes if c != 0)
+            if not true_codes:
+                continue
+            
+            preds = sorted_indices[i]
+            
+            # Top-K accuracy
+            for k in self.k_values_topk:
+                pred_set = set(preds[:k].tolist())
+                if true_codes & pred_set:
+                    self.topk_correct[k] += 1
+                self.topk_total[k] += 1
+            
+            # Recall@K
+            for k in self.k_values_recall:
+                pred_set = set(preds[:k].tolist())
+                if true_codes & pred_set:
+                    self.recall_correct[k] += 1
+                self.recall_total[k] += 1
+            
+            # Precision@K
+            for k in self.k_values_recall:
+                pred_list = preds[:k].tolist()
+                hits = sum(1 for c in pred_list if c in true_codes)
+                self.precision_sum[k] += hits / k
+                self.precision_count[k] += 1
+            
+            # mAP@K
+            for k in [20, 50]:
+                ap = self._compute_ap(preds[:k].tolist(), true_codes)
+                if ap is not None:
+                    self.map_sum[k] += ap
+                    self.map_count[k] += 1
+            
+            # Brier score
+            if probs is not None:
+                self._update_brier(probs[i], true_codes, vocab_size)
+    
+    def _compute_ap(self, pred_list: List[int], true_codes: set) -> Optional[float]:
+        """Compute Average Precision for a single sample."""
+        hits = 0
+        precisions = []
+        for rank, pred_code in enumerate(pred_list, 1):
+            if pred_code in true_codes:
+                hits += 1
+                precisions.append(hits / rank)
+        return np.mean(precisions) if precisions else None
+    
+    def _update_brier(self, probs: torch.Tensor, true_codes: set, vocab_size: int):
+        """Update Brier score accumulator."""
+        probs_np = probs.numpy() if isinstance(probs, torch.Tensor) else probs
+        targets = np.zeros(vocab_size)
+        for c in true_codes:
+            if c < vocab_size:
+                targets[c] = 1.0
+        self.brier_sum += np.mean((probs_np - targets) ** 2)
+        self.brier_count += 1
+    
+    def compute(self) -> Dict[str, float]:
+        """Compute final metrics from accumulators."""
+        metrics = {}
+        
+        # Loss
+        metrics['val_loss'] = self.total_loss / max(self.num_batches, 1)
+        
+        # Top-K accuracy
+        for k in self.k_values_topk:
+            metrics[f'top_{k}_acc'] = (
+                self.topk_correct[k] / self.topk_total[k] 
+                if self.topk_total[k] > 0 else 0.0
+            )
+        
+        # Recall@K
+        for k in self.k_values_recall:
+            metrics[f'recall@{k}'] = (
+                self.recall_correct[k] / self.recall_total[k] 
+                if self.recall_total[k] > 0 else 0.0
+            )
+        
+        # Precision@K
+        for k in self.k_values_recall:
+            metrics[f'precision@{k}'] = (
+                self.precision_sum[k] / self.precision_count[k] 
+                if self.precision_count[k] > 0 else 0.0
+            )
+        
+        # mAP@K
+        for k in [20, 50]:
+            metrics[f'mAP@{k}'] = (
+                self.map_sum[k] / self.map_count[k] 
+                if self.map_count[k] > 0 else 0.0
+            )
+        
+        # Brier score
+        metrics['brier_score'] = (
+            self.brier_sum / self.brier_count 
+            if self.brier_count > 0 else 0.0
+        )
+        
+        return metrics
+
+
+# In[ ]:
+
+
+
+
+
 # #### Test
 
 # In[33]:
@@ -6554,30 +7437,30 @@ test_metric_utilities()
 
 
 def test_comprehensive_evaluation_dense():
-    cfg = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
-    model = BaselineTransformer(cfg).to(device)
+    config = BaseConfig(batch_size=4, len_dy=200, len_cd=80, device=device.type)
+    model = BaselineTransformer(config).to(device)
     criterion = nn.BCEWithLogitsLoss()
 
-    train_subset = df_train.head(cfg.batch_size*2)
-    val_subset = df_val.head(cfg.batch_size)
-    epoch_history = [{'val_loss': 1.0, 'top_10_acc': 0.1}]
-    code_freq = np.ones(cfg.target_cd_cnt, dtype=np.int32)
+    train_subset = df_train.head(config.batch_size*2)
+    val_subset = df_val.head(config.batch_size)
+    epoch_history = [{'val_loss': 1.0, 'recall@10': 0.1}]
+    code_freq = np.ones(config.target_cd_cnt, dtype=np.int32)
 
     # Create DataLoader for validation
-    val_dataset = ClinicalDataset(val_subset, cfg)
+    val_dataset = ClinicalDataset(val_subset, config)
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=cfg.batch_size,
-        collate_fn=clinical_collate_fn
+        batch_size=config.batch_size,
+        collate_fn=create_collate_fn(config)
     )
 
     previous = globals().get('config')
-    globals()['config'] = cfg  # required by compute_training_time_metrics
+    globals()['config'] = config  # required by compute_training_time_metrics
 
     evaluation = comprehensive_evaluation(
         model=model,
         val_dataloader=val_loader,  # ← Pass DataLoader instead of DataFrame
-        config=cfg,
+        config=config,
         device=device,
         training_time_sec=1.0,
         epoch_history=epoch_history,
@@ -6599,7 +7482,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Extract embedding for each member
 
-# In[23]:
+# In[27]:
 
 
 # ============================================================================
@@ -6630,7 +7513,10 @@ class EmbeddingExtractor:
     
     def __init__(self, model: nn.Module):
         self.wrapped_model = model
-        self.model = model.module if isinstance(model, nn.DataParallel) else model
+        inner = model.module if isinstance(model, nn.DataParallel) else model
+        if isinstance(inner, DataParallelWrapper):
+            inner = inner.model
+        self.model = inner
         self.embeddings = None
         self._hook_handle = None
         
@@ -6702,7 +7588,8 @@ class EmbeddingExtractor:
             embeddings: [batch, embedding_size]
         """
         embeddings = self.get_embeddings()  # [batch, len_dy, embedding_size]
-        
+        if isinstance(dt_cnt, torch.Tensor):
+            dt_cnt = dt_cnt.tolist()        
         patient_embeddings = []
         for i, valid_days in enumerate(dt_cnt):
             if valid_days > 0:
@@ -6742,7 +7629,7 @@ def test_embedding_extractor():
     cleanup_gpu_memory()
     
     # Test configuration
-    cfg = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
+    config = BaseConfig(len_dy=50, len_cd=20, batch_size=4)
     
     # Create properly structured dummy input
     batch_size = 4
@@ -6762,7 +7649,7 @@ def test_embedding_extractor():
     # Test BaselineTransformer (no mixed precision needed)
     # ============================================================
     print("Testing BaselineTransformer...")
-    model = BaselineTransformer(cfg).to(device)
+    model = BaselineTransformer(config).to(device)
     model.eval()
     
     with EmbeddingExtractor(model) as extractor:
@@ -6771,11 +7658,11 @@ def test_embedding_extractor():
         
         all_emb = extractor.get_embeddings()
         print(f"  All embeddings shape: {all_emb.shape}")
-        assert all_emb.shape == (batch_size, len_dy, cfg.embedding_size)
+        assert all_emb.shape == (batch_size, len_dy, config.embedding_size)
         
         patient_emb = extractor.get_patient_embedding(dt_cnt)
         print(f"  Patient embeddings shape: {patient_emb.shape}")
-        assert patient_emb.shape == (batch_size, cfg.embedding_size)
+        assert patient_emb.shape == (batch_size, config.embedding_size)
     
     print("✔️ BaselineTransformer embedding extraction works\n")
     del model
@@ -6785,8 +7672,8 @@ def test_embedding_extractor():
     # Test FlashAttentionTransformer (needs autocast for FP16)
     # ============================================================
     print("Testing FlashAttentionTransformer...")
-    flash_cfg = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
-    model = FlashAttentionTransformer(flash_cfg).to(device)
+    flash_config = FlashAttentionConfig(len_dy=50, len_cd=20, batch_size=4)
+    model = FlashAttentionTransformer(flash_config).to(device)
     model.eval()
     
     with EmbeddingExtractor(model) as extractor:
@@ -6797,11 +7684,11 @@ def test_embedding_extractor():
         
         all_emb = extractor.get_embeddings()
         print(f"  All embeddings shape: {all_emb.shape}")
-        assert all_emb.shape == (batch_size, len_dy, flash_cfg.embedding_size)
+        assert all_emb.shape == (batch_size, len_dy, flash_config.embedding_size)
         
         patient_emb = extractor.get_patient_embedding(dt_cnt)
         print(f"  Patient embeddings shape: {patient_emb.shape}")
-        assert patient_emb.shape == (batch_size, flash_cfg.embedding_size)
+        assert patient_emb.shape == (batch_size, flash_config.embedding_size)
     
     print("✔️ FlashAttentionTransformer embedding extraction works\n")
     del model
@@ -6811,8 +7698,8 @@ def test_embedding_extractor():
     # Test FlashMoETransformer (needs autocast for FP16)
     # ============================================================
     print("Testing FlashMoETransformer...")
-    moe_cfg = MoEConfig(d_model=256, d_ff=512)
-    model = FlashMoETransformer(flash_cfg, moe_cfg).to(device)
+    moe_config = MoEConfig(d_model=256, d_ff=512)
+    model = FlashMoETransformer(flash_config, moe_config).to(device)
     model.eval()
     
     with EmbeddingExtractor(model) as extractor:
@@ -6823,11 +7710,11 @@ def test_embedding_extractor():
         
         all_emb = extractor.get_embeddings()
         print(f"  All embeddings shape: {all_emb.shape}")
-        assert all_emb.shape == (batch_size, len_dy, flash_cfg.embedding_size)
+        assert all_emb.shape == (batch_size, len_dy, flash_config.embedding_size)
         
         patient_emb = extractor.get_patient_embedding(dt_cnt)
         print(f"  Patient embeddings shape: {patient_emb.shape}")
-        assert patient_emb.shape == (batch_size, flash_cfg.embedding_size)
+        assert patient_emb.shape == (batch_size, flash_config.embedding_size)
     
     print("✔️ FlashMoETransformer embedding extraction works\n")
     print("=" * 50)
@@ -6839,7 +7726,7 @@ test_embedding_extractor()
 
 # ### Downstream Evaluation
 
-# In[24]:
+# In[25]:
 
 
 import xgboost as xgb
@@ -6848,7 +7735,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from dataclasses import dataclass, field
 
 
-# In[25]:
+# In[26]:
 
 
 # ============================================================================
@@ -6910,7 +7797,11 @@ class DownstreamEvaluator:
         use_mixed_precision: bool = False
     ):
         # Enable multi-GPU wrapper
-        self.model = model.module if isinstance(model, nn.DataParallel) else model
+        inner_model = model.module if isinstance(model, nn.DataParallel) else model
+        # Unwrap DataParallelWrapper
+        if isinstance(inner_model, DataParallelWrapper):
+            inner_model = inner_model.model
+        self.model = inner_model
         self.model_config = model_config
         self.device = device
         self.use_mixed_precision = use_mixed_precision
@@ -6935,13 +7826,15 @@ class DownstreamEvaluator:
             individual_ids: List of individual_id strings
             index_dts: List of index_dt strings
         """
+
+        
         # Create dataset and dataloader
         dataset = ClinicalDataset(data, self.model_config)
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=clinical_collate_fn,
+            collate_fn=create_collate_fn(self.model_config),
             num_workers=0
         )
         
@@ -6959,7 +7852,7 @@ class DownstreamEvaluator:
                     gender = batch['gender'].to(self.device)
                     lob = batch['lob'].to(self.device)
                     codes = batch['codes'].to(self.device)
-                    dt_cnt = batch['dt_cnt']
+                    dt_cnt = batch['dt_cnt'] # This is a tensor
                     
                     x = torch.cat([
                         age.unsqueeze(-1),
@@ -6982,7 +7875,8 @@ class DownstreamEvaluator:
                             _ = self.model(x)
                     
                     # Get patient-level embeddings (last valid day)
-                    patient_embs = extractor.get_patient_embedding(dt_cnt)
+                    dt_cnt_list = dt_cnt.tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
+                    patient_embs = extractor.get_patient_embedding(dt_cnt_list)
                     all_embeddings.append(patient_embs.cpu().numpy())
                     
                     if batch_idx % 100 == 0:
@@ -7391,7 +8285,7 @@ class DownstreamEvaluator:
 
 
 
-# In[ ]:
+# In[27]:
 
 
 def run_downstream_evaluation(
@@ -7584,7 +8478,7 @@ def run_downstream_evaluation_from_saved_model(
     return results
 
 
-# In[ ]:
+# In[28]:
 
 
 @dataclass
@@ -7758,12 +8652,12 @@ def test_model_saving_and_loading():
     import tempfile
     import os
     
-    cfg = FlashAttentionConfig(len_dy=50, len_cd=20, 
+    config = FlashAttentionConfig(len_dy=50, len_cd=20, 
                                batch_size=16, embedding_size=256, nhid=128)
     
     # Create and initialize model
     print("  Creating model...")
-    model = FlashAttentionTransformer(cfg).to(device)
+    model = FlashAttentionTransformer(config).to(device)
     model.eval()
     
     # Test generate_model_name
@@ -7789,7 +8683,7 @@ def test_model_saving_and_loading():
         exp_results = {
             'experiment': 'exp2_dense_flash',
             'final_val_loss': 0.5,
-            'final_top_10_acc': 0.75,
+            'final_recall@10': 0.75,
             'training_time_sec': 100.0
         }
         
@@ -7797,7 +8691,7 @@ def test_model_saving_and_loading():
         print("  Saving model...")
         model_path = save_trained_model(
             model=model,
-            config=cfg,
+            config=config,
             model_name=model_name,
             save_dir=tmpdir,
             exp_results=exp_results,
@@ -7816,7 +8710,7 @@ def test_model_saving_and_loading():
         loaded_model = load_trained_model(
             model_path=model_path,
             model_class=FlashAttentionTransformer,
-            config=cfg,
+            config=config,
             device=device
         )
         
@@ -7895,14 +8789,14 @@ def test_downstream_evaluator_with_real_data():
     
     # Create a small model for testing
     print("  Creating model...")
-    cfg = FlashAttentionConfig(
+    config = FlashAttentionConfig(
         len_dy=200,  # Smaller for speed
         len_cd=80,
         batch_size=16,
         embedding_size=256,  # Smaller for speed
         nhid=128
     )
-    model = FlashAttentionTransformer(cfg).to(device)
+    model = FlashAttentionTransformer(config).to(device)
     
     # Train for 1 epoch to get non-random weights
     print("  Training model for 1 epoch...")
@@ -7911,12 +8805,12 @@ def test_downstream_evaluator_with_real_data():
     scaler = torch.cuda.amp.GradScaler()
     
     # Create dataset and dataloader
-    train_dataset = ClinicalDataset(train_sample, cfg)
+    train_dataset = ClinicalDataset(train_sample, config)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=cfg.batch_size,
+        batch_size=config.batch_size,
         shuffle=True,
-        collate_fn=clinical_collate_fn,
+        collate_fn=create_collate_fn(config),
         num_workers=0
     )
     
@@ -7944,7 +8838,7 @@ def test_downstream_evaluator_with_real_data():
         
         with torch.cuda.amp.autocast(dtype=torch.float16):
             output = model(x)
-            loss = compute_loss(output, y, dt_cnt, cfg, criterion, device)
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device)
         
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -7958,7 +8852,7 @@ def test_downstream_evaluator_with_real_data():
     
     evaluator = DownstreamEvaluator(
         model=model,
-        model_config=cfg,
+        model_config=config,
         device=device,
         use_mixed_precision=True
     )
@@ -7998,7 +8892,7 @@ def test_downstream_evaluator_with_real_data():
         print(f"    Embedding dim: {results['embedding_dim']}")
         
         # Basic sanity checks
-        assert results['embedding_dim'] == cfg.embedding_size, "Wrong embedding dimension"
+        assert results['embedding_dim'] == config.embedding_size, "Wrong embedding dimension"
         
         print("\n  ✅ DownstreamEvaluator works correctly!")
         
@@ -8025,7 +8919,7 @@ test_downstream_evaluator_with_real_data()
 
 # ### Save and load trained TE
 
-# In[26]:
+# In[28]:
 
 
 def generate_model_name(
@@ -8104,10 +8998,15 @@ def save_trained_model(
         Path to saved model
     """
     os.makedirs(save_dir, exist_ok=True)
-    
+    actual_model = model
+    if isinstance(actual_model, nn.DataParallel):
+        actual_model = actual_model.module
+    if isinstance(actual_model, DataParallelWrapper):
+        actual_model = actual_model.model
+        
     # 1. Save lightweight model (just state dict + model info)
     model_path = os.path.join(save_dir, f"{model_name}_final.pt")
-    actual_model = model.module if isinstance(model, nn.DataParallel) else model
+
     save_dict = {
         'model_state_dict': actual_model.state_dict(),
         'model_name': model_name,
@@ -8214,7 +9113,7 @@ def load_trained_model(
 
 
 
-# In[27]:
+# In[ ]:
 
 
 
@@ -8265,7 +9164,10 @@ def compute_code_frequencies(
     # Create a small dataset for sampling
     sample_data = train_data.head(nbatch * config.batch_size)
     sample_dataset = ClinicalDataset(sample_data, config)
-    sample_loader = DataLoader(sample_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=clinical_collate_fn)
+    sample_loader = DataLoader(sample_dataset, 
+                               batch_size=config.batch_size, 
+                               shuffle=False, 
+                               collate_fn=create_collate_fn(config))
     
     for batch in sample_loader:  # ✅ Iterate over DataLoader
         y = batch['target']
@@ -8472,7 +9374,8 @@ def _create_dataloaders(
     train_dataset = ClinicalDataset(train_data, config)
     val_dataset = ClinicalDataset(val_data, config)
     
-    n_workers = max(1, os.cpu_count() // max(world_size, 1) // 2)
+    n_workers = min(4, os.cpu_count() // 4)
+    collate_fn = create_collate_fn(config)
     
     if use_bucketing:
         if logger:
@@ -8487,7 +9390,8 @@ def _create_dataloaders(
             batch_sampler=train_batch_sampler,
             num_workers=n_workers,
             pin_memory=True,
-            collate_fn=clinical_collate_fn
+            collate_fn=collate_fn,
+            persistent_workers=False 
         )
     else:
         if logger:
@@ -8499,8 +9403,8 @@ def _create_dataloaders(
             num_workers=n_workers,
             pin_memory=True,
             drop_last=True,
-            collate_fn=clinical_collate_fn,
-            persistent_workers=n_workers > 0
+            collate_fn=collate_fn,
+            persistent_workers=False
         )
     
     val_loader = DataLoader(
@@ -8509,7 +9413,7 @@ def _create_dataloaders(
         shuffle=False,
         num_workers=n_workers,
         pin_memory=True,
-        collate_fn=clinical_collate_fn
+        collate_fn=collate_fn
     )
     
     if logger:
@@ -8581,16 +9485,16 @@ def _build_epoch_metrics(
         'train_loss_improvement': train_metrics['train_loss_improvement'],
         # Train evaluation
         'eval_in_train_loss_final': train_eval_metrics['val_loss'],
-        'eval_in_train_top_1_acc': train_eval_metrics['top_1_acc'],
-        'eval_in_train_top_5_acc': train_eval_metrics['top_5_acc'],
-        'eval_in_train_top_10_acc': train_eval_metrics['top_10_acc'],
-        'eval_in_train_top_20_acc': train_eval_metrics['top_20_acc'],
+        'eval_in_train_recall@1': train_eval_metrics['recall@1'],
+        'eval_in_train_recall@5': train_eval_metrics['recall@5'],
+        'eval_in_train_recall@10': train_eval_metrics['recall@10'],
+        'eval_in_train_recall@20': train_eval_metrics['recall@20'],
         # Validation
         'final_val_loss': val_metrics['val_loss'],
-        'final_val_top_1_acc': val_metrics['top_1_acc'],
-        'final_val_top_5_acc': val_metrics['top_5_acc'],
-        'final_val_top_10_acc': val_metrics['top_10_acc'],
-        'final_val_top_20_acc': val_metrics['top_20_acc'],
+        'final_val_recall@1': val_metrics['recall@1'],
+        'final_val_recall@5': val_metrics['recall@5'],
+        'final_val_recall@10': val_metrics['recall@10'],
+        'final_val_recall@20': val_metrics['recall@20'],
         'generalization_gap': train_eval_metrics['val_loss'] - val_metrics['val_loss'],
     }
     
@@ -8601,7 +9505,7 @@ def _build_epoch_metrics(
     
     # Add other validation metrics (embedding quality, etc.)
     for k, v in val_metrics.items():
-        if k not in epoch_metrics and k not in ['val_loss', 'top_1_acc', 'top_5_acc', 'top_10_acc', 'top_20_acc']:
+        if k not in epoch_metrics and k not in ['val_loss', 'recall@1', 'recall@5', 'recall@10', 'recall@20']:
             epoch_metrics[k] = v
     
     return epoch_metrics
@@ -8628,12 +9532,12 @@ def _build_final_results(
         'train_loss_final': final_metrics['eval_in_train_loss_final'],
         'val_loss_final': final_metrics['final_val_loss'],
         'generalization_gap': final_metrics['generalization_gap'],
-        'final_train_top_5_acc': final_metrics['eval_in_train_top_5_acc'],
-        'final_train_top_10_acc': final_metrics['eval_in_train_top_10_acc'],
-        'final_train_top_20_acc': final_metrics['eval_in_train_top_20_acc'],
-        'final_val_top_5_acc': final_metrics['final_val_top_5_acc'],
-        'final_val_top_10_acc': final_metrics['final_val_top_10_acc'],
-        'final_val_top_20_acc': final_metrics['final_val_top_20_acc'],
+        'final_train_recall@5': final_metrics['eval_in_train_recall@5'],
+        'final_train_recall@10': final_metrics['eval_in_train_recall@10'],
+        'final_train_recall@20': final_metrics['eval_in_train_recall@20'],
+        'final_val_recall@5': final_metrics['final_val_recall@5'],
+        'final_val_recall@10': final_metrics['final_val_recall@10'],
+        'final_val_recall@20': final_metrics['final_val_recall@20'],
         'training_time_sec': total_time,
         'precision@10': evaluation['performance']['precision@10'],
         'recall@10': evaluation['performance']['recall@10'],
@@ -8661,7 +9565,7 @@ def run_single_experiment(
     code_frequencies: Optional[np.ndarray] = None,
     log_dir: str = "logs",
     experiment_round: Optional[str] = None,
-    check_embeddings_every: int = 2,
+    check_embeddings_every: float = None,
     log_metrics_every: int = 100,
     resume_from: Optional[str] = None,
     checkpoint_dir: Optional[str] = None,
@@ -8725,32 +9629,43 @@ def run_single_experiment(
     # ============================================================    
     num_gpus = torch.cuda.device_count()
     use_data_parallel = num_gpus > 1
-    
+    criterion = nn.BCEWithLogitsLoss()
+    # Always wrap model regardless of num_gpus
+    wrapped_model = DataParallelWrapper(
+        model=model,
+        config=config,
+        criterion=criterion,
+        moe_config=moe_config
+    )    
     if use_data_parallel:
         logger.info(f" Enabling DataParallel with {num_gpus} GPUs")
         # Scale batch size proportionally (effective batch = batch_size * num_gpus)
         effective_batch_size = config.batch_size * num_gpus
         
         # Scale learning rate (square root scaling - more conservative)
-        base_lr = config.learning_rate  # 1e-4 from your config
-        scaled_lr = base_lr * math.sqrt(num_gpus)  # ~2e-4 for 4 GPUs
+        base_lr = config.learning_rate  # 1e-4 from your config 
+        # scaled_lr = base_lr * math.sqrt(num_gpus)  # ~2e-4 for 4 GPUs, this is conservative in exp round 5
         # Alternative: Linear scaling (more aggressive)
-        # scaled_lr = base_lr * num_gpus  # 4e-4 for 4 GPUs
+        scaled_lr = base_lr * num_gpus  # 4e-4 for 4 GPUs
         
         logger.info(f"   Per-GPU batch size: {config.batch_size}")
         logger.info(f"   Effective batch size: {effective_batch_size}")
         logger.info(f"   Base learning rate: {base_lr}")
         logger.info(f"   Scaled learning rate: {scaled_lr:.2e}")
         
-        # Wrap model - it's already on device, DataParallel will handle distribution
-        model = nn.DataParallel(model)    
+        # Use cusotomized data parallel wrapper
+        model = nn.DataParallel(wrapped_model)  
         # Verification: Check DataParallel is set up correctly
         logger.info(f"   DataParallel device_ids: {model.device_ids}")
         logger.info(f"   DataParallel output_device: {model.output_device}")
+        logger.info(f"   ✅ Using DataParallelWrapper for integrated loss")
+        # Update batch_size to effective_batch_size
+        config.batch_size = effective_batch_size
         
     else:
         scaled_lr = config.learning_rate 
-        
+        model = wrapped_model
+        logger.info(f" Single GPU mode with DataParallelWrapper")        
     # Log config
     metrics_logger.log_config({
         'experiment': exp_name,
@@ -8782,9 +9697,9 @@ def run_single_experiment(
         lr=scaled_lr,
         weight_decay=config.weight_decay
     )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    total_steps = len(train_loader) * epochs
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
     scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
-    criterion = nn.BCEWithLogitsLoss()
     
     # ============================================================
     # 5. RESUME FROM CHECKPOINT (if applicable)
@@ -8825,7 +9740,8 @@ def run_single_experiment(
             global_step=global_step,
             loss_tracker=loss_tracker,
             is_main=is_main,
-            use_ddp=use_ddp
+            use_ddp=use_ddp,
+            accumulation_steps=1  # no gradient accumulation with DataParallel
         )
         global_step = train_metrics['global_step']
         
@@ -8853,12 +9769,12 @@ def run_single_experiment(
         )
         
         # Embedding quality check
-        if epoch % check_embeddings_every == 0:
+        if check_embeddings_every and epoch % check_embeddings_every == 0:
             logger.info("Computing embedding quality...")
             emb_metrics = compute_embedding_quality_epoch(
                 model, val_data, config, device,
-                num_samples=200,
-                use_mixed_precision=use_mixed_precision
+                num_samples=100,
+                use_mixed_precision=True
             )
             val_metrics.update(emb_metrics)
             logger.info(f"    Embedding std: {emb_metrics['embedding_std_mean']:.4f}")
@@ -8888,7 +9804,7 @@ def run_single_experiment(
         # Log summary
         logger.info(f"\n--- Epoch {epoch+1} Summary ---")
         logger.info(f"  Train loss: {train_metrics['train_loss']:.4f} → {train_metrics['train_loss_last']:.4f}")
-        logger.info(f"  Val loss: {val_metrics['val_loss']:.4f}, Top-10: {val_metrics['top_10_acc']:.3f}")
+        logger.info(f"  Val loss: {val_metrics['val_loss']:.4f}, Recall@10: {val_metrics['recall@10']:.3f}")
         
         metrics_logger.log_epoch(epoch + 1, epoch_metrics)
         loss_tracker.save_trajectory(
@@ -8969,7 +9885,7 @@ def run_single_experiment(
     logger.info(f"\n{'='*80}")
     logger.info(f"EXPERIMENT COMPLETE: {exp_name}")
     logger.info(f"{'='*80}")
-    logger.info(f"Final Top-10 Acc: {epoch_history[-1]['final_val_top_10_acc']:.3f}")
+    logger.info(f"Final Recall@10: {epoch_history[-1]['final_val_recall@10']:.3f}")
     logger.info(f"Best Val Loss: {summary['best_val_loss']:.4f}")
     logger.info(f"Training Time: {total_time:.1f}s")
     logger.info(f"{'='*80}\n")
@@ -9209,9 +10125,99 @@ test_run_single_experiment_with_downstream()
 
 
 
-# ### Memory management
+# ### GPU usage tracking
 
 # In[33]:
+
+
+class GPUMemoryTracker:
+    """
+    Track GPU memory at different stages of training.
+    
+    Usage:
+        tracker = GPUMemoryTracker()
+        
+        # In training loop:
+        tracker.record("before_forward")
+        output = model(x)
+        tracker.record("after_forward")
+        loss.backward()
+        tracker.record("after_backward")
+        optimizer.step()
+        tracker.record("after_optimizer")
+        
+        # Print summary:
+        tracker.print_summary()
+    """
+    
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled and torch.cuda.is_available()
+        self.num_gpus = torch.cuda.device_count() if self.enabled else 0
+        self.records = {}  # {stage_name: {gpu_id: (allocated, reserved, peak)}}
+        
+    def record(self, stage_name: str):
+        """Record memory usage at a specific stage."""
+        if not self.enabled:
+            return
+            
+        # Synchronize to ensure all GPU operations are complete
+        torch.cuda.synchronize()
+        
+        self.records[stage_name] = {}
+        for gpu_id in range(self.num_gpus):
+            allocated = torch.cuda.memory_allocated(gpu_id) / 1024**3
+            reserved = torch.cuda.memory_reserved(gpu_id) / 1024**3
+            peak = torch.cuda.max_memory_allocated(gpu_id) / 1024**3
+            self.records[stage_name][gpu_id] = (allocated, reserved, peak)
+    
+    def reset_peak(self):
+        """Reset peak memory stats for fresh measurement."""
+        if self.enabled:
+            for gpu_id in range(self.num_gpus):
+                torch.cuda.reset_peak_memory_stats(gpu_id)
+    
+    def print_stage(self, stage_name: str):
+        """Print memory for a single stage."""
+        if stage_name not in self.records:
+            print(f"No record for stage: {stage_name}")
+            return
+            
+        print(f"\n📊 GPU Memory @ {stage_name}:")
+        for gpu_id, (alloc, res, peak) in self.records[stage_name].items():
+            print(f"   GPU {gpu_id}: {alloc:.2f}GB allocated, {res:.2f}GB reserved, {peak:.2f}GB peak")
+    
+    def print_gpu_use_summary(self):
+        """Print all recorded stages."""
+        if not self.records:
+            print("No GPU memory records.")
+            return
+            
+        print("\n" + "="*70)
+        print("GPU MEMORY SUMMARY")
+        print("="*70)
+        
+        # Header
+        stages = list(self.records.keys())
+        print(f"{'GPU':<6}", end="")
+        for stage in stages:
+            print(f"{stage:<20}", end="")
+        print()
+        print("-"*70)
+        
+        # Per-GPU rows
+        for gpu_id in range(self.num_gpus):
+            print(f"GPU {gpu_id:<2}", end="")
+            for stage in stages:
+                alloc, _, _ = self.records[stage][gpu_id]
+                print(f"{alloc:>6.2f}GB             ", end="")
+            print()
+        
+        print("="*70)
+
+
+# ### Memory management
+
+# In[34]:
 
 
 import torch
@@ -9510,7 +10516,7 @@ def cleanup_checkpoints_after_training(
 
 # ### Time and cost estimation
 
-# In[38]:
+# In[33]:
 
 
 import numpy as np
@@ -9661,15 +10667,15 @@ def h100_time_cost(
         ("flash_moe", "multi"): dict(mfu=0.50, data=0.15, comm=0.03, grad=0.00, misc=0.02),
     }
     key = (model, 1 if num_h100 == 1 else "multi")
-    cfg = conf[key]
+    config = conf[key]
 
     # 4. Pure compute time
-    compute_h = total_flops / (peak_tf * 1e12 * cfg["mfu"]) / 3600
+    compute_h = total_flops / (peak_tf * 1e12 * config["mfu"]) / 3600
 
     # 5. Overheads
     overhead_h = compute_h * (
-        cfg["data"] + cfg["comm"] + cfg["misc"]
-        + cfg["grad"]    # grad_accum=2 only for baseline small batches -> already accounted
+        config["data"] + config["comm"] + config["misc"]
+        + config["grad"]    # grad_accum=2 only for baseline small batches -> already accounted
     )
     total_h = compute_h + overhead_h
     cost = total_h * hourly_rate
@@ -9679,7 +10685,7 @@ def h100_time_cost(
         "days": round(total_h / 24, 2),
         "cost_usd": round(cost, 0),
         "compute_only_h": round(compute_h, 2),
-        "mfu_percent": round(cfg["mfu"] * 100, 1)
+        "mfu_percent": round(config["mfu"] * 100, 1)
     }
 
 
@@ -9734,7 +10740,7 @@ for members in [100_000, 500_000, 1_000_000, 5_000_000, 12_000_000]:
 
 # ### Final tests
 
-# In[4]:
+# In[32]:
 
 
 """
@@ -9779,7 +10785,7 @@ def test_data_parsing_completeness():
     print("TEST 1: Data Parsing Completeness")
     print("="*80)
     
-    cfg = BaseConfig()
+    config = BaseConfig()
     
     # Test with REAL data (not synthetic)
     batch = df_train.head(16)
@@ -9787,26 +10793,26 @@ def test_data_parsing_completeness():
     print("  Testing conv_cd()...")
     for idx, row in batch.iterrows():
         cd_str = row['cd']
-        parsed = conv_cd(cd_str, cfg.len_dy, cfg.len_cd)
+        parsed = conv_cd(cd_str, config.len_dy, config.len_cd)
         
         # Validate structure
-        assert len(parsed) == cfg.len_dy, f"Wrong day count: {len(parsed)}"
-        assert all(len(day) == cfg.len_cd for day in parsed), "Wrong code count per day"
+        assert len(parsed) == config.len_dy, f"Wrong day count: {len(parsed)}"
+        assert all(len(day) == config.len_cd for day in parsed), "Wrong code count per day"
         assert all(isinstance(code, int) for day in parsed for code in day), "Non-integer codes"
         
         # Validate ranges
         for day in parsed:
             for code in day:
-                assert 0 <= code < cfg.cd_cnt, f"Code {code} out of range [0, {cfg.cd_cnt})"
+                assert 0 <= code < config.cd_cnt, f"Code {code} out of range [0, {config.cd_cnt})"
     
     print("  ✅ conv_cd handles real data correctly")
     
     print("  Testing conv_age_gender()...")
     for idx, row in batch.iterrows():
         age_str = row['age_in_months']
-        parsed = conv_age_gender(age_str, cfg.len_dy, max_val=1439)
+        parsed = conv_age_gender(age_str, config.len_dy, max_val=1439)
         
-        assert len(parsed) == cfg.len_dy, f"Wrong length: {len(parsed)}"
+        assert len(parsed) == config.len_dy, f"Wrong length: {len(parsed)}"
         assert all(0 <= age <= 1439 for age in parsed), "Age out of range"
     
     print("  ✅ conv_age_gender handles real data correctly")
@@ -9814,9 +10820,9 @@ def test_data_parsing_completeness():
     print("  Testing conv_target()...")
     for idx, row in batch.iterrows():
         target_str = row['target_cd']
-        parsed = conv_target(target_str, cfg.len_dy, cfg.target_cd_cnt)
+        parsed = conv_target(target_str, config.len_dy, config.target_cd_cnt)
         
-        assert len(parsed) == cfg.len_dy, f"Wrong day count"
+        assert len(parsed) == config.len_dy, f"Wrong day count"
         assert isinstance(parsed, list), "Not a list"
         assert all(isinstance(day_codes, list) for day_codes in parsed), "Not nested list"
         
@@ -9824,7 +10830,7 @@ def test_data_parsing_completeness():
         for day_codes in parsed:
             for code in day_codes:
                 if code != 0:
-                    assert 0 < code < cfg.target_cd_cnt, f"Target code {code} out of range"
+                    assert 0 < code < config.target_cd_cnt, f"Target code {code} out of range"
     
     print("  ✅ conv_target handles multi-label correctly")
     
@@ -9850,18 +10856,18 @@ def test_prepare_tensor_integration():
     print("TEST 2: prepare_tensor Integration")
     print("="*80)
     
-    cfg = BaseConfig(batch_size=32)
-    batch = df_train.head(cfg.batch_size)
+    config = BaseConfig(batch_size=32)
+    batch = df_train.head(config.batch_size)
     
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
     
     print(f"  Input tensor shape: {x.shape}")
-    print(f"  Expected shape: ({cfg.batch_size}, {cfg.len_dy}, {2 + cfg.len_cd})")
+    print(f"  Expected shape: ({config.batch_size}, {config.len_dy}, {2 + config.len_cd})")
     
     # Validate shapes
-    assert x.shape == (cfg.batch_size, cfg.len_dy, 2 + cfg.len_cd), "Wrong input shape"
-    assert len(dt_cnt) == cfg.batch_size, "Wrong dt_cnt length"
-    assert len(y) == cfg.batch_size, "Wrong target batch size"
+    assert x.shape == (config.batch_size, config.len_dy, 2 + config.len_cd), "Wrong input shape"
+    assert len(dt_cnt) == config.batch_size, "Wrong dt_cnt length"
+    assert len(y) == config.batch_size, "Wrong target batch size"
     
     # Validate dtypes
     assert x.dtype in [torch.long, torch.float], f"Wrong dtype: {x.dtype}"
@@ -9874,19 +10880,19 @@ def test_prepare_tensor_integration():
     gender_values = x[:, :, 1].long()
     code_values = x[:, :, 2:].long()
     
-    assert (age_values >= 0).all() and (age_values < cfg.age_vocab).all(), "Age out of range"
-    assert (gender_values >= 0).all() and (gender_values < cfg.gender_vocab).all(), "Gender out of range"
-    assert (code_values >= 0).all() and (code_values < cfg.cd_cnt).all(), "Codes out of range"
+    assert (age_values >= 0).all() and (age_values < config.age_vocab).all(), "Age out of range"
+    assert (gender_values >= 0).all() and (gender_values < config.gender_vocab).all(), "Gender out of range"
+    assert (code_values >= 0).all() and (code_values < config.cd_cnt).all(), "Codes out of range"
     
     # Validate dt_cnt matches actual data
-    for i in range(cfg.batch_size):
+    for i in range(config.batch_size):
         actual_dt = int(batch.iloc[i]['dt_cnt'])
         assert dt_cnt[i] == actual_dt, f"dt_cnt mismatch: {dt_cnt[i]} != {actual_dt}"
     
     # Validate target structure (nested lists)
     for patient_targets in y:
         assert isinstance(patient_targets, list), "Patient targets should be list"
-        assert len(patient_targets) == cfg.len_dy, "Wrong day count in targets"
+        assert len(patient_targets) == config.len_dy, "Wrong day count in targets"
         for day_targets in patient_targets:
             assert isinstance(day_targets, list), "Day targets should be list (multi-label)"
     
@@ -9911,9 +10917,9 @@ def test_vectorized_targets_equivalence():
     print("TEST 3: Vectorized Targets Equivalence & Speed")
     print("="*80)
     
-    cfg = BaseConfig(batch_size=32)
-    batch = df_train.head(cfg.batch_size)
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    config = BaseConfig(batch_size=32)
+    batch = df_train.head(config.batch_size)
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
     
     # Prepare test data
     y_flat = [codes for day_list in y for codes in day_list]
@@ -9925,16 +10931,16 @@ def test_vectorized_targets_equivalence():
     import time
     start_vectorized = time.time()
     y_cd_vectorized = create_multihot_targets_vectorized(
-        y_flat, num_samples, cfg.target_cd_cnt, device
+        y_flat, num_samples, config.target_cd_cnt, device
     )
     time_vectorized = time.time() - start_vectorized
     
     # Method 2: Nested loops (slow, reference)
     start_loops = time.time()
-    y_cd_loops = torch.zeros(num_samples, cfg.target_cd_cnt, device=device)
+    y_cd_loops = torch.zeros(num_samples, config.target_cd_cnt, device=device)
     for j in range(num_samples):
         for k in y_flat[j]:
-            if k != 0 and k < cfg.target_cd_cnt:
+            if k != 0 and k < config.target_cd_cnt:
                 y_cd_loops[j, k] = 1
     time_loops = time.time() - start_loops
     
@@ -9945,7 +10951,7 @@ def test_vectorized_targets_equivalence():
     num_positives = y_cd_vectorized.sum().item()
     print(f"  Total positive labels: {num_positives}")
     print(f"  Avg labels per sample: {num_positives / num_samples:.2f}")
-    print(f"  Sparsity: {1 - num_positives / (num_samples * cfg.target_cd_cnt):.4f}")
+    print(f"  Sparsity: {1 - num_positives / (num_samples * config.target_cd_cnt):.4f}")
     
     # Measure speedup
     speedup = time_loops / time_vectorized
@@ -10058,7 +11064,7 @@ def test_learned_pooling_trains_properly():
     print("TEST 4b: Learned Pooling Trains on Real Data")
     print("="*80)
     
-    cfg = FlashAttentionConfig(
+    config = FlashAttentionConfig(
         batch_size=16, 
         len_dy=200, 
         len_cd=80,
@@ -10068,38 +11074,38 @@ def test_learned_pooling_trains_properly():
         nhead=8
     )
     
-    model = FlashAttentionTransformer(cfg).to(device)
+    model = FlashAttentionTransformer(config).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=1e-3)
     criterion = nn.BCEWithLogitsLoss()
     
     # Use REAL data (has actual patterns)
     train_real = df_train.head(64)  # 8 batches with real medical codes
-    train_dataset = ClinicalDataset(train_real, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=False, collate_fn=clinical_collate_fn)    
+    train_dataset = ClinicalDataset(train_real, config)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=create_collate_fn(config))    
     print(f"  Training on {len(train_real)} real patient records...")
     
     # Get initial attention entropy
     model.eval()
     with torch.no_grad():
-        batch = train_real.head(cfg.batch_size)
-        dt_cnt, x_test, y_test = prepare_tensor(batch, cfg, device)
+        batch = train_real.head(config.batch_size)
+        dt_cnt, x_test, y_test = prepare_tensor(batch, config, device)
         
         # Forward through model to get code embeddings
         age_emb = model.embedding_age_in_months(x_test[:, :, 0].long())
         gender_emb = model.embedding_gender_cd(x_test[:, :, 1].long())
         cd_emb = model.embedding_cd(x_test[:, :, 2:].long())
-        cd_emb_flat = cd_emb.reshape(cfg.batch_size * cfg.len_dy, cfg.len_cd, cfg.embedding_size)
+        cd_emb_flat = cd_emb.reshape(config.batch_size * config.len_dy, config.len_cd, config.embedding_size)
         cd_emb_flat = torch.swapaxes(cd_emb_flat, 0, 1)  # [80, batch*days, 256]
         
         # Get attention weights from pooling
         pooling = model.daily_pooling
-        q = pooling.query.expand(-1, cfg.batch_size * cfg.len_dy, -1).transpose(0, 1)
+        q = pooling.query.expand(-1, config.batch_size * config.len_dy, -1).transpose(0, 1)
         k = pooling.k_proj(cd_emb_flat).permute(1, 2, 0)
         scores = torch.bmm(q, k) / math.sqrt(256)
         attn_initial = torch.softmax(scores, dim=-1)
         
         entropy_initial = -(attn_initial * torch.log(attn_initial + 1e-10)).sum(dim=-1).mean()
-        normalized_initial = entropy_initial.item() / np.log(cfg.len_cd)
+        normalized_initial = entropy_initial.item() / np.log(config.len_cd)
         
         print(f"    Initial entropy: {normalized_initial:.3f}")
     
@@ -10107,7 +11113,7 @@ def test_learned_pooling_trains_properly():
     model.train()
     for epoch in range(5):
         metrics = train_epoch(
-            model, train_loader, optimizer, None, criterion, cfg,
+            model, train_loader, optimizer, None, criterion, config,
             device, False, None, epoch, False
         )
         if epoch % 2 == 0:
@@ -10117,23 +11123,23 @@ def test_learned_pooling_trains_properly():
     model.eval()
     with torch.no_grad():
         # Same batch as before
-        batch = train_real.head(cfg.batch_size)
-        dt_cnt, x_test, y_test = prepare_tensor(batch, cfg, device)
+        batch = train_real.head(config.batch_size)
+        dt_cnt, x_test, y_test = prepare_tensor(batch, config, device)
         
         age_emb = model.embedding_age_in_months(x_test[:, :, 0].long())
         gender_emb = model.embedding_gender_cd(x_test[:, :, 1].long())
         cd_emb = model.embedding_cd(x_test[:, :, 2:].long())
-        cd_emb_flat = cd_emb.reshape(cfg.batch_size * cfg.len_dy, cfg.len_cd, cfg.embedding_size)
+        cd_emb_flat = cd_emb.reshape(config.batch_size * config.len_dy, config.len_cd, config.embedding_size)
         cd_emb_flat = torch.swapaxes(cd_emb_flat, 0, 1)
         
         pooling = model.daily_pooling
-        q = pooling.query.expand(-1, cfg.batch_size * cfg.len_dy, -1).transpose(0, 1)
+        q = pooling.query.expand(-1, config.batch_size * config.len_dy, -1).transpose(0, 1)
         k = pooling.k_proj(cd_emb_flat).permute(1, 2, 0)
         scores = torch.bmm(q, k) / math.sqrt(256)
         attn_final = torch.softmax(scores, dim=-1)
         
         entropy_final = -(attn_final * torch.log(attn_final + 1e-10)).sum(dim=-1).mean()
-        normalized_final = entropy_final.item() / np.log(cfg.len_cd)
+        normalized_final = entropy_final.item() / np.log(config.len_cd)
         
         print(f"    Final entropy: {normalized_final:.3f}")
     
@@ -10181,7 +11187,7 @@ def test_moe_expert_routing_correctness():
     print("TEST 5: MoE Expert Routing Correctness")
     print("="*80)
     
-    moe_cfg = MoEConfig(
+    moe_config = MoEConfig(
         d_model=256,
         d_ff=512,
         num_experts=8,
@@ -10192,7 +11198,7 @@ def test_moe_expert_routing_correctness():
         use_moe_from_layer=0
     )
     
-    moe = MoELayer(moe_cfg).to(device)
+    moe = MoELayer(moe_config).to(device)
     
     # Real-scale test (200 days × 16 batch)
     x = torch.randn(200, 16, 256, device=device)
@@ -10205,9 +11211,9 @@ def test_moe_expert_routing_correctness():
     assert output.shape == x.shape, "Shape mismatch"
     
     # Validate routing
-    print(f"  Top-K: {moe_cfg.top_k}")
-    print(f"  Num experts: {moe_cfg.num_experts}")
-    print(f"  Num shared: {moe_cfg.num_shared_experts}")
+    print(f"  Top-K: {moe_config.top_k}")
+    print(f"  Num experts: {moe_config.num_experts}")
+    print(f"  Num shared: {moe_config.num_shared_experts}")
     
     # Check aux loss exists and is finite
     assert 'aux_loss' in losses, "Missing aux_loss"
@@ -10234,11 +11240,11 @@ def test_moe_expert_routing_correctness():
     
     # Test DeepSeek balancing
     print("\n  Testing DeepSeek bias correction...")
-    moe_cfg_deepseek = MoEConfig(
+    moe_config_deepseek = MoEConfig(
         d_model=256, d_ff=512, num_experts=8, num_shared_experts=1, top_k=2,
         load_balance_strategy='deepseek', bias_lr=1e-5, bias_momentum=0.9
     )
-    moe_deepseek = MoELayer(moe_cfg_deepseek).to(device)
+    moe_deepseek = MoELayer(moe_config_deepseek).to(device)
     
     # Multiple forward passes to test bias adaptation
     for i in range(5):
@@ -10406,19 +11412,19 @@ def test_model_forward_backward_integration():
     print("TEST 6: Model Forward-Backward Integration")
     print("="*80)
     
-    cfg = BaseConfig(batch_size=8, len_dy=200, len_cd=80)
-    batch = df_train.head(cfg.batch_size)
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    config = BaseConfig(batch_size=8, len_dy=200, len_cd=80)
+    batch = df_train.head(config.batch_size)
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
     
     models_to_test = [
-        ("Baseline", BaselineTransformer(cfg).to(device), False),
+        ("Baseline", BaselineTransformer(config).to(device), False),
         ("FlashAttention", FlashAttentionTransformer(
-            FlashAttentionConfig(len_dy=cfg.len_dy, len_cd=cfg.len_cd, batch_size=8, 
+            FlashAttentionConfig(len_dy=config.len_dy, len_cd=config.len_cd, batch_size=8, 
                                use_flash=False, dtype=torch.float32, 
                                use_learnt_att_pool=False)
         ).to(device), False),
         ("FlashMoE", FlashMoETransformer(
-            FlashAttentionConfig(len_dy=cfg.len_dy, len_cd=cfg.len_cd, batch_size=8,
+            FlashAttentionConfig(len_dy=config.len_dy, len_cd=config.len_cd, batch_size=8,
                                use_flash=False, dtype=torch.float32,
                                use_learnt_att_pool=True),
             MoEConfig(d_model=256, d_ff=256, num_experts=4, num_shared_experts=1, 
@@ -10441,11 +11447,11 @@ def test_model_forward_backward_integration():
             moe_losses = {}
         
         print(f"    Output shape: {output.shape}")
-        assert output.shape == (cfg.batch_size, cfg.len_dy, cfg.target_cd_cnt), "Wrong output shape"
+        assert output.shape == (config.batch_size, config.len_dy, config.target_cd_cnt), "Wrong output shape"
         assert torch.isfinite(output).all(), "Output contains NaN/Inf"
         
         # Compute loss
-        loss = compute_loss(output, y, dt_cnt, cfg, criterion, device)
+        loss = compute_loss(output, y, dt_cnt, config, criterion, device)
         print(f"    Loss: {loss.item():.4f}")
         assert torch.isfinite(loss), "Loss is NaN/Inf"
         assert loss.item() > 0, "Loss should be positive"
@@ -10516,12 +11522,12 @@ def test_loss_computation_correctness():
     print("TEST 7: Loss Computation Correctness")
     print("="*80)
     
-    cfg = BaseConfig(batch_size=8, len_dy=200, len_cd=80)
-    batch = df_train.head(cfg.batch_size)
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    config = BaseConfig(batch_size=8, len_dy=200, len_cd=80)
+    batch = df_train.head(config.batch_size)
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
     
     # Get model predictions
-    model = BaselineTransformer(cfg).to(device)
+    model = BaselineTransformer(config).to(device)
     model.eval()
     
     with torch.no_grad():
@@ -10530,10 +11536,10 @@ def test_loss_computation_correctness():
     criterion = nn.BCEWithLogitsLoss()
     
     # Compute loss
-    loss = compute_loss(output, y, dt_cnt, cfg, criterion, device)
+    loss = compute_loss(output, y, dt_cnt, config, criterion, device)
     
-    print(f"  Batch size: {cfg.batch_size}")
-    print(f"  Max sequence length: {cfg.len_dy}")
+    print(f"  Batch size: {config.batch_size}")
+    print(f"  Max sequence length: {config.len_dy}")
     print(f"  Actual lengths (dt_cnt): {dt_cnt}")
     print(f"  Computed loss: {loss.item():.4f}")
     
@@ -10543,14 +11549,14 @@ def test_loss_computation_correctness():
     assert loss.item() < 10, f"Loss suspiciously high: {loss.item()}"
     
     # Test edge case: What if all dt_cnt are small?
-    dt_cnt_small = [10] * cfg.batch_size
-    loss_small = compute_loss(output, y, dt_cnt_small, cfg, criterion, device)
+    dt_cnt_small = [10] * config.batch_size
+    loss_small = compute_loss(output, y, dt_cnt_small, config, criterion, device)
     print(f"  Loss with short sequences: {loss_small.item():.4f}")
     assert torch.isfinite(loss_small), "Fails with short sequences"
     
     # Test edge case: What if dt_cnt vary widely?
     dt_cnt_varied = [10, 20, 30, 40, 50, 50, 50, 50]
-    loss_varied = compute_loss(output, y, dt_cnt_varied, cfg, criterion, device)
+    loss_varied = compute_loss(output, y, dt_cnt_varied, config, criterion, device)
     print(f"  Loss with varied lengths: {loss_varied.item():.4f}")
     assert torch.isfinite(loss_varied), "Fails with varied lengths"
     
@@ -10582,7 +11588,7 @@ def test_train_epoch_full_integration():
     print("="*80)
     
     # Small config for fast test
-    cfg = BaseConfig(
+    config = BaseConfig(
         batch_size=16, 
         len_dy=200,  
         len_cd=80,  
@@ -10591,11 +11597,11 @@ def test_train_epoch_full_integration():
     
     # Use small subset for speed
     train_subset = df_train.head(64) # 4 batches
-    train_dataset = ClinicalDataset(train_subset, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=False, collate_fn=clinical_collate_fn)
+    train_dataset = ClinicalDataset(train_subset, config)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=create_collate_fn(config))
     
     models_to_test = [
-        ("Baseline", BaselineTransformer(cfg).to(device), False, False, None),
+        ("Baseline", BaselineTransformer(config).to(device), False, False, None),
         ("Flash w/ Bucketing", FlashAttentionTransformer(
             FlashAttentionConfig(len_dy=200, len_cd=80, batch_size=16,
                                use_flash=False, dtype=torch.float32,
@@ -10612,12 +11618,12 @@ def test_train_epoch_full_integration():
                                             load_balance_strategy='switch'))
     ]
     
-    for model_name, model, use_mixed_prec, use_bucket, moe_cfg in models_to_test:
+    for model_name, model, use_mixed_prec, use_bucket, moe_config in models_to_test:
         print(f"\n  Testing {model_name}...")
         print(f"    Mixed precision: {use_mixed_prec}")
         print(f"    Bucketing: {use_bucket}")
         
-        optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
+        optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
         criterion = nn.BCEWithLogitsLoss()
         scaler = torch.cuda.amp.GradScaler()
@@ -10636,11 +11642,11 @@ def test_train_epoch_full_integration():
             optimizer=optimizer,
             scheduler=scheduler,
             criterion=criterion,
-            config=cfg,
+            config=config,
             scaler=scaler,
             device=device,
             use_mixed_precision=use_mixed_prec,
-            moe_config=moe_cfg,
+            moe_config=moe_config,
             epoch=0,
             use_bucketing=use_bucket
         )
@@ -10661,11 +11667,11 @@ def test_train_epoch_full_integration():
                 optimizer=optimizer,
                 scheduler=scheduler,
                 criterion=criterion,
-                config=cfg,
+                config=config,
                 scaler=scaler,
                 device=device,
                 use_mixed_precision=use_mixed_prec,
-                moe_config=moe_cfg,
+                moe_config=moe_config,
                 epoch=epoch+1,
                 use_bucketing=use_bucket
             )
@@ -10731,7 +11737,7 @@ def test_bucketing_effectiveness():
     print("TEST 9: Bucketing Effectiveness")
     print("="*80)
     
-    cfg = BaseConfig(
+    config = BaseConfig(
         batch_size=16, 
         len_dy=200, 
         len_cd=80,  
@@ -10740,11 +11746,11 @@ def test_bucketing_effectiveness():
     train_subset = df_train.head(256)  # 16 batches
     
     # Test 1: Validate bucketing produces valid batches
-    sampler, nbatch = create_bucketing_dataloader(train_subset, cfg.batch_size, shuffle=False)
+    sampler, nbatch = create_bucketing_dataloader(train_subset, config.batch_size, shuffle=False)
     batch_list = list(sampler)
     
     print(f"  Total samples: {len(train_subset)}")
-    print(f"  Batch size: {cfg.batch_size}")
+    print(f"  Batch size: {config.batch_size}")
     print(f"  Num batches: {nbatch}")
     
     # Check all samples used exactly once
@@ -10790,7 +11796,7 @@ def test_bucketing_effectiveness():
     
     # Test 3: Measure padding waste reduction
     # Without bucketing: all pad to 200
-    total_without_bucketing = len(train_subset) * cfg.len_dy
+    total_without_bucketing = len(train_subset) * config.len_dy
     
     # With bucketing: pad only to bucket max
     total_with_bucketing = sum(
@@ -10837,27 +11843,27 @@ def test_comprehensive_metrics_computation():
     print("TEST 10: Comprehensive Metrics Computation")
     print("="*80)
     
-    cfg = BaseConfig(batch_size=16, len_dy=64, len_cd=40)
+    config = BaseConfig(batch_size=16, len_dy=64, len_cd=40)
     
     # Get real model predictions
-    model = BaselineTransformer(cfg).to(device)
+    model = BaselineTransformer(config).to(device)
     model.eval()
     
-    batch = df_val.head(cfg.batch_size)
-    dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+    batch = df_val.head(config.batch_size)
+    dt_cnt, x, y = prepare_tensor(batch, config, device)
     
     with torch.no_grad():
         output = model(x)
     
     # Prepare for metrics
-    output_flat = output.reshape(cfg.batch_size * cfg.len_dy, cfg.target_cd_cnt)
+    output_flat = output.reshape(config.batch_size * config.len_dy, config.target_cd_cnt)
     y_flat = [codes for day_list in y for codes in day_list]
     
     # Filter valid days
     valid_outputs = []
     valid_targets = []
-    for j in range(cfg.batch_size):
-        start = cfg.len_dy * j
+    for j in range(config.batch_size):
+        start = config.len_dy * j
         end = start + dt_cnt[j]
         valid_outputs.append(output_flat[start:end])
         valid_targets.extend(y_flat[start:end])
@@ -10866,7 +11872,7 @@ def test_comprehensive_metrics_computation():
     
     # Create multihot targets
     multihot = create_multihot_targets_vectorized(
-        valid_targets, len(predictions), cfg.target_cd_cnt, device
+        valid_targets, len(predictions), config.target_cd_cnt, device
     ).cpu()
     
     print(f"  Predictions shape: {predictions.shape}")
@@ -10874,13 +11880,13 @@ def test_comprehensive_metrics_computation():
     print(f"  Num samples: {len(predictions)}")
     
     # Compute code frequencies for stratified metrics
-    code_freq = compute_code_frequencies(df_train, cfg, device, max_batches=10)
+    code_freq = compute_code_frequencies(df_train, config, device, max_batches=10)
     
     # Test all metric functions
     print("\n  Testing metric functions...")
     
     # 1. Primary task metrics
-    primary = compute_primary_task_metrics(predictions, valid_targets, cfg.target_cd_cnt)
+    primary = compute_primary_task_metrics(predictions, valid_targets, config.target_cd_cnt)
     print(f"    Primary metrics: {list(primary.keys())}")
     for key, val in primary.items():
         assert np.isfinite(val), f"{key} is NaN/Inf"
@@ -10896,11 +11902,11 @@ def test_comprehensive_metrics_computation():
     for key, val in loss_metrics.items():
         assert np.isfinite(val), f"{key} is NaN/Inf"
     print(f"    BCE loss: {loss_metrics['bce_loss']:.4f}")
-    print(f"    ECE: {loss_metrics['ece']:.4f}")
+    print(f"    Positive Brier: {loss_metrics['positive_brier']:.4f}")
     print("    ✅ Loss metrics valid")
     
     # 3. Stratified metrics
-    stratified = compute_stratified_metrics(predictions, valid_targets, code_freq, cfg.target_cd_cnt)
+    stratified = compute_stratified_metrics(predictions, valid_targets, code_freq, config.target_cd_cnt)
     print(f"    Stratified metrics: {list(stratified.keys())}")
     for key, val in stratified.items():
         assert np.isfinite(val), f"{key} is NaN/Inf"
@@ -10910,9 +11916,9 @@ def test_comprehensive_metrics_computation():
     
     # 4. Convergence metrics (need epoch history)
     epoch_history = [
-        {'val_loss': 0.5, 'top_10_acc': 0.3},
-        {'val_loss': 0.45, 'top_10_acc': 0.35},
-        {'val_loss': 0.42, 'top_10_acc': 0.38},
+        {'val_loss': 0.5, 'recall@10': 0.3},
+        {'val_loss': 0.45, 'recall@10': 0.35},
+        {'val_loss': 0.42, 'recall@10': 0.38},
     ]
     convergence = compute_convergence_metrics(
         [e['val_loss'] for e in epoch_history],
@@ -10925,7 +11931,7 @@ def test_comprehensive_metrics_computation():
     print("    ✅ Convergence metrics valid")
     
     # 5. Memory metrics
-    mem_metrics = compute_memory_metrics(device, model, cfg.batch_size, cfg.len_dy, num_gpus=1)
+    mem_metrics = compute_memory_metrics(device, model, config.batch_size, config.len_dy, num_gpus=1)
     if mem_metrics:  # Only if CUDA
         print(f"    Memory metrics: {list(mem_metrics.keys())}")
         print(f"    Peak memory: {mem_metrics.get('total_peak_gb', 0):.2f}GB")
@@ -10933,7 +11939,7 @@ def test_comprehensive_metrics_computation():
     
     # 6. FLOPs metrics
     flops_metrics = compute_flops_metrics(
-        cfg, cfg.batch_size, cfg.len_dy,
+        config, config.batch_size, config.len_dy,
         num_experts=None, top_k=None, actual_throughput=100.0
     )
     print(f"    FLOPs metrics: {list(flops_metrics.keys())}")
@@ -10964,22 +11970,22 @@ def test_train_epoch_learning_happens():
     print("TEST 11: Verify Learning Happens")
     print("="*80)
     
-    cfg = BaseConfig(batch_size=8, len_dy=32, len_cd=30, learning_rate=1e-3)
-    model = BaselineTransformer(cfg).to(device)
+    config = BaseConfig(batch_size=8, len_dy=32, len_cd=30, learning_rate=1e-3)
+    model = BaselineTransformer(config).to(device)
     
     # Small dataset for overfitting test
     train_tiny = df_train.head(32)  # 4 batches
-    train_dataset = ClinicalDataset(train_tiny, cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, collate_fn=clinical_collate_fn)
+    train_dataset = ClinicalDataset(train_tiny, config)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, collate_fn=create_collate_fn(config))
     
-    optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     scaler = torch.cuda.amp.GradScaler()
     # Train for 3 epochs on same data
     losses = []
     for epoch in range(3):
         metrics = train_epoch(
-            model, train_loader, optimizer, None, criterion, cfg,
+            model, train_loader, optimizer, None, criterion, config,
             device, scaler, False, None, epoch, False
         )
         losses.append(metrics['train_loss'])
@@ -11047,7 +12053,7 @@ def test_single_experiment_end_to_end():
     # Validate results structure
     expected_keys = [
         'experiment', 'parameters', 'use_learned_pooling', 'use_bucketing',
-        'final_train_loss', 'final_val_loss', 'final_top_10_acc', 'final_top_5_acc',
+        'final_train_loss', 'final_val_loss', 'final_val_recall@10', 'final_val_recall@5',
         'training_time_sec', 'recall@10', 'tail_top10_acc', 'cost_usd',
         'peak_memory_gb', 'full_evaluation', 'all_epochs'
     ]
@@ -11064,7 +12070,7 @@ def test_single_experiment_end_to_end():
     assert 0 < results['final_train_loss'] < 10, f"Unreasonable train loss: {results['final_train_loss']}"
     assert 0 < results['final_val_loss'] < 10, f"Unreasonable val loss: {results['final_val_loss']}"
     
-    assert 0 <= results['final_top_10_acc'] <= 1, f"Top-10 acc out of range: {results['final_top_10_acc']}"
+    assert 0 <= results['final_val_recall@10'] <= 1, f"Recall@10 out of range: {results['final_val_recall@10']}"
     
     assert results['training_time_sec'] > 0, "Training time should be positive"
     assert results['training_time_sec'] < 3600, "Training took > 1 hour for tiny dataset"
@@ -11124,7 +12130,7 @@ def test_multi_experiment_comparison():
     assert all(exp in results_df.index for exp in exp_names), "Missing experiment"
     
     # Validate all experiments have metrics
-    required_cols = ['final_train_loss', 'final_val_loss', 'final_top_10_acc', 
+    required_cols = ['final_train_loss', 'final_val_loss', 'final_recall@10', 
                      'training_time_sec', 'parameters']
     for col in required_cols:
         assert col in results_df.columns, f"Missing column: {col}"
@@ -11162,9 +12168,9 @@ test_multi_experiment_comparison()
 # Fix all 0 accuracy issue; check the start index of the target codes
 # Check actual target code distribution
 cleanup_gpu_memory_hard()
-cfg = BaseConfig()
+config = BaseConfig()
 batch = df_train.head(100)
-dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+dt_cnt, x, y = prepare_tensor(batch, config, device)
 
 # Flatten all target codes
 all_codes = []
@@ -11240,12 +12246,12 @@ print(f"Overlap count: {len(overlap)}")
 # Why MOE is slower than expected?
 import time
 cleanup_gpu_memory_hard()
-cfg = FlashAttentionConfig(batch_size=16, len_dy=200, len_cd=80, use_learnt_att_pool=True)
-moe_cfg = MoEConfig(d_model=256, d_ff=512, num_experts=8, top_k=2)
-model = FlashMoETransformer(cfg, moe_cfg).to(device)
+config = FlashAttentionConfig(batch_size=16, len_dy=200, len_cd=80, use_learnt_att_pool=True)
+moe_config = MoEConfig(d_model=256, d_ff=512, num_experts=8, top_k=2)
+model = FlashMoETransformer(config, moe_config).to(device)
 
 batch = df_train.head(32)
-dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+dt_cnt, x, y = prepare_tensor(batch, config, device)
 
 # Time components
 model.train()
@@ -11253,14 +12259,14 @@ model.train()
 # ✅ FIX: Add autocast for first forward pass
 start = time.time()
 with torch.no_grad():
-    with torch.cuda.amp.autocast(dtype=cfg.dtype):
+    with torch.cuda.amp.autocast(dtype=config.dtype):
         # Just forward (no MoE losses)
         output, _ = model(x, return_moe_losses=False)
 forward_time = time.time() - start
 
 # ✅ FIX: Add autocast for second forward pass
 start = time.time()
-with torch.cuda.amp.autocast(dtype=cfg.dtype):
+with torch.cuda.amp.autocast(dtype=config.dtype):
     output, moe_losses = model(x, return_moe_losses=True)
 forward_with_routing_time = time.time() - start
 
@@ -11273,9 +12279,9 @@ print(f"Routing overhead: {(forward_with_routing_time - forward_time)*1000:.2f}m
 
 
 # After refactoring the MOE forward to speed up; test that shapes are preserved
-cfg = FlashAttentionConfig()
-moe_cfg = MoEConfig(d_model=256, d_ff=512)
-layer = MoELayer(moe_cfg).to(device)
+config = FlashAttentionConfig()
+moe_config = MoEConfig(d_model=256, d_ff=512)
+layer = MoELayer(moe_config).to(device)
 
 x = torch.randn(200, 16, 256, device=device)
 output, losses = layer(x, train=True)
@@ -11287,7 +12293,7 @@ print("✅ Shape preservation test passed")
 assert 'aux_loss' in losses, "Missing aux_loss"
 assert losses['aux_loss'].ndim == 0, "aux_loss should be scalar"
 assert 'expert_usage' in losses, "Missing expert_usage"
-assert losses['expert_usage'].shape == (moe_cfg.num_experts,), "Wrong expert_usage shape"
+assert losses['expert_usage'].shape == (moe_config.num_experts,), "Wrong expert_usage shape"
 print("✅ Loss format test passed")
 
 # Test that gradients flow correctly
@@ -11301,21 +12307,21 @@ assert layer.router.weight.grad is not None, "Gradients not flowing to router"
 print("✅ Gradient flow test passed")
 
 # Run a small training loop to verify everything works
-model = FlashMoETransformer(cfg, moe_cfg).to(device)
+model = FlashMoETransformer(config, moe_config).to(device)
 optimizer = optim.AdamW(model.parameters(), lr=1e-4)
 criterion = nn.BCEWithLogitsLoss()
 
 batch = df_train.head(16)
-dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+dt_cnt, x, y = prepare_tensor(batch, config, device)
 
 # Here should add autocast wrapper for mixed precision
-with torch.cuda.amp.autocast(dtype=cfg.dtype):
+with torch.cuda.amp.autocast(dtype=config.dtype):
     # Forward
     output, moe_losses = model(x, return_moe_losses=True)
-    pred_loss = compute_loss(output, y, dt_cnt, cfg, criterion, device)
+    pred_loss = compute_loss(output, y, dt_cnt, config, criterion, device)
 
 # Total loss computation (outside autocast for stability)
-total_loss = pred_loss + moe_cfg.aux_loss_weight * moe_losses['aux_loss']
+total_loss = pred_loss + moe_config.aux_loss_weight * moe_losses['aux_loss']
 
 # Backward
 total_loss.backward()
@@ -11328,12 +12334,12 @@ print("✅ End-to-end training test passed")
 
 
 # Diagnostic: Is the model learning the right codes?
-cfg = BaseConfig()
-model = BaselineTransformer(cfg).to(device)
+config = BaseConfig()
+model = BaselineTransformer(config).to(device)
 model.eval()
 
 batch = df_val.head(32)
-dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+dt_cnt, x, y = prepare_tensor(batch, config, device)
 
 with torch.no_grad():
     output = model(x)
@@ -11390,9 +12396,9 @@ else:
 # In[51]:
 
 
-cfg = BaseConfig()
+config = BaseConfig()
 batch = df_train.head(1000)
-dt_cnt, x, y = prepare_tensor(batch, cfg, device)
+dt_cnt, x, y = prepare_tensor(batch, config, device)
 
 # Check codes are now 0-indexed
 all_codes = [code for patient in y for day in patient for code in day if code != 0]
@@ -11427,8 +12433,8 @@ def test_edge_cases_robustness():
     
     cleanup_gpu_memory_hard()
     
-    cfg = BaseConfig(batch_size=4, len_dy=32, len_cd=20)
-    model = BaselineTransformer(cfg).to(device)
+    config = BaseConfig(batch_size=4, len_dy=32, len_cd=20)
+    model = BaselineTransformer(config).to(device)
     model.eval()
     criterion = nn.BCEWithLogitsLoss()
     
@@ -11436,10 +12442,10 @@ def test_edge_cases_robustness():
     print("  Testing minimal sequence (dt_cnt=1)...")
     batch_min = df_train[df_train['dt_cnt'] <= 5].head(4)
     if len(batch_min) >= 4:
-        dt_cnt, x, y = prepare_tensor(batch_min, cfg, device)
+        dt_cnt, x, y = prepare_tensor(batch_min, config, device)
         with torch.no_grad():
             out = model(x)
-        loss = compute_loss(out, y, dt_cnt, cfg, criterion, device)
+        loss = compute_loss(out, y, dt_cnt, config, criterion, device)
         assert torch.isfinite(loss), "Fails on minimal sequences"
         print(f"    Loss: {loss.item():.4f} ✅")
     
@@ -11447,22 +12453,22 @@ def test_edge_cases_robustness():
     print("  Testing long sequences (dt_cnt>150)...")
     batch_max = df_train[df_train['dt_cnt'] >= 150].head(4)
     if len(batch_max) >= 4:
-        dt_cnt, x, y = prepare_tensor(batch_max, cfg, device)
+        dt_cnt, x, y = prepare_tensor(batch_max, config, device)
         with torch.no_grad():
             out = model(x)
-        loss = compute_loss(out, y, dt_cnt, cfg, criterion, device)
+        loss = compute_loss(out, y, dt_cnt, config, criterion, device)
         assert torch.isfinite(loss), "Fails on long sequences"
         print(f"    Loss: {loss.item():.4f} ✅")
     
     # Edge case 3: Batch size = 1
     print("  Testing batch_size=1...")
-    cfg_small = BaseConfig(batch_size=1, len_dy=32, len_cd=20)
+    config_small = BaseConfig(batch_size=1, len_dy=32, len_cd=20)
     batch_single = df_train.head(1)
-    dt_cnt, x, y = prepare_tensor(batch_single, cfg_small, device)
-    model_small = BaselineTransformer(cfg_small).to(device)
+    dt_cnt, x, y = prepare_tensor(batch_single, config_small, device)
+    model_small = BaselineTransformer(config_small).to(device)
     with torch.no_grad():
         out = model_small(x)
-    assert out.shape == (1, cfg_small.len_dy, cfg_small.target_cd_cnt), "Fails on batch_size=1"
+    assert out.shape == (1, config_small.len_dy, config_small.target_cd_cnt), "Fails on batch_size=1"
     print(f"    Output shape: {out.shape} ✅")
     
     print("\n✅ TEST 14 PASSED: Model handles edge cases\n")
@@ -11513,7 +12519,7 @@ def test_full_experiment_simulation():
     print(f"    Parameters: {result_baseline['parameters']:,}")
     print(f"    Final train loss: {result_baseline['final_train_loss']:.4f}")
     print(f"    Final val loss: {result_baseline['final_val_loss']:.4f}")
-    print(f"    Top-10 accuracy: {result_baseline['final_top_10_acc']:.3f}")
+    print(f"    Top-10 accuracy: {result_baseline['final_recall@10']:.3f}")
     print(f"    Training time: {result_baseline['training_time_sec']:.1f}s")
     print(f"    Cost: ${result_baseline['cost_usd']:.4f}")
     
@@ -11545,13 +12551,13 @@ def test_full_experiment_simulation():
     
     print(f"\n  Flash Results:")
     print(f"    Training time: {result_flash['training_time_sec']:.1f}s")
-    print(f"    Top-10 accuracy: {result_flash['final_top_10_acc']:.3f}")
+    print(f"    Top-10 accuracy: {result_flash['final_recall@10']:.3f}")
     
     # Compare to baseline
     speedup = result_baseline['training_time_sec'] / result_flash['training_time_sec']
     print(f"\n  Comparison:")
     print(f"    Speedup vs baseline: {speedup:.2f}×")
-    print(f"    Accuracy delta: {result_flash['final_top_10_acc'] - result_baseline['final_top_10_acc']:+.3f}")
+    print(f"    Accuracy delta: {result_flash['final_recall@10'] - result_baseline['final_recall@10']:+.3f}")
     
     # Expect at least some speedup (even on tiny dataset)
     assert speedup > 0.8, f"Flash slower than baseline: {speedup:.2f}×"
@@ -11572,7 +12578,7 @@ def test_full_experiment_simulation():
     
     print(f"\n  MoE Results:")
     print(f"    Parameters: {result_moe['parameters']:,}")
-    print(f"    Top-10 accuracy: {result_moe['final_top_10_acc']:.3f}")
+    print(f"    Top-10 accuracy: {result_moe['final_recall@10']:.3f}")
     
     # Check MoE metrics exist
     if 'moe' in result_moe['full_evaluation']:
@@ -12023,7 +13029,7 @@ results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-m
 
 # ### Downstream evaluation   
 
-# In[37]:
+# In[35]:
 
 
 import google.auth
@@ -12036,12 +13042,13 @@ print('credentials:', credentials, ', project:', project)
 
 # #### Test GPU availability
 
-# In[34]:
+# In[36]:
 
 
+import torch
 num_gpus = torch.cuda.device_count()
 print(f"Available GPUs: {num_gpus}")
-
+cleanup_gpu_memory_hard()
 if num_gpus == 0:
     raise RuntimeError("No GPUs available!")
 
@@ -12064,9 +13071,22 @@ if num_gpus > 1:
     print(f"   Device IDs: {test_model.device_ids}")
     del test_model, test_input, output
     torch.cuda.empty_cache()
+# Force complete cleanup
+gc.collect()
+torch.cuda.empty_cache()
+
+for i in range(torch.cuda.device_count()):
+    with torch.cuda.device(i):
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+# Verify clean state
+for i in range(torch.cuda.device_count()):
+    free, total = torch.cuda.mem_get_info(i)
+    print(f"GPU {i}: {free/1e9:.2f} GB free / {total/1e9:.2f} GB total")
 
 
-# In[35]:
+# In[37]:
 
 
 print("\nClearing GPU memory...")
@@ -12422,7 +13442,7 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sam
 input_data = client.query(input_sql).to_dataframe() 
 
 
-# In[48]:
+# In[39]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -12432,18 +13452,12 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[58]:
-
-
-df_unique.rename(columns = {'target': 'target_cd'}, inplace = True)
-
-
-# In[59]:
+# In[40]:
 
 
 # Split training and validation dataset
 # Set your desired train/validation split ratio
-TRAIN_RATIO = 0.9  # 80% train, 20% validation
+TRAIN_RATIO = 0.8  # 80% train, 20% validation
 RANDOM_SEED = 42   # For reproducibility
 # Stratified split by LOB
 train_df, val_df = train_test_split(
@@ -12454,27 +13468,28 @@ train_df, val_df = train_test_split(
 )
 
 
-# In[52]:
+# In[46]:
 
 
-print(f"{'LOB':<15} {'Original %':>12} {'Train %':>12} {'Val %':>12}")
+print(f"{'LOB':<15} {'Total':>12} {'Original %':>12} {'Train %':>12} {'Val %':>12}")
 for lob in df_unique['lob'].unique():
+    total_n = (df_unique['lob'] == lob).sum()
     orig_pct = (df_unique['lob'] == lob).mean() * 100
     train_pct = (train_df['lob'] == lob).mean() * 100
     val_pct = (val_df['lob'] == lob).mean() * 100
-    print(f"{lob:<15} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
+    print(f"{lob:<15} {total_n:>11.2f} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
 
 
 # ##### Baseline dense model
 
-# In[60]:
+# In[42]:
 
 
 # Get predefined experiment configs
 all_configs = get_experiment_configs()
 
 # Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
-EXP_NAME = 'exp1_dense_baseline'
+EXP_NAME = 'exp2b_flash_learned_pool'
 moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
 # Training parameters
 EPOCHS = 1  # Start small for testing
@@ -12482,10 +13497,17 @@ EMBEDDING_SIZE = 256  # 256, 384, or 512
 EXPERIMENT_ROUND = "exp_round5_3lobs_pretrain_multi_gpu_test_v2"
 
 
+# In[49]:
+
+
+cleanup_gpu_memory_hard()
+
+
 # In[ ]:
 
 
 cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
 baseline_results = run_single_experiment(
     exp_name=EXP_NAME,
     moe_config=moe_config,
@@ -12501,6 +13523,12 @@ baseline_results = run_single_experiment(
 )
 
 
+# In[ ]:
+
+
+baseline_results
+
+
 # #### Downstream evaluation - Commercial
 
 # In[ ]:
@@ -12512,7 +13540,7 @@ model_path = baseline_results['model_path']
 # In[ ]:
 
 
-
+baseline_results
 
 
 # In[ ]:
