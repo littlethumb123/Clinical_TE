@@ -392,6 +392,130 @@ Your metrics framework is **reasonably well-designed** for the multi-label next-
 
 The core metrics (loss, Recall@K, Precision@K, stratified accuracy) **do deliver correct directional information** for training and model comparison. The issues above affect absolute values and edge cases but shouldn't fundamentally mislead your architecture decisions.
 
+
+# Interpretation of the metrics with examples
+
+## Your Final Training Metrics (Batch 10900):
+```
+Loss: 0.0032 | R@10: 0.766 | R@20: 0.836 | μR@10: 0.404 | P@10: 0.190 | NDCG@20: 0.432 | PosBrier: 0.7467
+```
+
+## Your Validation Metrics:
+```
+Val loss: 0.0031, Recall@10: 0.785, μRecall@10: 0.426, NDCG@20: 0.450
+```
+
+---
+
+## Metric Explanation Table
+
+| Metric | Value | What It Means | Clinical Interpretation | Good/Bad? |
+|--------|-------|---------------|------------------------|-----------|
+| **Loss** | 0.0031 | Average BCE loss per prediction | Lower = better model confidence | ✅ **Excellent** (very low) |
+| **R@10 (Recall@10)** | 0.785 | "In 78.5% of days, at least one correct code appeared in top-10 predictions" | 78.5% of the time, your model puts a relevant diagnosis in the top-10 | ✅ **Good** (typical clinical AI: 70-85%) |
+| **R@20** | 0.836 | Same, but for top-20 | Better coverage with more predictions | ✅ **Good** |
+| **μR@10 (Micro-Recall@10)** | 0.426 | "Of ALL true codes across all days, 42.6% were found in top-10" | Per-code hit rate: you're capturing ~43% of individual diagnoses | ⚠️ **Moderate** (there's room to improve) |
+| **P@10 (Precision@10)** | 0.190 | "19% of top-10 predictions are correct" | 1.9 out of 10 predictions are right | ⚠️ **Expected** (with 6,297 codes, random baseline is 0.08%) |
+| **NDCG@20** | 0.450 | "Ranking quality normalized to ideal" | Correct codes tend to be ranked higher (45% of ideal) | ✅ **Decent** |
+| **PosBrier** | 0.75 | "How confident vs correct for positive labels" | Lower = better calibration (0.75 means probabilities are somewhat uncalibrated) | ⚠️ **Needs improvement** |
+
+---
+
+## Deep Dive: What Each Metric Tells You
+
+### 1. **Recall@K (R@K)** — "Did the model alert on at least one correct code?"
+
+**Your value: R@10 = 0.785 (78.5%)**
+
+**Clinical meaning:** If a patient will have diagnosis codes A, B, and C tomorrow, and the model predicts its top 10 guesses, 78.5% of the time at least one of A, B, or C is in those 10.
+
+**For clinical decision support:** This is the key metric. A doctor reviewing the top-10 predictions will see *something* relevant nearly 4 out of 5 times.
+
+**Why it's "stuck" at ~78%:** 
+- This is actually quite good for multi-label prediction with 6,297 possible codes
+- The remaining 22% likely represent rare codes or atypical patient trajectories
+- Improvement requires more training data or architectural changes
+
+---
+
+### 2. **Micro-Recall@K (μR@K)** — "What fraction of ALL correct codes did we capture?"
+
+**Your value: μR@10 = 0.426 (42.6%)**
+
+**Clinical meaning:** If a patient has codes A, B, C tomorrow (3 codes), and you predict 10 codes, μR@10 asks: "How many of A, B, C are in your 10?" If you get 2 of 3, that's 66.7% for that sample.
+
+**Why it's lower than R@10:**
+- R@10 is binary (any hit = success)
+- μR@10 penalizes for *missing* codes
+- With ~5-15 true codes per day and K=10, you can't mathematically get 100%
+
+**Interpretation:** Your model captures about 43% of all relevant diagnoses in its top-10. This is decent but shows the model prioritizes common/confident codes.
+
+---
+
+### 3. **Precision@K (P@K)** — "How many predictions are correct?"
+
+**Your value: P@10 = 0.190 (19%)**
+
+**Clinical meaning:** Of the 10 codes the model predicts, ~1.9 are actually correct.
+
+**Why it seems low:**
+- With 6,297 possible codes and ~5-15 true per day, random baseline is 0.08%
+- 19% is **237x better than random**
+- P@K is inherently limited by label sparsity
+
+**For clinical use:** This is actually quite good. The model is finding signal in a very sparse label space.
+
+---
+
+### 4. **NDCG@K** — "Are correct codes ranked higher?"
+
+**Your value: NDCG@20 = 0.450 (45%)**
+
+**Clinical meaning:** Normalized Discounted Cumulative Gain measures ranking quality. If NDCG=1.0, all correct codes are at the very top. NDCG=0.45 means correct codes tend to be ranked higher, but not perfectly.
+
+**Interpretation:** The model does a reasonable job of putting correct codes near the top. A physician looking at predictions would find relevant codes clustered toward the top rather than scattered.
+
+---
+
+### 5. **Positive-Only Brier Score (PosBrier)** — "Is the model confident when it should be?"
+
+**Your value: PosBrier = 0.75**
+
+**What it measures:** For codes that ARE true (positive labels), how close is the predicted probability to 1.0?
+- Brier = (probability - 1.0)² averaged across all positive labels
+- Perfect calibration = 0.0
+- Random guess (0.5) = 0.25
+- Always predicting 0 = 1.0
+
+**Your value of 0.75 means:** The model's probabilities for positive labels average around 0.13-0.15 (since (0.13-1.0)² ≈ 0.75).
+
+**Interpretation:** The model is under-confident on true positives. It's predicting low probabilities even for codes that will actually occur.
+
+**Why this happens:**
+- BCE loss with severe class imbalance pushes all probabilities toward 0
+- The sigmoid output is calibrated for "probability of a random code" not "probability among likely codes"
+
+**Improvement path:** Consider focal loss, label smoothing, or post-hoc calibration (Platt scaling).
+
+---
+
+## Summary: Your Model's Strengths and Weaknesses
+
+### ✅ Strengths:
+1. **High Recall@K** (78.5%): Alerts on relevant codes most of the time
+2. **Very low loss** (0.0031): Model is learning effectively
+3. **Good NDCG** (45%): Ranks correct codes higher
+4. **P@K 237x above random**: Strong discrimination ability
+
+### ⚠️ Areas for Improvement:
+1. **Micro-Recall is moderate** (42.6%): Missing some true codes, especially rare ones
+2. **Poor probability calibration** (PosBrier 0.75): Under-confident on positives
+3. **Plateau at ~78-81% R@10**: More epochs or data may be needed
+
+
+
+
 # Implementations
 
 ## Overview of Changes

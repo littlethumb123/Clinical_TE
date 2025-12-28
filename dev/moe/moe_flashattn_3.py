@@ -7,21 +7,51 @@
 
 # ##### Mixture-of-Experts (MoE) Experimentation Framework for Hierarchical Clinical Transformer
 # 
-# - Version Summary
-#     - Version 1 & 2 (`moe_flashattn_2.py`)
-#         - Initial implementation of 5-experiment MoE ablation study
-#         - Base framework with Flash Attention and MoE integration
-#         - Single GPU training support
-#         - Pre-training focused evaluation metrics
+# #### Version History
 # 
-#     - Version 3 (`moe_flashattn_3.py`)
-#         - **Distributed Data Parallel (DDP) support** for multi-GPU training
-#         - **Line of Business (LOB) feature** added as input embedding
-#         - **Medicaid IP Risk downstream task evaluation** using linear probe methodology
-#         - **Refactored experiment running** with modular helper functions
-#         - **Model saving/loading utilities** for inference and deployment
+# ##### Version 1 & 2 (`moe_flashattn_2.py`)
+# - Initial implementation of 5-experiment MoE ablation study
+# - Base framework with Flash Attention and MoE integration
+# - Single GPU training support
+# - Pre-training focused evaluation metrics
 # 
-# - Experiment Overview
+# ##### Version 3.0 (`moe_flashattn_3.py` - Initial Release)
+# - **Distributed Data Parallel (DDP) support** for multi-GPU training
+# - **Line of Business (LOB) feature** added as input embedding
+# - **Medicaid IP Risk downstream task evaluation** using linear probe methodology
+# - **Refactored experiment running** with modular helper functions
+# - **Model saving/loading utilities** for inference and deployment
+# 
+# ##### Version 3.1 (`moe_flashattn_3.py` - Current)
+# **New Features:**
+# - **Multi-LOB downstream evaluation** - Run downstream evaluation across Commercial, Medicare, Medicaid in one pipeline
+# - **XGBoost/LightGBM probe classifiers** - Gradient boosting alternatives to logistic regression
+# - **Probability calibration** - Isotonic regression calibration for better probability estimates
+# - **Top-percentile metrics** - Lift@K%, Precision@K%, Recall@K%, F1@K%, etc.
+# - **Standalone downstream evaluation** - Run downstream eval from saved model without retraining
+# - **DataParallelWrapper** - Efficient multi-GPU training with distributed loss computation
+# 
+# **GPU & Memory Optimizations:**
+# - **DataLoader workers limit** - Reduced from 32 to 4-8 to prevent kernel death from memory exhaustion
+# - **Gradient accumulation configuration** - Proper `accumulation_steps` parameter with default=1 for DataParallel
+# - **Learning rate scaling** - Linear scaling with `num_gpus` (was sqrt) for proper multi-GPU convergence
+# - **Scheduler T_max fix** - Correct total steps calculation for CosineAnnealingLR
+# - **Enhanced collate function** - Pre-computes multi-hot targets as tensors for DataParallel efficiency
+# - **Persistent workers** - `persistent_workers=True` for reduced DataLoader overhead
+# - **Memory leak prevention** - Explicit tensor deletion and gc.collect() in training loop
+# 
+# **Intrinsic Metrics Enhancements:**
+# - **MRR bug fix** - Uses best-ranked true code (was: arbitrary first code in list)
+# - **Micro-Recall@K** - Per-code hit rate: `sum(hits) / sum(true_labels)` across all samples
+# - **NDCG@K** - Normalized Discounted Cumulative Gain for ranking quality
+# - **Positive-Only Brier** - Calibration metric focused on positive labels (not dominated by TNs)
+# - **Macro AUROC/AUPRC** - Threshold-agnostic discriminative metrics
+# - **Renamed top_K_acc → recall@K** - Consistent naming throughout codebase
+# - **Removed mAP@K** - Problematic metric that excluded samples with no hits
+# 
+# ---
+# 
+# #### Experiment Overview
 # 
 # | Experiment | Model | Head Config | Activation | Load Balance | Precision | Daily Encoder |
 # |------------|-------|-------------|------------|--------------|-----------|---------------|
@@ -32,7 +62,7 @@
 # | **Exp 5: Fine-Grained MoE** | FlashMoETransformer | nhead=8, head_dim=32 | SwiGLU + GELU experts | Switch | FP16 | Flash Attention |
 # | **Exp 6: Auxiliary-Free MoE** | FlashMoETransformer | nhead=8, head_dim=32 | SwiGLU + GELU experts | DeepSeek | FP16 | Flash Attention |
 # 
-# - Experiment Variants
+# #### Experiment Variants
 # 
 # | Experiment Name | Type | Key Features | Rationale|
 # |----------------|------|--------------|-----------------|
@@ -55,95 +85,8 @@
 # | `exp6_auxiliary_free` | MoE | DeepSeek balancing, no aux loss | Aux-free MoE |
 # | `exp6a_auxiliary_free_layer4` | MoE | DeepSeek, MoE from layer 4 | Later DeepSeek |
 # | `exp6b_auxiliary_free_no-share-exp` | MoE | DeepSeek, no shared experts | Pure DeepSeek |
-# ---
 # 
-# ##### Version 3 Modifications
-# 
-# 1. Line of Business (LOB) Feature Support
-# 
-# **Configuration** (`BaseConfig`):
-# ```python
-# lob_vocab: int = 4  # LOB categories (0=padding, 1=Commercial, 2=Medicare, 3=Medicaid)
-# ```
-# 
-# **Data Processing**:
-# - New `conv_lob()` function maps LOB strings to indices
-# - `ClinicalDataset` now processes LOB column alongside age, gender, codes
-# - Input tensor dimension: **83** (age, gender, lob, 80 codes) vs **82** in v2
-# 
-# **Model Architecture**:
-# - All models (`BaselineTransformer`, `FlashAttentionTransformer`, `FlashMoETransformer`) now include:
-#   ```python
-#   self.embedding_lob = nn.Embedding(config.lob_vocab, config.embedding_size)
-#   ```
-# - LOB embedding added to combined representation:
-#   ```python
-#   cd = cd_res + cd + gender_cd + age_in_months + lob_emb
-#   ```
-# 
-# ---
-# 
-# 2a. **Data Parallelism (active for experimentation)**
-# 
-# Automatically enabled when `torch.cuda.device_count() > 1`:
-# 
-# ```python
-# num_gpus = torch.cuda.device_count()
-# use_data_parallel = num_gpus > 1
-# 
-# if use_data_parallel:
-#     model = nn.DataParallel(model)
-# ```
-# 
-# **Features**:
-# | Feature | Implementation |
-# |---------|----------------|
-# | Auto-detection | Enables when multiple GPUs available |
-# | Batch scaling | Effective batch = `batch_size * num_gpus` |
-# | Learning rate scaling | Square root scaling: `lr * sqrt(num_gpus)` |
-# | Checkpoint handling | Unwraps `model.module` for compatible saves |
-# 
-# **Scaling Example** (4 GPUs):
-# - Per-GPU batch size: 32
-# - Effective batch size: 128
-# - Base LR: 1e-4 → Scaled LR: 2e-4
-# 
-# **Helper Functions**:
-# | Function | Purpose |
-# |----------|---------|
-# | `save_checkpoint_multigpu()` | Save checkpoint compatible with DataParallel wrapper |
-# | `load_checkpoint_multigpu()` | Load checkpoint into wrapped or unwrapped model |
-# | `monitor_gpu_memory_usage()` | Track per-GPU memory for DataParallel |
-# 
-# ---
-# 
-# 2b. **Core DDP Functions (not used)**:
-# | Function | Description |
-# |----------|-------------|
-# | `setup_ddp()` | Initialize DDP, returns (local_rank, world_size, is_main) |
-# | `cleanup_ddp()` | Clean up distributed process group |
-# | `is_dist_initialized()` | Check if DDP is initialized |
-# | `get_world_size()` | Get number of processes (1 if single GPU) |
-# | `get_rank()` | Get current process rank |
-# | `is_main_process()` | Check if rank 0 |
-# | `reduce_tensor()` | Reduce tensor across all processes |
-# | `sync_metrics()` | Synchronize metrics across processes |
-# 
-# **Utility Functions**:
-# | Function | Description |
-# |----------|-------------|
-# | `print_rank()` | Print message with rank prefix |
-# | `print_main()` | Print only on main process |
-# | `barrier_with_timeout()` | Barrier with timeout for hang detection |
-# 
-# **Training Integration**:
-# - `train_epoch()` now accepts `is_main` and `use_ddp` parameters
-# - `run_single_experiment()` accepts `local_rank` and `world_size`
-# - DataLoader worker count scales with world size
-# 
-# ---
-# 
-# 3. Downstream Task Evaluation (Medicaid IP Risk)
+# #### Downstream Task Evaluation (Medicaid IP Risk)
 # 
 # **Configuration** (`DownstreamConfig`):
 # ```python
@@ -176,78 +119,8 @@
 # - [IP model tech report](https://aetnao365.sharepoint.com/:p:/r/sites/ClinicalEvaluationsTeam/Shared%20Documents/General/07%20Medicaid%20Projects/Predictive%20Models/Medicaid%20Inpatient%20Predictive%20Model/_Presentations/IP_model_refresh_2024_technical.pptx?d=w694afa0fbc6a440ab16928fa1092d9ca&csf=1&web=1&e=kv7eJJ) [Embedding presentation](https://aetnao365.sharepoint.com/:p:/r/sites/ClinicalEvaluationsTeam/_layouts/15/Doc.aspx?sourcedoc=%7B8427C238-2B55-4C46-908E-E5B55F58309D%7D&file=CLOB_embeddings_future_directions_20240430.pptx&action=edit&mobileredirect=true) and [Chiara PSS](https://teams.microsoft.com/l/message/19:meeting_ZjcwNWZkNzEtZTA0Mi00N2MyLTk1MWQtZGYzZGVhZWZiZWY4@thread.v2/1766165538582?context=%7B%22contextType%22%3A%22chat%22%7D)
 # ---
 # 
-# 4. Model Saving/Loading Utilities
 # 
-# **Functions**:
-# | Function | Purpose |
-# |----------|---------|
-# | `generate_model_name()` | Standardized naming: `{round}_{exp}_bs{batch}_ep{epochs}_d{embedding}_{timestamp}` |
-# | `save_trained_model()` | Lightweight save for inference (state dict + config + results) |
-# | `load_trained_model()` | Load model for inference or downstream evaluation |
-# | `run_downstream_evaluation()` | Convenience wrapper for downstream evaluation |
-# 
-# **Directory Structure** (post-training):
-# ```
-# logs/{experiment_round}/{exp_name}/
-# ├── checkpoints/                    # Training resume (save_checkpoint)
-# │   ├── checkpoint_latest.pt
-# │   ├── checkpoint_best.pt
-# │   └── checkpoint_epoch{N}.pt
-# ├── saved_models/                   # Inference (save_trained_model)
-# │   ├── {model_name}_final.pt
-# │   ├── {model_name}_config.json
-# │   └── {model_name}_results.json
-# ├── epoch_metrics.json
-# ├── batch_metrics.json
-# ├── config.json
-# ├── final_results.json
-# └── {exp_name}.log
-# ```
-# 
-# ---
-# 
-# - 5. Refactored Experiment Running
-# 
-# **Helper Functions**:
-# | Function | Purpose |
-# |----------|---------|
-# | `_setup_experiment_directories()` | Set up logging and checkpoint directories |
-# | `_create_model()` | Create model based on experiment type |
-# | `_create_dataloaders()` | Create train/val dataloaders with optional bucketing |
-# | `_resume_from_checkpoint()` | Resume training from checkpoint |
-# | `_build_epoch_metrics()` | Build comprehensive epoch metrics dictionary |
-# | `_build_final_results()` | Build final experiment results dictionary |
-# | `_model_has_moe()` | Check if model has MoE layers |
-# 
-# **Enhanced `run_single_experiment()` Parameters**:
-# ```python
-# def run_single_experiment(
-#     # ... existing parameters ...
-#     local_rank: Optional[int] = None,       # DDP: local GPU rank
-#     world_size: Optional[int] = None,       # DDP: total GPUs
-#     outcomes_df: Optional[pd.DataFrame] = None,  # Downstream outcomes
-#     run_downstream_eval: bool = False,      # Enable downstream evaluation
-#     save_model: bool = True                 # Save model after training
-# ) -> Dict[str, Any]:
-# ```
-# 
-# ---
-# 
-# - 6. Corresponding Test Functions
-# 
-# | Test Function | Coverage |
-# |---------------|----------|
-# | `test_conv_lob()` | LOB string conversion |
-# | `test_clinical_dataset_with_lob()` | Dataset with LOB support |
-# | `test_model_forward_with_lob()` | Model forward pass with LOB input |
-# | `test_ddp_initialization()` | DDP initialization on all GPUs |
-# | `test_model_saving_and_loading()` | Model save/load cycle |
-# | `test_downstream_evaluator_with_real_data()` | Downstream evaluation pipeline |
-# | `test_run_single_experiment_with_downstream()` | End-to-end with downstream |
-# 
-# ---
-# 
-# ##### Data Changes
+# #### Data Changes
 # 
 # | Version | Training Data | Validation Data |
 # |---------|--------------|-----------------|
@@ -259,41 +132,6 @@
 # - New: `lob` (Line of Business)
 # - For downstream: `individual_id`, `index_dt`, `acute_ip_flag`
 # 
-
-# #### Version 3 reflection
-
-# ##### Why Round 4 experimentations with downstream tasks did not perform well
-# -    
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
 
 # ### Import
 
@@ -369,7 +207,7 @@ df_val = pd.read_feather("sample_data/extrinsic_mdcd_ip/te_pretrain_val_mdcd_ip_
 df_train.columns
 
 
-# In[2]:
+# In[1]:
 
 
 """
@@ -409,13 +247,14 @@ import warnings
 from scipy import stats
 from torch.cuda.amp import GradScaler
 import logging
+from contextlib import nullcontext
 warnings.filterwarnings("ignore")
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[26]:
+# In[2]:
 
 
 # import for downstream evaluation
@@ -441,7 +280,7 @@ from datetime import datetime
 
 # ### Configurations
 
-# In[4]:
+# In[3]:
 
 
 # ============================================================================
@@ -508,7 +347,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[5]:
+# In[59]:
 
 
 @dataclass
@@ -549,8 +388,8 @@ class BaseConfig:
     lob_vocab: int = 4        # LOB categories (0=padding, 1=Commercial, 2=Medicare, 3=Medicaid)
     
     # Training
-    batch_size: int = 32     # Batch size per GPU (change from 16 to 32, 64 causes OOM)
-    learning_rate: float = 1e-4
+    batch_size: int = 32     # Batch size per GPU (change from 16 to 32, 64 is a aggressive and generate oom error 
+    learning_rate: float = 2e-4 # 1e-4 is a little conservative
     weight_decay: float = 0.01
     gradient_clip: float = 1.0  # Gradient clipping norm
     
@@ -572,7 +411,7 @@ class BaseExpDenseConfig(BaseConfig):
     - target_cd_cnt: 8850 target codes
     - Multi-label loss (BCEWithLogitsLoss)
     """
-    embedding_size: int = 512
+    embedding_size: int = 256
     nhid: int = 2048              # ← Standard 4x for GELU (512 * 4)
     
 @dataclass
@@ -620,12 +459,12 @@ class MoEConfig:
     num_experts: int = 8
     num_shared_experts: int = 0
     top_k: int = 2
-    expert_dropout: float = 0.05
+    expert_dropout: float = 0.1 # increase the expert dropout rate 
     
     # Load balancing
     load_balance_strategy: str = 'switch'  # 'switch' or 'deepseek'
     aux_loss_weight: float = 0.01
-    bias_lr: float = 1e-5
+    bias_lr: float = 5e-4 # increase the bais_lr to keep up with router learning
     bias_momentum: float = 0.9
     
     # Optional
@@ -633,10 +472,51 @@ class MoEConfig:
     use_moe_from_layer: int = 2  # Start MoE from layer 2  by default
     use_swiglu_experts: bool = False
 
+@dataclass
+class OptimizeConfig:
+    """
+    - Higher learning rate (2e-4 vs 1e-4)
+    - OneCycleLR scheduler (default)
+    - BCE with pos_weight for rare code handling
+    """
+    # ============================================================
+    # SCHEDULER
+    # options include linear, cosine and onecycle; choose onecycle first
+    # ============================================================
+    scheduler_type: str = 'onecycle'  # 'onecycle' | 'linear' | 'cosine'
+    warmup_pct: float = 0.15          # Warmup as fraction of total steps, for the first 15% of total steps, LR ramps linearly from ~0 to peak.
+    min_lr_ratio: float = 0.01        # End LR = peak * min_lr_ratio, the LR decays down to 20%
+    
+    # OneCycle specific
+    onecycle_pct_start: float = 0.30  # Fraction of training to ramp up
+    onecycle_div_factor: float = 25   # start_lr = max_lr / div_factor
+    onecycle_final_div: float = 1000  # end_lr = max_lr / final_div
+    
+    # Linear specific
+    plateau_pct: float = 0.30         # Stay at peak for this fraction after warmup, after warmup, LR stays at peak for 35% of total steps.
+    
+    # ============================================================
+    # LOSS FUNCTION
+    # ============================================================
+    use_pos_weight: bool = True       # Enable frequency-based BCE weighting
+    pos_weight_max: float = 100.0         # Cap weight to avoid instability
+    pos_weight_method: str = 'tiered'     # Options: 'inverse', 'log_scaled', 'ens', 'tiered'
+    
+    # Tiered weighting configuration (when pos_weight_method='tiered')
+    tier_weights: dict = None  # Will use default if None
+    
+    # Effective Number of Samples (when pos_weight_method='ens') optional, need tune on beta
+    ens_beta: float = 0.9999              # Higher = more aggressive reweighting
+    
+    # ============================================================
+    # FOCAL LOSS; consider add weights to hard classified cases
+    # ============================================================
+    use_focal_loss: bool = False          # Set True to enable focal loss
+    focal_gamma: float = 2.0              # Focusing parameter (0=BCE, 2=standard, 3=aggressive)
+    focal_alpha: float = 0.25             # Balance factor for positive class   
 
 
-
-# In[6]:
+# In[5]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -820,9 +700,9 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             top_k=2,
             load_balance_strategy='deepseek',  # DeepSeek bias correction
             aux_loss_weight=0.0,  # No auxiliary loss
-            bias_lr=1e-5,
-            bias_momentum=0.9,
-            expert_dropout=0.05,
+            bias_lr=1e-3,          # 100× increase from 1e-5
+            bias_momentum=0.8,     # Lower momentum for faster adaptation
+            expert_dropout=0.1,    # Increase from 0.05
             use_moe_from_layer=2,
             use_swiglu_experts = True
         ),
@@ -838,9 +718,9 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             top_k=2,
             load_balance_strategy='deepseek',  # DeepSeek bias correction
             aux_loss_weight=0.0,  # No auxiliary loss
-            bias_lr=1e-5,
-            bias_momentum=0.9,
-            expert_dropout=0.05,
+            bias_lr=1e-3,          # 100× increase from 1e-5
+            bias_momentum=0.8,     # Lower momentum for faster adaptation
+            expert_dropout=0.1,    # Increase from 0.05
             use_moe_from_layer=4,
             use_swiglu_experts = True
         ),
@@ -855,19 +735,65 @@ def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
             top_k=2,
             load_balance_strategy='deepseek',  # DeepSeek bias correction
             aux_loss_weight=0.0,  # No auxiliary loss
-            bias_lr=1e-5,
-            bias_momentum=0.9,
-            expert_dropout=0.05,
+            bias_lr=1e-3,          # 100× increase from 1e-5
+            bias_momentum=0.8,     # Lower momentum for faster adaptation
+            expert_dropout=0.1,    # Increase from 0.05
             use_moe_from_layer=2,
             use_swiglu_experts = True
         ),
         True  # Use learned pooling
     )    
-    
-    
-    
-    
-    
+    configs['exp6c_auxiliary_free_fine-grained16'] = (
+        MoEConfig(
+            d_model=256,
+            d_ff=512,
+            num_experts=16,
+            num_shared_experts=1,
+            top_k=2,
+            load_balance_strategy='deepseek',  # DeepSeek bias correction
+            aux_loss_weight=0.0,  # No auxiliary loss
+            bias_lr=1e-3,          # 100× increase from 1e-5
+            bias_momentum=0.8,     # Lower momentum for faster adaptation
+            expert_dropout=0.1,    # Increase from 0.05
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),
+        True  # Use learned pooling
+    ) 
+    configs['exp6d_auxiliary_free_fine-grained16_shared2'] = (
+        MoEConfig(
+            d_model=256,
+            d_ff=512,
+            num_experts=16,
+            num_shared_experts=1,
+            top_k=2,
+            load_balance_strategy='deepseek',  # DeepSeek bias correction
+            aux_loss_weight=0.0,  # No auxiliary loss
+            bias_lr=1e-3,          # 100× increase from 1e-5
+            bias_momentum=0.8,     # Lower momentum for faster adaptation
+            expert_dropout=0.1,    # Increase from 0.05
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),
+        True  # Use learned pooling
+    )    
+    configs['exp6e_auxiliary_free_fine-grained32-shared2'] = (
+        MoEConfig(
+            d_model=256,
+            d_ff=512,
+            num_experts=16,
+            num_shared_experts=1,
+            top_k=2,
+            load_balance_strategy='deepseek',  # DeepSeek bias correction
+            aux_loss_weight=0.0,  # No auxiliary loss
+            bias_lr=1e-3,          # 100× increase from 1e-5
+            bias_momentum=0.8,     # Lower momentum for faster adaptation
+            expert_dropout=0.1,    # Increase from 0.05
+            use_moe_from_layer=2,
+            use_swiglu_experts = True
+        ),
+        True  # Use learned pooling
+    ) 
     return configs
 
 
@@ -1013,9 +939,158 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
     return synced
 
 
+# ### Focal loss
+
+# In[57]:
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for multi-label classification with extreme class imbalance.
+    
+    Focal Loss down-weights easy examples to focus training on hard ones.
+    Can be combined with pos_weight for class-balanced focal loss.
+    
+    Formula:
+        FL(p, y) = -α × (1-p)^γ × log(p) × y  
+                 - (1-α) × p^γ × log(1-p) × (1-y)
+    
+    When combined with pos_weight:
+        Combined = pos_weight[class] × FL(p, y)
+    
+    Args:
+        gamma: Focusing parameter
+               - gamma=0: Equivalent to BCE
+               - gamma=2: Standard (recommended)
+               - gamma=3+: Aggressive (for extreme imbalance)
+        alpha: Balance between positive/negative
+               - alpha=0.25: Typical for many negatives
+               - alpha=0.5: Balanced
+        pos_weight: Optional per-class weights [num_classes]
+        reduction: 'mean', 'sum', or 'none'
+    
+    Reference:
+        "Focal Loss for Dense Object Detection" (Lin et al., ICCV 2017)
+    """
+    
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: float = 0.25,
+        pos_weight: Optional[torch.Tensor] = None,
+        reduction: str = 'mean'
+    ):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.pos_weight = pos_weight
+        self.reduction = reduction
+        
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Compute focal loss.
+        
+        Args:
+            logits: [batch, ..., num_classes] raw model outputs (before sigmoid)
+            targets: [batch, ..., num_classes] binary targets (0 or 1)
+        
+        Returns:
+            Focal loss (scalar if reduction='mean' or 'sum')
+        """
+        # Ensure same dtype
+        if targets.dtype != logits.dtype:
+            targets = targets.to(logits.dtype)
+        
+        # Compute probabilities (numerically stable)
+        p = torch.sigmoid(logits)
+        
+        # Compute focal modulation weights
+        # For positives (y=1): weight = (1-p)^γ  → down-weight when p is high (easy)
+        # For negatives (y=0): weight = p^γ     → down-weight when p is low (easy)
+        p_t = p * targets + (1 - p) * (1 - targets)
+        focal_weight = (1 - p_t) ** self.gamma
+        
+        # Compute alpha weights (balance positive/negative contribution)
+        alpha_weight = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        
+        # Compute BCE component (numerically stable)
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+        
+        # Apply focal modulation and alpha
+        focal_loss = alpha_weight * focal_weight * bce
+        
+        # Apply per-class pos_weight if provided (for class imbalance)
+        if self.pos_weight is not None:
+            # Ensure pos_weight is on same device
+            if self.pos_weight.device != focal_loss.device:
+                self.pos_weight = self.pos_weight.to(focal_loss.device)
+            
+            # pos_weight shape: [num_classes]
+            # focal_loss shape: [batch, ..., num_classes]
+            # Broadcast and multiply
+            focal_loss = focal_loss * self.pos_weight
+        
+        # Reduction
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+    
+
+class CombinedFocalBCELoss(nn.Module):
+    """
+    Wrapper that supports switching between BCE and Focal Loss.
+    
+    Provides a unified interface for the training loop.
+    
+    Usage:
+        # BCE only
+        criterion = CombinedFocalBCELoss(use_focal=False, pos_weight=weights)
+        
+        # Focal only
+        criterion = CombinedFocalBCELoss(use_focal=True, gamma=2.0, pos_weight=weights)
+        
+        # Both (Focal with class weights)
+        criterion = CombinedFocalBCELoss(
+            use_focal=True,
+            gamma=2.0,
+            alpha=0.25,
+            pos_weight=weights  # Class-level weighting
+        )
+    """
+    
+    def __init__(
+        self,
+        use_focal: bool = False,
+        gamma: float = 2.0,
+        alpha: float = 0.25,
+        pos_weight: Optional[torch.Tensor] = None,
+        reduction: str = 'mean'
+    ):
+        super().__init__()
+        self.use_focal = use_focal
+        
+        if use_focal:
+            self.criterion = FocalLoss(
+                gamma=gamma,
+                alpha=alpha,
+                pos_weight=pos_weight,
+                reduction=reduction
+            )
+        else:
+            self.criterion = nn.BCEWithLogitsLoss(
+                pos_weight=pos_weight,
+                reduction=reduction
+            )
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        return self.criterion(logits, targets)
+
+
 # ### Data parellelism
 
-# In[7]:
+# In[6]:
 
 
 class DataParallelWrapper(nn.Module):
@@ -1263,7 +1338,7 @@ print(f"Predictions shape: {extras['predictions'].shape}")
 
 # ### RPE and Swiglu
 
-# In[8]:
+# In[7]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -1421,7 +1496,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[9]:
+# In[8]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1687,7 +1762,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[10]:
+# In[9]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1788,7 +1863,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[11]:
+# In[10]:
 
 
 # ============================================================================
@@ -2202,7 +2277,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[12]:
+# In[11]:
 
 
 # ============================================================================
@@ -2383,7 +2458,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[13]:
+# In[12]:
 
 
 # ============================================================================
@@ -2606,7 +2681,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[14]:
+# In[13]:
 
 
 # ============================================================================
@@ -2865,7 +2940,7 @@ class FlashMoETransformer(nn.Module):
                     if self.training and return_moe_losses:
                         total_aux_loss += moe_losses['aux_loss']
                         if 'expert_usage' in moe_losses:
-                            expert_usage_list.append(moe_losses['expert_usage'].detach().cpu)
+                            expert_usage_list.append(moe_losses['expert_usage'].detach())
                 else:
                     cd_ffn = layer['ffn'](cd_norm)
 
@@ -3070,7 +3145,7 @@ test_model_forward_with_lob()
 
 # #### Preprocess data with data loader
 
-# In[15]:
+# In[56]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -3131,8 +3206,24 @@ class ClinicalDataset(Dataset):
             'target': self.targets[idx]
         }
 
+@dataclass
+class PreparedData:
+    """
+    Container for pre-computed expensive data artifacts.
+    Reuse across multiple experiment runs to avoid redundant computation.
+    """
+    train_dataset: ClinicalDataset
+    val_dataset: ClinicalDataset
+    code_frequencies: np.ndarray
+    config: BaseConfig  # The config used for dataset creation
+    
+    def __repr__(self):
+        return (f"PreparedData(train_samples={len(self.train_dataset)}, "
+                f"val_samples={len(self.val_dataset)}, "
+                f"code_frequencies_shape={self.code_frequencies.shape})")
 
-# In[16]:
+
+# In[15]:
 
 
 from functools import partial
@@ -3269,7 +3360,7 @@ print(f"dt_cnt type: {type(batch['dt_cnt'])}")  # Should be torch.Tensor
 
 # #### Data preparation
 
-# In[17]:
+# In[16]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -3544,9 +3635,9 @@ def create_multihot_targets_vectorized(
 
 
 
-# #### Loss function
+# #### Loss function (Legacy, used only in test)
 
-# In[18]:
+# In[17]:
 
 
 def compute_loss(
@@ -3864,10 +3955,10 @@ def diagnose_with_trained_checkpoint():
     model = BaselineTransformer(config).to(device)
     
     # Load trained weights
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    print(f"✅ Loaded trained model from epoch {checkpoint['epoch']}")
-    print(f"   Checkpoint metrics: {checkpoint['metrics'][-1] if checkpoint['metrics'] else 'None'}")
+    checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint_data['model_state_dict'])
+    print(f"✅ Loaded trained model from epoch {checkpoint_data['epoch']}")
+    print(f"   Checkpoint metrics: {checkpoint_data['metrics'][-1] if checkpoint_data['metrics'] else 'None'}")
     
     # Create loaders
     train_subset = df_train.head(320)
@@ -4082,9 +4173,775 @@ test_conv_lob()
 
 
 
+# #### Weighted loss function(weighted + Focal loss)
+
+# In[61]:
+
+
+# ============================================================
+# Pos weighting methods 
+# Log-Scaled	Smooth gradients	Continuous, no sudden jumps	Hard to interpret exact boosts
+# ENS	Theoretical rigor	Single β parameter, principled	Sensitive to β choice
+# Tiered	Explicit control	Interpretable, tunable	Discrete (may miss nuance)
+# ============================================================
+
+def compute_log_scaled_weights(
+    code_frequencies: np.ndarray,
+    device: torch.device,
+    max_weight: float = 100.0,
+    min_weight: float = 1.0
+) -> torch.Tensor:
+    """
+    Log-scaled inverse frequency weighting.
+    
+    Compresses extreme imbalance ratios (e.g., 16M:1) to manageable range
+    while preserving relative ordering.
+    
+    Formula: weight = log(max_freq + 1) / log(freq + 1), then scaled to [min, max]
+    
+    Example for 16M:1 imbalance:
+        - Freq=1 → weight ≈ 100 (not 16M!)
+        - Freq=479 → weight ≈ 38
+        - Freq=16.9M → weight ≈ 1
+    """
+    # Add 1 to handle zero frequencies
+    freq_safe = code_frequencies.astype(np.float64) + 1.0
+    
+    # Log-transform
+    log_freq = np.log(freq_safe)
+    log_max = np.log(freq_safe.max())
+    
+    # Inverse log ratio
+    weights = log_max / np.maximum(log_freq, 1e-8)
+    
+    # Scale to desired range [min_weight, max_weight]
+    weights_norm = (weights - weights.min()) / (weights.max() - weights.min() + 1e-8)
+    weights_scaled = min_weight + weights_norm * (max_weight - min_weight)
+    
+    # Final clipping for safety
+    weights_final = np.clip(weights_scaled, min_weight, max_weight)
+    
+    print(f"  Log-scaled weights: min={weights_final.min():.2f}, max={weights_final.max():.2f}, "
+          f"mean={weights_final.mean():.2f}, median={np.median(weights_final):.2f}")
+    
+    return torch.tensor(weights_final, dtype=torch.float32, device=device)
+
+
+def compute_effective_number_weights(
+    code_frequencies: np.ndarray,
+    device: torch.device,
+    beta: float = 0.9999,
+    max_weight: float = 100.0,
+    min_weight: float = 1.0
+) -> torch.Tensor:
+    """
+    Class-balanced loss using Effective Number of Samples (ENS).
+    
+    From: "Class-Balanced Loss Based on Effective Number of Samples" (Cui et al., CVPR 2019)
+    
+    Formula: 
+        E_n = (1 - β^n) / (1 - β)
+        weight = 1 / E_n
+    
+    Args:
+        beta: Controls how fast returns diminish
+              - beta=0.9:    Mild reweighting
+              - beta=0.999:  Moderate
+              - beta=0.9999: Aggressive (for extreme imbalance like yours)
+    """
+    freq_safe = code_frequencies.astype(np.float64)
+    freq_safe[freq_safe == 0] = 1  # Handle zero frequencies
+    
+    # Effective number: E_n = (1 - β^n) / (1 - β)
+    effective_n = (1.0 - np.power(beta, freq_safe)) / (1.0 - beta)
+    
+    # Weight inversely proportional to effective number
+    weights = 1.0 / effective_n
+    
+    # Normalize to [min_weight, max_weight]
+    weights_norm = (weights - weights.min()) / (weights.max() - weights.min() + 1e-8)
+    weights_scaled = min_weight + weights_norm * (max_weight - min_weight)
+    
+    weights_final = np.clip(weights_scaled, min_weight, max_weight)
+    
+    print(f"  ENS weights (beta={beta}): min={weights_final.min():.2f}, max={weights_final.max():.2f}, "
+          f"mean={weights_final.mean():.2f}, median={np.median(weights_final):.2f}")
+    
+    return torch.tensor(weights_final, dtype=torch.float32, device=device)
+
+
+def compute_tiered_weights(
+    code_frequencies: np.ndarray,
+    device: torch.device,
+    tier_config: Optional[dict] = None
+) -> torch.Tensor:
+    """
+    Quantile-based tiered weighting with explicit control.
+    
+    Assigns discrete weights to frequency tiers, giving explicit,
+    interpretable control over the boost for each tier.
+    
+    Default tiers (based on percentiles of non-zero frequencies):
+        - Ultra-rare (0-5th percentile):   weight = 100
+        - Tail (5-25th percentile):        weight = 50
+        - Rare (25-50th percentile):       weight = 25
+        - Medium (50-75th percentile):     weight = 10
+        - Common (75-90th percentile):     weight = 3
+        - Very common (>90th percentile):  weight = 1
+    
+    Args:
+        code_frequencies: Array of code frequencies
+        device: Torch device
+        tier_config: Optional dict to override default tier weights
+    """
+    if tier_config is None:
+        tier_config = {
+            'ultra_rare':  {'percentile': (0, 5),    'weight': 100},
+            'tail':        {'percentile': (5, 25),   'weight': 50},
+            'rare':        {'percentile': (25, 50),  'weight': 25},
+            'medium':      {'percentile': (50, 75),  'weight': 10},
+            'common':      {'percentile': (75, 90),  'weight': 3},
+            'very_common': {'percentile': (90, 100), 'weight': 1},
+        }
+    
+    # Get non-zero frequencies for percentile calculation
+    freq_nz = code_frequencies[code_frequencies > 0]
+    
+    # Initialize all weights to 1
+    weights = np.ones(len(code_frequencies), dtype=np.float32)
+    
+    print("  Tiered weights distribution:")
+    for tier_name, config in tier_config.items():
+        p_low, p_high = config['percentile']
+        weight = config['weight']
+        
+        # Calculate frequency thresholds
+        thresh_low = np.percentile(freq_nz, p_low) if p_low > 0 else 0
+        thresh_high = np.percentile(freq_nz, p_high) if p_high < 100 else np.inf
+        
+        # Create mask for this tier
+        if p_low == 0:
+            # Include zero-frequency codes in the lowest tier
+            mask = (code_frequencies >= thresh_low) & (code_frequencies < thresh_high)
+            mask = mask | (code_frequencies == 0)
+        else:
+            mask = (code_frequencies >= thresh_low) & (code_frequencies < thresh_high)
+        
+        weights[mask] = weight
+        
+        count = mask.sum()
+        print(f"    {tier_name:<12}: {count:>5} codes (freq {thresh_low:.0f}-{thresh_high:.0f}), weight={weight}")
+    
+    print(f"  Final: min={weights.min():.2f}, max={weights.max():.2f}, "
+          f"mean={weights.mean():.2f}, median={np.median(weights):.2f}")
+    
+    return torch.tensor(weights, dtype=torch.float32, device=device)
+
+def create_criterion(
+    code_frequencies: np.ndarray,
+    device: torch.device,
+    optimize_config: 'OptimizeConfig'
+) -> nn.Module:
+    """
+    Factory function to create the appropriate loss criterion.
+    
+    Handles:
+    1. Weight computation method (inverse, log_scaled, ens, tiered)
+    2. BCE vs Focal Loss selection
+    3. Combining pos_weight with loss function
+    
+    Args:
+        code_frequencies: Array of code frequencies
+        device: Torch device
+        optimize_config: Configuration with loss settings
+    
+    Returns:
+        Configured loss criterion (BCEWithLogitsLoss or FocalLoss)
+    """
+    pos_weight = None
+    
+    # Step 1: Compute pos_weight if enabled
+    if optimize_config.use_pos_weight:
+        method = optimize_config.pos_weight_method
+        max_weight = optimize_config.pos_weight_max
+        
+        print(f"  Computing pos_weight using method: '{method}'")
+        
+        if method == 'log_scaled':
+            pos_weight = compute_log_scaled_weights(
+                code_frequencies, device, max_weight=max_weight
+            )
+        elif method == 'ens':
+            pos_weight = compute_effective_number_weights(
+                code_frequencies, device, 
+                beta=optimize_config.ens_beta,
+                max_weight=max_weight
+            )
+        elif method == 'tiered':
+            pos_weight = compute_tiered_weights(
+                code_frequencies, device,
+                tier_config=optimize_config.tier_weights
+            )
+        else:  # Default: 'inverse' - original method
+            pos_weight = compute_pos_weights(
+                code_frequencies, device, max_weight=max_weight
+            )
+    
+    # Step 2: Create criterion (Focal or BCE)
+    if optimize_config.use_focal_loss:
+        criterion = FocalLoss(
+            gamma=optimize_config.focal_gamma,
+            alpha=optimize_config.focal_alpha,
+            pos_weight=pos_weight,
+            reduction='mean'
+        )
+        loss_name = f"FocalLoss(gamma={optimize_config.focal_gamma}, alpha={optimize_config.focal_alpha})"
+    else:
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        loss_name = "BCEWithLogitsLoss"
+    
+    # Log what was created
+    if pos_weight is not None:
+        print(f"  Created: {loss_name} with pos_weight ({optimize_config.pos_weight_method})")
+    else:
+        print(f"  Created: {loss_name} without pos_weight")
+    
+    return criterion
+
+
+# In[31]:
+
+
+def _calculate_model_dimensions(embedding_size: int, 
+                                use_swiglu: bool = False) -> dict:
+    """
+    Calculate optimal nhead and nhid based on embedding_size and industry best practices.
+    
+    Industry Standards:
+    - nhead: Chosen to give head_dim of 32, 64, or 128 (optimal for Flash Attention)
+    - nhid: For standard FFN: 4x embedding_size
+            For SwiGLU: ~8/3 x embedding_size (LLaMA, PaLM standard)
+    
+    Args:
+        embedding_size: Model dimension (d_model)
+        use_swiglu: Whether using SwiGLU activation (True for Flash/MoE models)
+    
+    Returns:
+        dict with 'nhead' and 'nhid'
+    """
+    # ============================================================
+    # NHEAD CALCULATION (Target head_dim: 64 preferred, 32 or 128 acceptable)
+    # ============================================================
+    if embedding_size <= 256:
+        # 256 / 8 = 32 (good for Flash Attention)
+        nhead = 8
+    elif embedding_size <= 512:
+        # 512 / 8 = 64 (optimal for Flash Attention)
+        nhead = 8
+    elif embedding_size <= 768:
+        # 768 / 12 = 64 (BERT-base standard)
+        nhead = 12
+    elif embedding_size <= 1024:
+        # 1024 / 16 = 64 (optimal)
+        nhead = 16
+    elif embedding_size <= 2048:
+        # 2048 / 32 = 64 (optimal)
+        nhead = 32
+    else:
+        # For very large models, target head_dim=128
+        nhead = embedding_size // 128
+    
+    # ============================================================
+    # NHID CALCULATION
+    # ============================================================
+    if use_swiglu:
+        # SwiGLU uses 3 projections instead of 2
+        # To match parameter count: nhid_swiglu = (2/3) * nhid_standard
+        # Standard: nhid = 4 * d_model
+        # SwiGLU: nhid = (2/3) * 4 * d_model = (8/3) * d_model ≈ 2.67 * d_model
+        # Round to nearest multiple of 64 for memory alignment
+        nhid_raw = int((8 / 3) * embedding_size)
+        nhid = ((nhid_raw + 63) // 64) * 64  # Round up to multiple of 64
+    else:
+        # Standard FFN: 4x expansion (Vaswani et al. 2017)
+        nhid = 4 * embedding_size
+    
+    return {
+        'nhead': nhead,
+        'nhid': nhid,
+        'head_dim': embedding_size // nhead  # For logging
+    }
+
+
+# In[32]:
+
+
+# ============================================================================
+# EXPERIMENT HELPER FUNCTIONS
+# ============================================================================
+
+def _setup_experiment_directories(
+    log_dir: str,
+    experiment_round: Optional[str],
+    exp_name: str,
+    checkpoint_dir: Optional[str]
+) -> Tuple[str, str]:
+    """Set up logging and checkpoint directories."""
+    if experiment_round is not None:
+        effective_log_dir = os.path.join(log_dir, experiment_round)
+    else:
+        datetime_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        effective_log_dir = os.path.join(log_dir, f"exp_{datetime_string}")
+    
+    if checkpoint_dir is None:
+        checkpoint_dir = os.path.join(effective_log_dir, exp_name, 'checkpoints')
+    
+    return effective_log_dir, checkpoint_dir
+
+
+def _create_model(
+    exp_name: str,
+    eff_d_model: int,
+    eff_nhid: int,
+    eff_nhead: int,
+    moe_config: Optional[MoEConfig],
+    use_learnt_att_pool: bool,
+    device: torch.device,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[nn.Module, BaseConfig, bool, bool]:
+    """
+    Create model based on experiment type.
+    
+    Returns:
+        model, config, use_mixed_precision, use_bucketing
+    """
+    is_baseline = exp_name == 'exp1_dense_baseline'
+    is_flash_dense = exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']
+    is_moe = moe_config is not None and not is_baseline and not is_flash_dense
+    
+    if is_baseline:
+        config = BaseConfig(embedding_size=eff_d_model, nhid=eff_nhid)
+        model = BaselineTransformer(config).to(device)
+        use_mixed_precision = False
+        use_bucketing = False
+        if logger:
+            logger.info(f"Model: Baseline Transformer (FP32)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead=16 (hardcoded)")
+            
+    elif is_flash_dense:
+        config = FlashAttentionConfig(
+            embedding_size=eff_d_model,
+            nhid=eff_nhid,
+            nhead=eff_nhead,
+            use_swiglu=True,
+            dtype=torch.float16,
+            use_learnt_att_pool=use_learnt_att_pool
+        )
+        model = FlashAttentionTransformer(config).to(device)
+        use_mixed_precision = True
+        use_bucketing = True
+        if logger:
+            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
+            logger.info(f"Model: Flash Attention Transformer (FP16)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
+            logger.info(f"  Daily Encoder: {pooling_str}")
+            
+    else:
+        # MoE variant
+        config = FlashAttentionConfig(
+            embedding_size=eff_d_model,
+            nhid=eff_nhid,
+            nhead=eff_nhead,
+            use_swiglu=True,
+            dtype=torch.float16,
+            use_learnt_att_pool=use_learnt_att_pool
+        )
+        if moe_config:
+            import copy
+            moe_config = copy.deepcopy(moe_config)
+            moe_config.d_model = eff_d_model
+            moe_config.d_ff = eff_nhid
+            
+        model = FlashMoETransformer(config, moe_config).to(device)
+        use_mixed_precision = True
+        use_bucketing = True
+        if logger:
+            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
+            logger.info(f"Model: Flash + MoE Transformer (FP16)")
+            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
+            logger.info(f"  Daily Encoder: {pooling_str}")
+            logger.info(f"  MoE: {moe_config.num_experts} experts, top-{moe_config.top_k}")
+    
+    return model, config, use_mixed_precision, use_bucketing
+
+
+def prepare_data_once(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    config: Optional[BaseConfig] = None,
+    device: torch.device = None,
+    code_freq_sample_fraction: float = 1.0
+) -> PreparedData:
+    """
+    Prepare datasets and code frequencies ONCE for reuse across multiple experiments.
+    
+    This is the expensive operation that should only run once.
+    All experiments can then share the prepared data.
+    
+    Args:
+        train_data: Training DataFrame
+        val_data: Validation DataFrame  
+        config: BaseConfig with data dimensions (len_dy, len_cd, target_cd_cnt)
+                If None, uses default BaseConfig()
+        device: Torch device (for code frequency computation)
+        code_freq_sample_fraction: Fraction of data to use for code frequency (1.0 = all)
+    
+    Returns:
+        PreparedData containing:
+        - train_dataset: Pre-processed ClinicalDataset
+        - val_dataset: Pre-processed ClinicalDataset
+        - code_frequencies: Pre-computed code frequencies
+        - config: The config used
+    
+    Example:
+        # Prepare once
+        prepared = prepare_data_once(df_train, df_val, device=device)
+        
+        # Run multiple experiments with prepared data
+        for exp_name in ['exp1_dense_baseline', 'exp2_dense_flash', 'exp3_standard_moe']:
+            results = run_single_experiment(
+                exp_name=exp_name,
+                prepared_data=prepared,  # Reuse prepared data
+                ...
+            )
+    """
+    if config is None:
+        config = BaseConfig()
+    
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    print("\n" + "="*80)
+    print("PREPARING DATA (ONE-TIME OPERATION)")
+    print("="*80)
+    start_time = time.time()
+    
+    # ============================================================
+    # STEP 1: Create Datasets
+    # ============================================================
+    print("\n[1/3] Creating training dataset...")
+    train_dataset = ClinicalDataset(train_data, config)
+    
+    print("\n[2/3] Creating validation dataset...")
+    val_dataset = ClinicalDataset(val_data, config)
+    
+    # ============================================================
+    # STEP 2: Compute Code Frequencies
+    # ============================================================
+    print("\n[3/3] Computing code frequencies...")
+    code_frequencies = _compute_code_frequencies_from_dataset(
+        train_dataset, 
+        config,
+        sample_fraction=code_freq_sample_fraction
+    )
+    
+    elapsed = time.time() - start_time
+    print(f"\n✅ Data preparation complete in {elapsed:.1f}s")
+    print(f"   Train samples: {len(train_dataset):,}")
+    print(f"   Val samples: {len(val_dataset):,}")
+    print(f"   Unique codes: {np.sum(code_frequencies > 0):,}")
+    print("="*80 + "\n")
+    
+    return PreparedData(
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        code_frequencies=code_frequencies,
+        config=config
+    )
+
+
+def _compute_code_frequencies_from_dataset(
+    dataset: ClinicalDataset,
+    config: BaseConfig,
+    sample_fraction: float = 1.0
+) -> np.ndarray:
+    """
+    Compute code frequencies directly from a ClinicalDataset (no re-parsing).
+    
+    This is much faster than compute_code_frequencies() because:
+    - Uses already-parsed dataset (no string parsing)
+    - No DataLoader overhead for simple iteration
+    """
+    code_frequencies = np.zeros(config.target_cd_cnt, dtype=np.int64)
+    train_code_counts = Counter()
+    
+    n_samples = len(dataset)
+    if sample_fraction < 1.0:
+        n_samples = int(n_samples * sample_fraction)
+        indices = np.random.choice(len(dataset), n_samples, replace=False)
+    else:
+        indices = range(n_samples)
+    
+    print(f"  Processing {n_samples:,} samples...")
+    
+    for idx_count, idx in enumerate(indices):
+        item = dataset[idx]
+        target_list = item['target']  # List[List[int]]
+        
+        for day_codes in target_list:
+            for code in day_codes:
+                if code != 0:
+                    train_code_counts[code] += 1
+        
+        if (idx_count + 1) % 100000 == 0:
+            print(f"    Processed {idx_count + 1:,}/{n_samples:,} samples...")
+    
+    # Convert Counter to array
+    for code_idx, count in train_code_counts.items():
+        if 0 <= code_idx < config.target_cd_cnt:
+            code_frequencies[code_idx] = count
+    
+    non_zero_codes = np.sum(code_frequencies > 0)
+    print(f"  ✅ Found {non_zero_codes:,} unique codes")
+    
+    return code_frequencies
+
+def _create_dataloaders(
+    train_data: Union[pd.DataFrame, ClinicalDataset],
+    val_data: Union[pd.DataFrame, ClinicalDataset],
+    config: BaseConfig,
+    use_bucketing: bool,
+    train_data_df: Optional[pd.DataFrame] = None,  # Needed for bucketing sampler
+    world_size: int = 1,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[DataLoader, DataLoader]:
+    """
+    Create train and validation dataloaders.
+    
+    Args:
+        train_data: Either a DataFrame (legacy) or pre-created ClinicalDataset
+        val_data: Either a DataFrame (legacy) or pre-created ClinicalDataset
+        config: Model configuration with batch_size
+        use_bucketing: Whether to use bucketing batch sampler
+        train_data_df: Original DataFrame (required for bucketing if train_data is Dataset)
+        world_size: Number of distributed processes
+        logger: Optional logger
+    
+    Returns:
+        (train_loader, val_loader)
+    """
+    # Handle both Dataset and DataFrame inputs for backward compatibility
+    if isinstance(train_data, ClinicalDataset):
+        train_dataset = train_data
+    else:
+        train_dataset = ClinicalDataset(train_data, config)
+        train_data_df = train_data  # Save for bucketing
+    
+    if isinstance(val_data, ClinicalDataset):
+        val_dataset = val_data
+    else:
+        val_dataset = ClinicalDataset(val_data, config)
+    
+    n_workers = min(4, os.cpu_count() // 4)
+    collate_fn = create_collate_fn(config)
+    
+    if use_bucketing:
+        if train_data_df is None:
+            raise ValueError("train_data_df is required when use_bucketing=True and train_data is a Dataset")
+        if logger:
+            logger.info("Bucketing is ENABLED via BatchSampler.")
+        train_batch_sampler = BucketingBatchSampler(
+            data=train_data_df,
+            batch_size=config.batch_size,
+            shuffle=True
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_batch_sampler,
+            num_workers=n_workers,
+            pin_memory=True,
+            collate_fn=collate_fn,
+            persistent_workers=False 
+        )
+    else:
+        if logger:
+            logger.info("Using standard DataLoader (no bucketing).")
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=n_workers,
+            pin_memory=True,
+            drop_last=True,
+            collate_fn=collate_fn,
+            persistent_workers=False
+        )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=n_workers,
+        pin_memory=True,
+        collate_fn=collate_fn
+    )
+    
+    if logger:
+        logger.info(f"Using DataLoader with {n_workers} workers.")
+    
+    return train_loader, val_loader
+
+
+def _resume_from_checkpoint(
+    resume_path: str,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: Optional[Any],
+    scaler: Optional[GradScaler],
+    device: torch.device,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[int, int, float]:
+    """
+    Resume training from checkpoint.
+    
+    Returns:
+        start_epoch, global_step, best_val_loss
+    """
+    checkpoint_data = torch.load(resume_path, map_location=device)
+    
+    if isinstance(model, nn.DataParallel):
+        model.module.load_state_dict(checkpoint_data['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint_data['model_state_dict'])
+    optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+    
+    if scheduler and checkpoint.get('scheduler_state_dict'):
+        scheduler.load_state_dict(checkpoint_data['scheduler_state_dict'])
+    
+    if scaler and checkpoint.get('scaler_state_dict'):
+        scaler.load_state_dict(checkpoint_data['scaler_state_dict'])
+    
+    start_epoch = checkpoint_data['epoch'] + 1
+    global_step = checkpoint_data.get('global_step', 0)
+    
+    best_val_loss = float('inf')
+    if checkpoint_data.get('metrics'):
+        valid_losses = [m.get('val_loss', float('inf')) for m in checkpoint_data['metrics'] if 'val_loss' in m]
+        if valid_losses:
+            best_val_loss = min(valid_losses)
+    
+    if logger:
+        logger.info(f"✅ Resumed from epoch {start_epoch}, step {global_step}")
+        logger.info(f"   Previous best val loss: {best_val_loss:.4f}")
+    
+    return start_epoch, global_step, best_val_loss
+
+
+def _build_epoch_metrics(
+    epoch: int,
+    train_metrics: Dict,
+    train_eval_metrics: Dict,
+    val_metrics: Dict
+) -> Dict[str, Any]:
+    """Build comprehensive epoch metrics dictionary."""
+    epoch_metrics = {
+        'epoch': epoch + 1,
+        # Training trajectory
+        'train_loss': train_metrics['train_loss'],
+        'train_loss_mean': train_metrics['train_loss_mean'],
+        'train_loss_first': train_metrics['train_loss_first'],
+        'train_loss_last': train_metrics['train_loss_last'],
+        'train_loss_std': train_metrics['train_loss_std'],
+        'train_loss_improvement': train_metrics['train_loss_improvement'],
+        # Train evaluation
+        'eval_in_train_loss_final': train_eval_metrics['val_loss'],
+        'eval_in_train_recall@1': train_eval_metrics['recall@1'],
+        'eval_in_train_recall@5': train_eval_metrics['recall@5'],
+        'eval_in_train_recall@10': train_eval_metrics['recall@10'],
+        'eval_in_train_recall@20': train_eval_metrics['recall@20'],
+        'eval_in_train_micro_recall@10': train_eval_metrics.get('micro_recall@10', 0.0),
+        'eval_in_train_ndcg@20': train_eval_metrics.get('ndcg@20', 0.0),
+        # Validation
+        'final_val_loss': val_metrics['val_loss'],
+        'final_val_recall@1': val_metrics['recall@1'],
+        'final_val_recall@5': val_metrics['recall@5'],
+        'final_val_recall@10': val_metrics['recall@10'],
+        'final_val_recall@20': val_metrics['recall@20'],
+        'final_val_micro_recall@10': val_metrics.get('micro_recall@10', 0.0),
+        'final_val_micro_recall@20': val_metrics.get('micro_recall@20', 0.0),
+        'final_val_ndcg@10': val_metrics.get('ndcg@10', 0.0),
+        'final_val_ndcg@20': val_metrics.get('ndcg@20', 0.0),
+        'final_val_mrr': val_metrics.get('mrr', 0.0),
+        'final_val_positive_brier': val_metrics.get('positive_brier', 0.0),
+        'generalization_gap': train_eval_metrics['val_loss'] - val_metrics['val_loss'],
+    }
+    
+    # Add other training metrics
+    for k, v in train_metrics.items():
+        if k.startswith('train_') and k not in epoch_metrics:
+            epoch_metrics[k] = v
+    
+    # Add other validation metrics (embedding quality, etc.)
+    excluded_keys = {'val_loss', 'num_samples', 'num_batches'}
+    for k, v in val_metrics.items():
+        if k not in epoch_metrics and k not in excluded_keys:
+            epoch_metrics[f'val_{k}'] = v
+    
+    return epoch_metrics
+
+
+def _build_final_results(
+    exp_name: str,
+    total_params: int,
+    use_learnt_att_pool: bool,
+    use_bucketing: bool,
+    final_metrics: Dict,
+    evaluation: Dict,
+    epoch_history: List[Dict],
+    total_time: float
+) -> Dict[str, Any]:
+    """Build final experiment results dictionary."""
+    return {
+        'experiment': exp_name,
+        'parameters': total_params,
+        'use_learned_pooling': use_learnt_att_pool,
+        'use_bucketing': use_bucketing,
+        'train_loss_mean': final_metrics['train_loss'],
+        'train_loss_learned': final_metrics['train_loss_improvement'],
+        'train_loss_final': final_metrics['eval_in_train_loss_final'],
+        'val_loss_final': final_metrics['final_val_loss'],
+        'generalization_gap': final_metrics['generalization_gap'],
+        # Recall metrics
+        'final_train_recall@5': final_metrics.get('eval_in_train_recall@5', 0.0),
+        'final_train_recall@10': final_metrics.get('eval_in_train_recall@10', 0.0),
+        'final_train_recall@20': final_metrics.get('eval_in_train_recall@20', 0.0),
+        'final_val_recall@5': final_metrics.get('final_val_recall@5', 0.0),
+        'final_val_recall@10': final_metrics.get('final_val_recall@10', 0.0),
+        'final_val_recall@20': final_metrics.get('final_val_recall@20', 0.0),
+        # New metrics
+        'final_val_micro_recall@10': final_metrics.get('final_val_micro_recall@10', 0.0),
+        'final_val_ndcg@20': final_metrics.get('final_val_ndcg@20', 0.0),
+        'final_val_mrr': final_metrics.get('final_val_mrr', 0.0),
+        'final_val_positive_brier': final_metrics.get('final_val_positive_brier', 0.0),
+        # Comprehensive evaluation
+        'training_time_sec': total_time,
+        'precision@10': evaluation['performance'].get('precision@10', 0.0),
+        'recall@10': evaluation['performance'].get('recall@10', 0.0),
+        'f1@10': evaluation['performance'].get('f1@10', 0.0),
+        'micro_recall@10': evaluation['performance'].get('micro_recall@10', 0.0),
+        'ndcg@10': evaluation['performance'].get('ndcg@10', 0.0),
+        'balanced_top10_acc': evaluation['performance'].get('balanced_top10_acc', 0.0),
+        'tail_top10_acc': evaluation['performance'].get('tail_top10_acc', 0.0),
+        'cost_usd': evaluation['resources'].get('cost_usd', 0.0),
+        'peak_memory_gb': evaluation['resources'].get('total_peak_gb', 0.0),
+        'full_evaluation': evaluation,
+        'all_epochs': epoch_history
+    }
+
+
 # #### Loss logger
 
-# In[19]:
+# In[18]:
 
 
 class LossTracker:
@@ -4208,7 +5065,183 @@ class LossTracker:
         return recent_worse
 
 
-# #### Train and evaluation
+# #### Optimizer
+
+# In[19]:
+
+
+import math
+import logging
+from typing import Tuple, Optional
+import torch
+import torch.optim as optim
+
+def get_linear_warmup_plateau_decay(
+    optimizer: optim.Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    plateau_ratio: float = 0.3,
+    min_lr_ratio: float = 0.1
+) -> optim.lr_scheduler.LambdaLR:
+    """
+    Linear warmup → Plateau at peak → Linear decay.
+    
+    Better for single-epoch training where you want maximum learning early.
+    
+    Args:
+        optimizer: Optimizer to schedule
+        num_warmup_steps: Steps for linear warmup
+        num_training_steps: Total training steps
+        plateau_ratio: Fraction of training to stay at peak LR (after warmup)
+        min_lr_ratio: Minimum LR as ratio of peak (0.1 = decay to 10% of peak)
+    
+    Returns:
+        LambdaLR scheduler
+    """
+    plateau_end = num_warmup_steps + int(plateau_ratio * num_training_steps)
+    
+    def lr_lambda(current_step: int) -> float:
+        if current_step < num_warmup_steps:
+            # Linear warmup
+            return float(current_step) / float(max(1, num_warmup_steps))
+        elif current_step < plateau_end:
+            # Plateau at peak LR
+            return 1.0
+        else:
+            # Linear decay from plateau_end to end
+            decay_steps = num_training_steps - plateau_end
+            progress = float(current_step - plateau_end) / float(max(1, decay_steps))
+            return max(min_lr_ratio, 1.0 - progress * (1.0 - min_lr_ratio))
+    
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def get_cosine_schedule_with_warmup(
+    optimizer: optim.Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    min_lr_ratio: float = 0.0
+) -> optim.lr_scheduler.LambdaLR:
+    """
+    Create a cosine annealing scheduler with linear warmup.
+    
+    Industry-standard for transformer pretraining (GPT, BERT, etc.)
+    
+    Args:
+        optimizer: Optimizer to schedule
+        num_warmup_steps: Steps for linear warmup phase
+        num_training_steps: Total training steps
+        min_lr_ratio: Minimum LR as ratio of initial (0.0 = decay to 0)
+    
+    Returns:
+        LambdaLR scheduler
+    """
+    def lr_lambda(current_step: int) -> float:
+        if current_step < num_warmup_steps:
+            # Warmup phase
+            return float(current_step) / float(max(1, num_warmup_steps))
+        
+        # Cosine decay phase
+        progress = float(current_step - num_warmup_steps)
+        progress /= float(max(1, num_training_steps - num_warmup_steps))
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+        
+        return max(min_lr_ratio, cosine_decay)
+    
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def create_scheduler(
+    optimizer: optim.Optimizer,
+    optimize_config: Optional[OptimizeConfig], 
+    total_steps: int,
+    scaled_lr: float,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[optim.lr_scheduler._LRScheduler, str]:
+    """
+    Unified scheduler factory supporting multiple LR schedule types.
+    
+    Args:
+        optimizer: The optimizer to schedule
+        config: Config object (OptimizedConfig)
+        total_steps: Total training steps
+        scaled_lr: The peak learning rate (after multi-GPU scaling)
+        logger: Optional logger for info messages
+    
+    Returns:
+        Tuple of (scheduler, description_string)
+    
+    Supported scheduler_type values:
+        - 'onecycle': OneCycleLR (default, best for 1-2 epochs)
+        - 'linear': Linear warmup → plateau → linear decay
+        - 'cosine': Linear warmup → cosine decay (original)
+    """
+    scheduler_type = getattr(optimize_config, 'scheduler_type', 'onecycle')
+    warmup_pct = getattr(optimize_config, 'warmup_pct', 0.15)
+    min_lr_ratio = getattr(optimize_config, 'min_lr_ratio', 0.01)
+    
+    if scheduler_type == 'onecycle':
+        # OneCycleLR: ramp up → ramp down (best for single epoch)
+        pct_start = getattr(optimize_config, 'onecycle_pct_start', 0.30)
+        div_factor = getattr(optimize_config, 'onecycle_div_factor', 25)
+        final_div = getattr(optimize_config, 'onecycle_final_div', 1000)
+        
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=scaled_lr,
+            total_steps=total_steps,
+            pct_start=pct_start,
+            anneal_strategy='cos',
+            div_factor=div_factor,
+            final_div_factor=final_div,
+            three_phase=False
+        )
+        
+        start_lr = scaled_lr / div_factor
+        end_lr = scaled_lr / final_div
+        desc = f"OneCycleLR: {start_lr:.2e} → {scaled_lr:.2e} → {end_lr:.2e} (pct_start={pct_start})"
+    
+    elif scheduler_type == 'linear':
+        # Linear warmup → plateau → linear decay
+        plateau_ratio = getattr(optimize_config, 'plateau_pct', 0.30)  # Read from config
+        warmup_steps = int(warmup_pct * total_steps)
+        
+        # Create scheduler using the helper function
+        scheduler = get_linear_warmup_plateau_decay(
+            optimizer=optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+            plateau_ratio=plateau_ratio,
+            min_lr_ratio=min_lr_ratio
+        )
+        
+        end_lr = scaled_lr * min_lr_ratio
+        plateau_end_pct = warmup_pct + plateau_ratio  # For description
+        desc = (f"LinearPlateau: warmup={warmup_steps} steps ({warmup_pct*100:.0f}%), "
+                f"plateau until {plateau_end_pct*100:.0f}%, "
+                f"decay to {end_lr:.2e}")
+    
+    else:  # 'cosine' or default fallback
+        # Cosine with warmup (original scheduler)
+        warmup_steps = max(100, min(2000, int(warmup_pct * total_steps)))
+        
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+            min_lr_ratio=min_lr_ratio
+        )
+        
+        end_lr = scaled_lr * min_lr_ratio
+        desc = f"CosineWarmup: warmup={warmup_steps}, peak={scaled_lr:.2e}, end={end_lr:.2e}"
+    
+    if logger:
+        logger.info(f"Scheduler: {desc}")
+    
+    return scheduler, desc
+
+
+# #### Train epoch
 
 # In[20]:
 
@@ -4479,8 +5512,6 @@ def train_epoch(
             del extras
         if 'output' in dir() and output is not None:
             del output
-        if 'moe_losses' in dir() and moe_losses:
-            del moe_losses
         del pred_loss, aux_loss, total_loss, scaled_loss, result
         
         if batch_idx % 100 == 0:
@@ -4543,173 +5574,6 @@ def train_epoch(
     epoch_metrics['global_step'] = global_step
         
     return epoch_metrics
-
-def evaluate(
-    model: nn.Module,
-    dataloader: DataLoader, 
-    criterion: nn.Module,
-    config: BaseConfig,
-    device: torch.device,
-    use_mixed_precision: bool = False,
-    max_batches: Optional[int] = None,
-    verbose: bool = False 
-) -> Dict[str, float]:
-    """
-    Evaluate model on validation set.
-    
-    Computes:
-    1. Validation loss
-    2. Top-K accuracy (1, 5, 10, 20)
-    3. Mean Reciprocal Rank
-    4. Embedding quality (if compute_embeddings=True, this will be expensive)
-    
-    max_batches: If provided, only evaluate first N batches (for train set efficiency)
-    The goal is to have in-parallel training and validation loss
-    """
-    model.eval()
-    nbatch = len(dataloader)
-    batches_to_process = min(nbatch, max_batches) if max_batches else nbatch
-    is_wrapped = isinstance(model, DataParallelWrapper) or (
-        isinstance(model, nn.DataParallel) and isinstance(model.module, DataParallelWrapper)
-    )
-    if batches_to_process == 0:
-        # Dataset too small, no evaluation possible
-        return {'val_loss': 0.0, 
-                'recall@1': 0.0, 
-                'recall@5': 0.0, 
-                'recall@10': 0.0, 
-                'recall@20': 0.0}
-        
-    total_loss = 0.0
-    
-    all_predictions = []
-    all_targets = []
-    
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(dataloader):
-            
-            # Early exist for simple check model generalizability
-            if batch_idx >= batches_to_process:
-                if verbose:
-                    print(f"    Early exit at batch {batch_idx}/{nbatch} (max_batches={max_batches})")
-                break
-                
-            age = batch['age'].to(device, non_blocking=True)
-            gender = batch['gender'].to(device, non_blocking=True)
-            lob = batch['lob'].to(device, non_blocking=True)
-            codes = batch['codes'].to(device, non_blocking=True)
-            dt_cnt = batch['dt_cnt']
-            y = batch['target']
-            
-            x = torch.cat([
-                age.unsqueeze(-1),
-                gender.unsqueeze(-1),
-                lob.unsqueeze(-1),
-                codes
-            ], dim=-1)            
-            
-            # Forward
-            output = None
-            loss = 0.0
-            
-            if is_wrapped:
-                # NEW PATH: Use wrapper with integrated loss
-                targets_mh = batch['target_multihot'].to(device, non_blocking=True)
-                dt_cnt_tensor = dt_cnt.to(device) if isinstance(dt_cnt, torch.Tensor) else torch.tensor(dt_cnt, device=device)
-                
-                if use_mixed_precision:
-                    with torch.cuda.amp.autocast(dtype=torch.float16):
-                        result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
-                else:
-                    result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
-                
-                if isinstance(result, tuple):
-                    loss_val, extras = result
-                    output = extras.get('predictions')
-                else:
-                    loss_val = result
-                    # Need to get predictions separately - this is a problem!
-                    output = None  # Can't get predictions without modifying wrapper
-                
-                loss = loss_val.mean() if loss_val.numel() > 1 else loss_val
-            else:
-                # ORIGINAL PATH: Direct model call
-                if use_mixed_precision:
-                    with torch.cuda.amp.autocast(dtype=torch.float16):
-                        if _model_has_moe(model):
-                            output, _ = model(x, return_moe_losses=False)
-                        else:
-                            output = model(x)
-                        loss = compute_loss(output, y, dt_cnt, config, criterion, device)
-                else:
-                    if _model_has_moe(model):
-                        output, _ = model(x, return_moe_losses=False)
-                    else:
-                        output = model(x)
-                    loss = compute_loss(output, y, dt_cnt, config, criterion, device)
-            
-            total_loss += loss.item()
-            
-            batch_size_actual = output.shape[0]
-            actual_len_dy = output.shape[1]
-            # Store predictions for metrics
-            output_flat = output.reshape(batch_size_actual * actual_len_dy, config.target_cd_cnt)
-            y_flat = [item for sublist in y for item in sublist]
-            dt_cnt_values = dt_cnt.cpu().tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
-            
-            # Filter by valid days
-            for j in range(batch_size_actual):
-                valid_days = min(int(dt_cnt_values[j]), actual_len_dy)
-                if valid_days <= 0:
-                    continue
-                start_idx = actual_len_dy * j
-                end_idx = start_idx + valid_days
-                valid_output = output_flat[start_idx:end_idx]
-                
-                y_start = config.len_dy * j
-                y_end = y_start + valid_days
-                valid_y = y_flat[y_start:y_end]
-                
-                all_predictions.append(valid_output.cpu())
-                all_targets.extend(valid_y)
-     
-    val_loss = total_loss / batches_to_process if batches_to_process > 0 else 0.0
-    
-    # Compute metrics
-    if len(all_predictions) == 0:
-        print("No predictions collected - returning zero metrics")
-        return {
-            'val_loss': val_loss,
-            'recall@1': 0.0,
-            'recall@5': 0.0,
-            'recall@10': 0.0,
-            'recall@20': 0.0
-        }
-    all_predictions = torch.cat(all_predictions)
-    
-    # Recall@K (previously named top_K_acc)
-    recall_results = {}
-    for k in [1, 5, 10, 20]:
-        top_k_preds = torch.topk(all_predictions, k, dim=-1).indices
-        correct = 0
-        total = 0
-        
-        for i, target_codes in enumerate(all_targets):
-            if any(code != 0 for code in target_codes):
-                total += 1
-                # Check if any true code is in top-K
-                if any(code in top_k_preds[i].tolist() for code in target_codes if code != 0):
-                    correct += 1
-        
-        recall_results[f'recall@{k}'] = correct / total if total > 0 else 0.0
-    
-    results = {
-        'val_loss': val_loss,
-        **recall_results
-    }
-    
-    return results
-
 
 class BucketingBatchSampler:
     """
@@ -4825,7 +5689,226 @@ def create_bucketing_dataloader(
     return sampler, len(sampler)
 
 
-# ##### Test
+# #### Validate
+
+# In[21]:
+
+
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader, 
+    criterion: nn.Module,
+    config: BaseConfig,
+    device: torch.device,
+    use_mixed_precision: bool = False,
+    max_batches: Optional[int] = None,
+    verbose: bool = False,
+    k_values: Tuple[int, ...] = (1, 5, 10, 20)
+) -> Dict[str, float]:
+    """
+    Memory-efficient evaluation using streaming metrics.
+    
+    Key design:
+    - Uses StreamingMetrics for incremental computation
+    - NEVER accumulates predictions (prevents CPU OOM on large val sets)
+    - Computes recall@K, micro-recall@K, precision@K, NDCG@K, MRR, positive-Brier
+    
+    Args:
+        model: Model to evaluate (can be wrapped in DataParallel/DataParallelWrapper)
+        dataloader: Validation DataLoader
+        criterion: Loss function (e.g., BCEWithLogitsLoss)
+        config: Model configuration
+        device: Device for computation
+        use_mixed_precision: Whether to use FP16 autocast
+        max_batches: If set, only evaluate first N batches (for train subset)
+        verbose: Print progress every 100 batches
+        k_values: K values for top-K metrics
+    
+    Returns:
+        Dict with val_loss, recall@K, micro_recall@K, precision@K, ndcg@K, mrr, positive_brier
+    """
+    model.eval()
+    
+    # Setup
+    num_batches = len(dataloader)
+    batches_to_process = min(num_batches, max_batches) if max_batches else num_batches
+    
+    if batches_to_process == 0:
+        return _get_empty_eval_metrics(k_values)
+    
+    # Detect wrapper type
+    is_wrapped = isinstance(model, DataParallelWrapper) or (
+        isinstance(model, nn.DataParallel) and 
+        isinstance(model.module, DataParallelWrapper)
+    )
+    
+    # Initialize streaming metrics
+    metrics_tracker = StreamingMetrics(
+        k_values=k_values,
+        compute_mrr=True,
+        compute_brier=True,
+        vocab_size=config.target_cd_cnt
+    )
+    
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            if batch_idx >= batches_to_process:
+                break
+            
+            if verbose and batch_idx % 100 == 0:
+                print(f"    Evaluating batch {batch_idx}/{batches_to_process}")
+            
+            # Forward pass
+            output, loss = _forward_batch(
+                model, batch, config, device, 
+                criterion, use_mixed_precision, is_wrapped
+            )
+            
+            # Update streaming metrics
+            metrics_tracker.update_loss(loss)
+            
+            if output is not None:
+                _update_streaming_metrics(
+                    metrics_tracker, output, batch, config
+                )
+            
+            # Cleanup batch tensors immediately
+            del output
+            if batch_idx % 50 == 0:
+                gc.collect()
+    
+    # Compute and return final metrics
+    results = metrics_tracker.compute()
+    
+    # Final cleanup
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    return results
+
+
+def _get_empty_eval_metrics(k_values: Tuple[int, ...]) -> Dict[str, float]:
+    """Return empty metrics dict when no data to evaluate."""
+    metrics = {'val_loss': 0.0, 'mrr': 0.0, 'positive_brier': 0.0}
+    for k in k_values:
+        metrics[f'recall@{k}'] = 0.0
+        metrics[f'micro_recall@{k}'] = 0.0
+        metrics[f'precision@{k}'] = 0.0
+        metrics[f'ndcg@{k}'] = 0.0
+    return metrics
+
+
+def _forward_batch(
+    model: nn.Module,
+    batch: Dict,
+    config: BaseConfig,
+    device: torch.device,
+    criterion: nn.Module,
+    use_mixed_precision: bool,
+    is_wrapped: bool
+) -> Tuple[Optional[torch.Tensor], float]:
+    """
+    Execute forward pass for a single batch.
+    
+    Returns:
+        (output_logits, loss_scalar)
+    """
+    # Prepare inputs
+    age = batch['age'].to(device, non_blocking=True)
+    gender = batch['gender'].to(device, non_blocking=True)
+    lob = batch['lob'].to(device, non_blocking=True)
+    codes = batch['codes'].to(device, non_blocking=True)
+    dt_cnt = batch['dt_cnt']
+    y = batch['target']
+    
+    x = torch.cat([
+        age.unsqueeze(-1),
+        gender.unsqueeze(-1),
+        lob.unsqueeze(-1),
+        codes
+    ], dim=-1)
+    
+    autocast_ctx = (
+        torch.cuda.amp.autocast(dtype=torch.float16) 
+        if use_mixed_precision else nullcontext()
+    )
+    
+    with autocast_ctx:
+        if is_wrapped:
+            targets_mh = batch['target_multihot'].to(device, non_blocking=True)
+            dt_cnt_tensor = (
+                dt_cnt.to(device) if isinstance(dt_cnt, torch.Tensor) 
+                else torch.tensor(dt_cnt, device=device)
+            )
+            result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
+            
+            if isinstance(result, tuple):
+                loss_val, extras = result
+                output = extras.get('predictions')
+            else:
+                loss_val = result
+                output = None
+            loss = loss_val.mean().item() if loss_val.numel() > 1 else loss_val.item()
+        else:
+            if _model_has_moe(model):
+                output, _ = model(x, return_moe_losses=False)
+            else:
+                output = model(x)
+            loss = compute_loss(output, y, dt_cnt, config, criterion, device).item()
+    
+    return output, loss
+
+
+def _update_streaming_metrics(
+    metrics_tracker: StreamingMetrics,
+    output: torch.Tensor,
+    batch: Dict,
+    config: BaseConfig
+) -> None:
+    """
+    Update streaming metrics from a batch of predictions.
+    
+    Handles flattening over valid days and target alignment.
+    """
+    batch_size = output.shape[0]
+    actual_len_dy = output.shape[1]
+    
+    dt_cnt = batch['dt_cnt']
+    y = batch['target']
+    
+    dt_cnt_values = dt_cnt.cpu().tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
+    y_flat = [item for sublist in y for item in sublist]
+    
+    # Flatten output over valid days
+    output_flat = output.view(batch_size * actual_len_dy, config.target_cd_cnt)
+    
+    # Collect valid samples (only actual days, not padding)
+    valid_outputs = []
+    valid_targets = []
+    
+    for j in range(batch_size):
+        valid_days = min(int(dt_cnt_values[j]), actual_len_dy)
+        if valid_days <= 0:
+            continue
+        
+        # Output indices (uses actual_len_dy)
+        out_start = actual_len_dy * j
+        out_end = out_start + valid_days
+        valid_outputs.append(output_flat[out_start:out_end])
+        
+        # Target indices (uses config.len_dy since y is padded to full length)
+        y_start = config.len_dy * j
+        y_end = y_start + valid_days
+        valid_targets.extend(y_flat[y_start:y_end])
+    
+    if valid_outputs:
+        predictions = torch.cat(valid_outputs)
+        metrics_tracker.update(predictions, valid_targets)
+        del predictions, valid_outputs, valid_targets
+
+
+# #### Test
 
 # In[33]:
 
@@ -4935,7 +6018,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[21]:
+# In[22]:
 
 
 def save_checkpoint(
@@ -4986,7 +6069,12 @@ def save_checkpoint(
         'scaler_state_dict': scaler.state_dict() if scaler else None,
         'metrics': metrics,
         'timestamp': time.time(),
-        'model_type': type(actual_model).__name__ 
+        'model_type': type(actual_model).__name__,
+        'scheduler_config': {
+            'type': type(scheduler).__name__,
+            'total_steps': getattr(scheduler, '_total_steps', None),  # If you store it
+            'warmup_steps': getattr(scheduler, '_warmup_steps', None),  # If you store it
+        } if scheduler else None
     }
     # ============================================================
     # ROLLING CLEANUP: Remove old epoch checkpoints BEFORE saving
@@ -5049,7 +6137,7 @@ def load_checkpoint(
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only = False)
+    checkpoint_data = torch.load(checkpoint_path, map_location=device, weights_only = False)
     # ====== UNWRAP MODEL ======
     if isinstance(model, nn.DataParallel):
         inner_model = model.module
@@ -5062,21 +6150,21 @@ def load_checkpoint(
         actual_model = inner_model
         
     # Restore states
-    actual_model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    actual_model.load_state_dict(checkpoint_data['model_state_dict'])
+    optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
     
     if scheduler and checkpoint.get('scheduler_state_dict'):
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        scheduler.load_state_dict(checkpoint_data['scheduler_state_dict'])
     
     if scaler and checkpoint.get('scaler_state_dict'):
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        scaler.load_state_dict(checkpoint_data['scaler_state_dict'])
     
-    print(f"✅ Resumed from epoch {checkpoint['epoch']}, step {checkpoint['global_step']}")
+    print(f"✅ Resumed from epoch {checkpoint_data['epoch']}, step {checkpoint_data['global_step']}")
     
     return {
-        'epoch': checkpoint['epoch'],
-        'global_step': checkpoint['global_step'],
-        'metrics': checkpoint.get('metrics', {})
+        'epoch': checkpoint_data['epoch'],
+        'global_step': checkpoint_data['global_step'],
+        'metrics': checkpoint_data.get('metrics', {})
     }
 
 
@@ -5293,22 +6381,22 @@ def test_checkpoint_resume_integration():
         
         # Load checkpoint and verify structure
         checkpoint_path = checkpoint_dir / 'checkpoint_latest.pt'
-        checkpoint = torch.load(checkpoint_path, weights_only = False)
+        checkpoint_data = torch.load(checkpoint_path, weights_only = False)
         
         print(f"\n🔍 Checkpoint structure validation:")
         required_keys = ['epoch', 'global_step', 'model_state_dict', 
                         'optimizer_state_dict', 'scheduler_state_dict', 'metrics']
         for key in required_keys:
             if key in checkpoint:
-                print(f"   ✅ {key}: {type(checkpoint[key])}")
+                print(f"   ✅ {key}: {type(checkpoint_data[key])}")
             else:
                 print(f"   ❌ MISSING: {key}")
                 raise AssertionError(f"Checkpoint missing required key: {key}")
         
         # Store initial state for comparison
-        initial_epoch = checkpoint['epoch']
-        initial_global_step = checkpoint['global_step']
-        initial_metrics = checkpoint['metrics']
+        initial_epoch = checkpoint_data['epoch']
+        initial_global_step = checkpoint_data['global_step']
+        initial_metrics = ccheckpoint_data['metrics']
         
         print(f"\n   Checkpoint state:")
         print(f"     Epoch: {initial_epoch}")
@@ -5495,7 +6583,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[22]:
+# In[23]:
 
 
 class MetricsLogger:
@@ -5625,7 +6713,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[23]:
+# In[24]:
 
 
 def compute_batch_metrics_lightweight(
@@ -5825,7 +6913,8 @@ def compute_embedding_quality_epoch(
         val_dataset, 
         batch_size=embedding_batch_size, 
         shuffle=False,
-        collate_fn=create_collate_fn(config)
+        collate_fn=create_collate_fn(config),
+        num_workers = 0
     )        
     all_embeddings = []
     all_targets = []
@@ -5986,7 +7075,7 @@ def compute_moe_batch_metrics(
 
 # #### Primary metrics
 
-# In[24]:
+# In[25]:
 
 
 """
@@ -6266,7 +7355,7 @@ def compute_auroc_auprc(
     predictions: torch.Tensor,   # [num_samples, vocab_size] logits
     targets: List[List[int]],    # Multi-label targets
     vocab_size: int,
-    num_codes_to_sample: int = 500  # Sample codes for efficiency
+    num_codes_to_sample: int = 200  # Sample codes for efficiency
 ) -> Dict[str, float]:
     """
     Macro-averaged AUROC and AUPRC across codes.
@@ -6297,6 +7386,9 @@ def compute_auroc_auprc(
     
     # Sample additional codes for negative class representation
     all_codes = list(target_codes_set)
+    if len(all_codes) > num_codes_to_sample:
+        # Sample a subset of codes to be memory efficient
+        all_codes = list(np.random.choice(all_codes, num_codes_to_sample, replace=False))
     if len(all_codes) < num_codes_to_sample:
         # Add some random codes not in targets
         remaining = list(set(range(1, vocab_size)) - target_codes_set)
@@ -6389,25 +7481,36 @@ def compute_stratified_metrics(
         (code_frequencies > 0)
     )[0].tolist())
     
+    print(f"  Tier sizes: common={len(common_codes)}, medium={len(medium_codes)}, "
+          f"rare={len(rare_codes)}, tail={len(tail_codes)}") 
+    
+    top_10_preds = torch.topk(predictions, 10, dim=-1).indices  
     # Top-10 accuracy per tier
-    def tier_accuracy(code_set, k=10):
-        top_k_preds = torch.topk(predictions, k, dim=-1).indices
-        correct = 0
-        total = 0
-        
-        for i, target_codes in enumerate(targets):
+    # Single-pass: compute all tiers at once
+    tier_correct = {'common': 0, 'medium': 0, 'rare': 0, 'tail': 0}
+    tier_total = {'common': 0, 'medium': 0, 'rare': 0, 'tail': 0}
+    tier_sets = {
+        'common': common_codes, 
+        'medium': medium_codes, 
+        'rare': rare_codes, 
+        'tail': tail_codes
+    }
+
+    for i, target_codes in enumerate(targets):
+        pred_set = set(top_10_preds[i].tolist())  # Convert once per sample
+        for tier_name, code_set in tier_sets.items():
+            # Find target codes in this tier
             tier_true = [c for c in target_codes if c in code_set and c != 0]
             if len(tier_true) > 0:
-                total += 1
-                if any(c in top_k_preds[i].tolist() for c in tier_true):
-                    correct += 1
-        
-        return correct / total if total > 0 else 0.0
-    
-    metrics['common_top10_acc'] = tier_accuracy(common_codes, k=10)
-    metrics['medium_top10_acc'] = tier_accuracy(medium_codes, k=10)
-    metrics['rare_top10_acc'] = tier_accuracy(rare_codes, k=10)
-    metrics['tail_top10_acc'] = tier_accuracy(tail_codes, k=10)
+                tier_total[tier_name] += 1
+                # Check if any tier code is in top-10 predictions
+                if any(c in pred_set for c in tier_true):
+                    tier_correct[tier_name] += 1
+
+    metrics['common_top10_acc'] = tier_correct['common'] / tier_total['common'] if tier_total['common'] > 0 else 0.0
+    metrics['medium_top10_acc'] = tier_correct['medium'] / tier_total['medium'] if tier_total['medium'] > 0 else 0.0
+    metrics['rare_top10_acc'] = tier_correct['rare'] / tier_total['rare'] if tier_total['rare'] > 0 else 0.0
+    metrics['tail_top10_acc'] = tier_correct['tail'] / tier_total['tail'] if tier_total['tail'] > 0 else 0.0
     
     # Tail code coverage (what % of rare codes ever predicted)
     top_50_preds = torch.topk(predictions, 50, dim=-1).indices
@@ -7048,7 +8151,8 @@ def comprehensive_evaluation(
     epoch_history: List[Dict[str, float]],
     code_frequencies: np.ndarray,
     moe_config: Optional[MoEConfig] = None,
-    use_mixed_precision: bool = False
+    use_mixed_precision: bool = False,
+    max_samples_for_detailed_metrics = 1000
 ) -> Dict[str, any]:
     """
     Comprehensive evaluation with all metrics.
@@ -7058,6 +8162,7 @@ def comprehensive_evaluation(
     - efficiency: Time and throughput metrics
     - cost: Resource usage and cost estimates
     - moe: MoE-specific metrics (if applicable)
+    - sample up to max_samples_for_detailed_metrics to prevent CPU OOM.
     """
     print("\n" + "="*80)
     print("COMPREHENSIVE EVALUATION")
@@ -7068,9 +8173,17 @@ def comprehensive_evaluation(
     is_wrapped = isinstance(model, DataParallelWrapper) or (
         isinstance(model, nn.DataParallel) and isinstance(model.module, DataParallelWrapper)
     )
-    all_predictions = []
-    all_targets = []
-    all_targets_multihot = []
+    print("Computing streaming metrics (memory-safe)...")
+    metrics_tracker = StreamingMetrics(
+        k_values=(1, 5, 10),
+        compute_mrr=True,
+        compute_brier=True,
+        vocab_size=config.target_cd_cnt
+    )
+    sampled_predictions = []
+    sampled_targets = []
+    sampled_multihot = []
+    samples_collected = 0
     
     criterion = nn.BCEWithLogitsLoss()
 
@@ -7084,7 +8197,9 @@ def comprehensive_evaluation(
         }     
     with torch.no_grad():
         
-        for batch in val_dataloader:  # ← Iterate over DataLoader
+        for batch_idx, batch in enumerate(val_dataloader): # ← Iterate over DataLoader
+            if batch_idx % 200 == 0:
+                print(f"  Processing batch {batch_idx}/{len(val_dataloader)}...")
             age = batch['age'].to(device)
             gender = batch['gender'].to(device)
             lob = batch['lob'].to(device)
@@ -7100,33 +8215,32 @@ def comprehensive_evaluation(
             ], dim=-1)
             
             # Forward
-            if is_wrapped:
-                targets_mh = batch['target_multihot'].to(device)
-                dt_cnt_tensor = dt_cnt.to(device) if isinstance(dt_cnt, torch.Tensor) else torch.tensor(dt_cnt, device=device)
-                
-                if use_mixed_precision:
-                    with torch.cuda.amp.autocast(dtype=torch.float16):
-                        result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
-                else:
+            autocast_ctx = (
+                torch.cuda.amp.autocast(dtype=torch.float16) 
+                if use_mixed_precision else nullcontext()
+            )
+            
+            with autocast_ctx:
+                if is_wrapped:
+                    targets_mh = batch['target_multihot'].to(device, non_blocking=True)
+                    dt_cnt_tensor = (
+                        dt_cnt.to(device) if isinstance(dt_cnt, torch.Tensor) 
+                        else torch.tensor(dt_cnt, device=device)
+                    )
                     result = model(x, dt_cnt_tensor, targets_mh, return_predictions=True)
-                
-                if isinstance(result, tuple):
-                    _, extras = result
-                    output = extras.get('predictions')
-                else:
-                    output = None
-            else:
-                if use_mixed_precision:
-                    with torch.cuda.amp.autocast(dtype=torch.float16):
-                        if _model_has_moe(model):
-                            output, _ = model(x, return_moe_losses=False)
-                        else:
-                            output = model(x)
+                    if isinstance(result, tuple):
+                        _, extras = result
+                        output = extras.get('predictions')
+                    else:
+                        output = None
                 else:
                     if _model_has_moe(model):
                         output, _ = model(x, return_moe_losses=False)
                     else:
                         output = model(x)
+            
+            if output is None:
+                continue
             
             # Get actual batch size from output
             batch_size_actual = output.shape[0]
@@ -7135,113 +8249,181 @@ def comprehensive_evaluation(
             # Process outputs
             output_flat = output.reshape(batch_size_actual * actual_len_dy, config.target_cd_cnt)
             y_flat = [item for sublist in y for item in sublist]
+            dt_cnt_values = dt_cnt.cpu().tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
+            
+            # Collect valid predictions
+            valid_outputs = []
+            valid_targets = []
             
             # Filter valid days
             for j in range(batch_size_actual):
                 valid_days = min(dt_cnt[j].item(), actual_len_dy)
                 if valid_days <= 0:
                     continue
-                output_start = actual_len_dy * j
-                output_end = output_start + valid_days
-                valid_output = output_flat[output_start:output_end]
+                out_start = actual_len_dy * j
+                out_end = out_start + valid_days
+                valid_outputs.append(output_flat[out_start:out_end])
                 
                 y_start = config.len_dy * j
                 y_end = y_start + valid_days
-                valid_y = y_flat[y_start:y_end]
+                valid_targets.extend(y_flat[y_start:y_end])
                 
-                all_predictions.append(valid_output.cpu())
-                all_targets.extend(valid_y)  # flattens one level)
-                
-                # Create multihot for this sample
-                multihot_batch = create_multihot_targets_vectorized(
-                    valid_y, len(valid_output), config.target_cd_cnt, device
-                )
-                all_targets_multihot.append(multihot_batch.cpu())
-    
-    # Concatenate all predictions
-    all_predictions = torch.cat(all_predictions, dim=0)
-    all_targets_multihot = torch.cat(all_targets_multihot, dim=0) 
+            if valid_outputs:
+                batch_preds = torch.cat(valid_outputs)
+
+                # Update streaming metrics (ALL data)
+                metrics_tracker.update(batch_preds, valid_targets)
+
+                # Sample for detailed metrics for memory efficiency
+                if samples_collected < max_samples_for_detailed_metrics:
+                    remaining = max_samples_for_detailed_metrics - samples_collected
+                    to_take = min(len(batch_preds), remaining)
+
+                    sampled_predictions.append(batch_preds[:to_take].cpu())
+                    sampled_targets.extend(valid_targets[:to_take])
+
+                    # Create multihot for sampled
+                    multihot = create_multihot_targets_vectorized(
+                        valid_targets[:to_take], to_take, config.target_cd_cnt, device
+                    )
+                    sampled_multihot.append(multihot.cpu())
+                    samples_collected += to_take
+
+            # Memory cleanup
+            del output, output_flat, valid_outputs
+            if batch_idx % 100 == 0:
+                gc.collect()
     
     # ============================================================
     # COMPUTE ALL METRICS
     # ============================================================
-    
+    streaming_results = metrics_tracker.compute()
+    print(f"Computing detailed metrics on {samples_collected} sampled predictions...")
     evaluation = {}
     
     # 1. PERFORMANCE METRICS
-    print("Computing performance metrics...")
-    evaluation['performance'] = {
-        **compute_primary_task_metrics(all_predictions, all_targets, config.target_cd_cnt),
-        **compute_loss_metrics(all_predictions, all_targets_multihot, criterion),
-        **compute_stratified_metrics(all_predictions, all_targets, code_frequencies, config.target_cd_cnt),
-        **compute_auroc_auprc(all_predictions, all_targets, config.target_cd_cnt)
-    }
+    if sampled_predictions:
+        all_predictions = torch.cat(sampled_predictions, dim=0)
+        all_targets_multihot = torch.cat(sampled_multihot, dim=0)
+        
+        evaluation['performance'] = {
+            # Streaming metrics (from full data)
+            **{k: v for k, v in streaming_results.items() 
+               if k not in ['num_samples', 'num_batches']},
+            # Detailed metrics (from sampled data)
+            **compute_primary_task_metrics(all_predictions, sampled_targets, config.target_cd_cnt),
+            **compute_loss_metrics(all_predictions, all_targets_multihot, criterion, sampled_targets),
+            **compute_stratified_metrics(all_predictions, sampled_targets, code_frequencies, config.target_cd_cnt),
+            **compute_auroc_auprc(all_predictions, sampled_targets, config.target_cd_cnt)
+        }
+        
+        # Cleanup
+        del all_predictions, all_targets_multihot, sampled_predictions, sampled_multihot
+        gc.collect()
+    else:
+        evaluation['performance'] = streaming_results
     
     # 2. EFFICIENCY METRICS
     print("Computing efficiency metrics...")
-    num_samples = len(all_predictions)
+    num_samples = streaming_results.get('num_samples', 0)
     num_tokens = num_samples * config.len_dy
     
     evaluation['efficiency'] = compute_training_time_metrics(
         total_train_time=training_time_sec,
         num_epochs=len(epoch_history),
-        num_samples=num_samples * len(epoch_history),  # Total across epochs
+        num_samples=num_samples * len(epoch_history),
         num_tokens=num_tokens * len(epoch_history),
-        batch_size=config.batch_size,
-        data_load_time=0.0,  # TODO: Add profiling
-        forward_time=0.0,
-        backward_time=0.0
+        batch_size=config.batch_size
     )
     
-    # 3. RESOURCE METRICS
     print("Computing resource metrics...")
     num_gpus = torch.cuda.device_count() if device.type == 'cuda' else 1
     
     evaluation['resources'] = {
         **compute_memory_metrics(device, model, config.batch_size, config.len_dy, num_gpus),
         **compute_flops_metrics(
-            config,
-            config.batch_size,
-            config.len_dy,
+            config, config.batch_size, config.len_dy,
             num_experts=moe_config.num_experts if moe_config else None,
             top_k=moe_config.top_k if moe_config else None,
             use_moe_from_layer=moe_config.use_moe_from_layer if moe_config else None,
-            actual_throughput=evaluation['efficiency']['tokens_per_sec']
+            actual_throughput=evaluation['efficiency'].get('tokens_per_sec', 0)
         ),
-        **compute_cost_metrics(
-                training_time_sec, 
-                num_epochs=len(epoch_history),  # ← ADD THIS
-                gpu_type="T4", 
-                num_gpus=num_gpus
-            )
+        **compute_cost_metrics(training_time_sec, len(epoch_history), "T4", num_gpus)
     }
     
     # 4. MOE METRICS (if applicable)
     if moe_config is not None:
         print("Computing MoE metrics...")
-        # Extract from last epoch
         expert_usage = epoch_history[-1].get('expert_usage', None)
         if expert_usage is not None:
             evaluation['moe'] = compute_moe_performance_metrics(
                 expert_usage=expert_usage,
-                router_probs_history=[],  # TODO: Collect during training
+                router_probs_history=[],
                 num_experts=moe_config.num_experts - moe_config.num_shared_experts
             )
-    
+    # Final cleanup
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+        
     return evaluation
 
 
 # #### Streaming Metrics for evaluation
 
-# In[25]:
+# In[26]:
 
 
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
+
+@dataclass
+class StreamingMetricsState:
+    """Internal state for streaming metrics computation."""
+    # Loss
+    total_loss: float = 0.0
+    num_batches: int = 0
+    
+    # Sample counts
+    num_samples: int = 0
+    
+    # Recall@K counters (binary: any hit in top-K)
+    recall_hits: Dict[int, int] = field(default_factory=dict)
+    recall_total: Dict[int, int] = field(default_factory=dict)
+    
+    # Micro-Recall@K (per-code: total hits / total true codes)
+    micro_recall_hits: Dict[int, int] = field(default_factory=dict)
+    micro_recall_true: Dict[int, int] = field(default_factory=dict)
+    
+    # Precision@K (sum for average)
+    precision_sum: Dict[int, float] = field(default_factory=dict)
+    precision_count: Dict[int, int] = field(default_factory=dict)
+    
+    # NDCG@K
+    ndcg_sum: Dict[int, float] = field(default_factory=dict)
+    ndcg_count: Dict[int, int] = field(default_factory=dict)
+    
+    # MRR (best-ranked true code)
+    mrr_sum: float = 0.0
+    mrr_count: int = 0
+    
+    # Positive-only Brier
+    positive_brier_sum: float = 0.0
+    positive_brier_count: int = 0
 class StreamingMetrics:
     """
     Memory-efficient streaming metrics aggregator for evaluation
     Computes metrics incrementally without storing all predictions.
     implemented in round 5 experimentation due to memory constraints
+    Follows HuggingFace/PyTorch patterns:
+    - `.reset()` clears state
+    - `.update(batch)` processes one batch  
+    - `.compute()` returns final metrics
     
+    Key design principles:
+    1. never accumulate full predictions (prevents CPU OOM)
+    2. Compute metrics incrementally per-batch
+    3. Use only scalar counters, not tensors    
     Usage:
         metrics = StreamingMetrics()
         for batch in dataloader:
@@ -7249,168 +8431,223 @@ class StreamingMetrics:
         results = metrics.compute()
     """
     
-    def __init__(self, k_values_topk=(1, 5, 10, 20), k_values_recall=(5, 10, 20, 50)):
-        self.k_values_topk = k_values_topk
-        self.k_values_recall = k_values_recall
-        self.reset()
-    
-    def reset(self):
-        """Reset all accumulators."""
-        # Loss
-        self.total_loss = 0.0
-        self.num_batches = 0
-        
-        # Top-K accuracy (any true code in top-K)
-        self.topk_correct = {k: 0 for k in self.k_values_topk}
-        self.topk_total = {k: 0 for k in self.k_values_topk}
-        
-        # Recall@K (same logic, different K values)
-        self.recall_correct = {k: 0 for k in self.k_values_recall}
-        self.recall_total = {k: 0 for k in self.k_values_recall}
-        
-        # Precision@K (sum of per-sample precisions)
-        self.precision_sum = {k: 0.0 for k in self.k_values_recall}
-        self.precision_count = {k: 0 for k in self.k_values_recall}
-        
-        # mAP@K
-        self.map_sum = {20: 0.0, 50: 0.0}
-        self.map_count = {20: 0, 50: 0}
-        
-        # Brier score
-        self.brier_sum = 0.0
-        self.brier_count = 0
-    
-    def update_loss(self, loss: float):
-        """Update loss accumulator."""
-        self.total_loss += loss
-        self.num_batches += 1
-    
-    def update_batch(
+    def __init__(
         self, 
-        sorted_indices: torch.Tensor,  # [num_samples, vocab_size] sorted by score
-        targets: List[List[int]],       # List of target code lists
-        probs: Optional[torch.Tensor] = None,  # [num_samples, vocab_size] for Brier
+        k_values: Tuple[int, ...] = (5, 10, 20),
+        compute_mrr: bool = True,
+        compute_brier: bool = True,
         vocab_size: int = 6297
     ):
         """
-        Update all metrics with a batch of predictions.
+        Args:
+            k_values: K values for Recall@K, Precision@K, Micro-Recall@K, NDCG@K
+            compute_mrr: Whether to compute Mean Reciprocal Rank
+            compute_brier: Whether to compute Positive-Only Brier Score
+            vocab_size: Target vocabulary size (for Brier calculation)
+        """
+        self.k_values = k_values
+        self.compute_mrr = compute_mrr
+        self.compute_brier = compute_brier
+        self.vocab_size = vocab_size
+        self._max_k = max(k_values)
+        
+        # Precompute NDCG discount factors: 1/log2(rank+2)
+        self._discounts = 1.0 / np.log2(np.arange(2, self._max_k + 2))
+        
+        self.reset()
+    
+    def reset(self) -> None:
+        """Reset all accumulators for a new evaluation pass."""
+        self._state = StreamingMetricsState(
+            recall_hits={k: 0 for k in self.k_values},
+            recall_total={k: 0 for k in self.k_values},
+            micro_recall_hits={k: 0 for k in self.k_values},
+            micro_recall_true={k: 0 for k in self.k_values},
+            precision_sum={k: 0.0 for k in self.k_values},
+            precision_count={k: 0 for k in self.k_values},
+            ndcg_sum={k: 0.0 for k in self.k_values},
+            ndcg_count={k: 0 for k in self.k_values},
+        )
+    
+    def update_loss(self, loss: float) -> None:
+        """Accumulate loss from a batch."""
+        self._state.total_loss += loss
+        self._state.num_batches += 1
+    
+    def update(
+        self,
+        predictions: torch.Tensor,  # [batch_size, vocab_size] logits
+        targets: List[List[int]],    # List of target code lists per sample
+        probs: Optional[torch.Tensor] = None  # [batch_size, vocab_size] for Brier
+    ) -> None:
+        """
+        Update metrics with a batch of predictions.
         
         Args:
-            sorted_indices: Prediction indices sorted by descending score (on CPU)
+            predictions: Model logits [batch_size, vocab_size] (will be moved to CPU)
             targets: List of target code lists (one per sample)
-            probs: Sigmoid probabilities for Brier score (optional, on CPU)
-            vocab_size: Vocabulary size for Brier score calculation
+            probs: Optional sigmoid probabilities for Brier score
         """
+        # Move to CPU and sort once (most expensive operation)
+        with torch.no_grad():
+            sorted_indices = torch.argsort(predictions, dim=-1, descending=True).cpu()
+            if probs is None and self.compute_brier:
+                probs = torch.sigmoid(predictions).cpu()
+            elif probs is not None:
+                probs = probs.cpu()
+        
+        batch_size = len(targets)
+        self._state.num_samples += batch_size
+        
         for i, target_codes in enumerate(targets):
+            # Filter valid codes (non-zero)
             true_codes = set(c for c in target_codes if c != 0)
             if not true_codes:
                 continue
             
-            preds = sorted_indices[i]
+            pred_indices = sorted_indices[i]
+            num_true = len(true_codes)
             
-            # Top-K accuracy
-            for k in self.k_values_topk:
-                pred_set = set(preds[:k].tolist())
-                if true_codes & pred_set:
-                    self.topk_correct[k] += 1
-                self.topk_total[k] += 1
+            # === Recall@K, Micro-Recall@K, Precision@K ===
+            for k in self.k_values:
+                pred_set = set(pred_indices[:k].tolist())
+                hits = len(true_codes & pred_set)
+                
+                # Recall@K (binary: any hit = success)
+                if hits > 0:
+                    self._state.recall_hits[k] += 1
+                self._state.recall_total[k] += 1
+                
+                # Micro-Recall@K (per-code granularity)
+                self._state.micro_recall_hits[k] += hits
+                self._state.micro_recall_true[k] += num_true
+                
+                # Precision@K
+                self._state.precision_sum[k] += hits / k
+                self._state.precision_count[k] += 1
             
-            # Recall@K
-            for k in self.k_values_recall:
-                pred_set = set(preds[:k].tolist())
-                if true_codes & pred_set:
-                    self.recall_correct[k] += 1
-                self.recall_total[k] += 1
+            # === NDCG@K ===
+            for k in self.k_values:
+                top_k_preds = pred_indices[:k].tolist()
+                dcg = sum(
+                    self._discounts[rank] 
+                    for rank, pred in enumerate(top_k_preds) 
+                    if pred in true_codes
+                )
+                num_relevant = min(num_true, k)
+                idcg = sum(self._discounts[:num_relevant])
+                ndcg = dcg / idcg if idcg > 0 else 0.0
+                self._state.ndcg_sum[k] += ndcg
+                self._state.ndcg_count[k] += 1
             
-            # Precision@K
-            for k in self.k_values_recall:
-                pred_list = preds[:k].tolist()
-                hits = sum(1 for c in pred_list if c in true_codes)
-                self.precision_sum[k] += hits / k
-                self.precision_count[k] += 1
+            # === MRR (best-ranked true code) ===
+            if self.compute_mrr:
+                best_rank = self._max_k  # Default to max if not found
+                pred_dict = {code.item(): rank for rank, code in enumerate(pred_indices[:self._max_k])}
+                for code in true_codes:
+                    if code in pred_dict and pred_dict[code] < best_rank:
+                        best_rank = pred_dict[code]
+                if best_rank < self._max_k:
+                    self._state.mrr_sum += 1.0 / (best_rank + 1)
+                self._state.mrr_count += 1
             
-            # mAP@K
-            for k in [20, 50]:
-                ap = self._compute_ap(preds[:k].tolist(), true_codes)
-                if ap is not None:
-                    self.map_sum[k] += ap
-                    self.map_count[k] += 1
-            
-            # Brier score
-            if probs is not None:
-                self._update_brier(probs[i], true_codes, vocab_size)
-    
-    def _compute_ap(self, pred_list: List[int], true_codes: set) -> Optional[float]:
-        """Compute Average Precision for a single sample."""
-        hits = 0
-        precisions = []
-        for rank, pred_code in enumerate(pred_list, 1):
-            if pred_code in true_codes:
-                hits += 1
-                precisions.append(hits / rank)
-        return np.mean(precisions) if precisions else None
-    
-    def _update_brier(self, probs: torch.Tensor, true_codes: set, vocab_size: int):
-        """Update Brier score accumulator."""
-        probs_np = probs.numpy() if isinstance(probs, torch.Tensor) else probs
-        targets = np.zeros(vocab_size)
-        for c in true_codes:
-            if c < vocab_size:
-                targets[c] = 1.0
-        self.brier_sum += np.mean((probs_np - targets) ** 2)
-        self.brier_count += 1
+            # === Positive-Only Brier Score ===
+            if self.compute_brier and probs is not None:
+                for code in true_codes:
+                    if 0 < code < self.vocab_size:
+                        pred_prob = probs[i, code].item()
+                        self._state.positive_brier_sum += (pred_prob - 1.0) ** 2
+                        self._state.positive_brier_count += 1
     
     def compute(self) -> Dict[str, float]:
-        """Compute final metrics from accumulators."""
+        """
+        Compute final metrics from accumulated state.
+        
+        Returns:
+            Dict with all computed metrics
+        """
         metrics = {}
         
         # Loss
-        metrics['val_loss'] = self.total_loss / max(self.num_batches, 1)
-        
-        # Top-K accuracy
-        for k in self.k_values_topk:
-            metrics[f'top_{k}_acc'] = (
-                self.topk_correct[k] / self.topk_total[k] 
-                if self.topk_total[k] > 0 else 0.0
-            )
+        metrics['val_loss'] = (
+            self._state.total_loss / max(self._state.num_batches, 1)
+        )
         
         # Recall@K
-        for k in self.k_values_recall:
+        for k in self.k_values:
             metrics[f'recall@{k}'] = (
-                self.recall_correct[k] / self.recall_total[k] 
-                if self.recall_total[k] > 0 else 0.0
+                self._state.recall_hits[k] / self._state.recall_total[k]
+                if self._state.recall_total[k] > 0 else 0.0
+            )
+        
+        # Micro-Recall@K
+        for k in self.k_values:
+            metrics[f'micro_recall@{k}'] = (
+                self._state.micro_recall_hits[k] / self._state.micro_recall_true[k]
+                if self._state.micro_recall_true[k] > 0 else 0.0
             )
         
         # Precision@K
-        for k in self.k_values_recall:
+        for k in self.k_values:
             metrics[f'precision@{k}'] = (
-                self.precision_sum[k] / self.precision_count[k] 
-                if self.precision_count[k] > 0 else 0.0
+                self._state.precision_sum[k] / self._state.precision_count[k]
+                if self._state.precision_count[k] > 0 else 0.0
             )
         
-        # mAP@K
-        for k in [20, 50]:
-            metrics[f'mAP@{k}'] = (
-                self.map_sum[k] / self.map_count[k] 
-                if self.map_count[k] > 0 else 0.0
+        # NDCG@K
+        for k in self.k_values:
+            metrics[f'ndcg@{k}'] = (
+                self._state.ndcg_sum[k] / self._state.ndcg_count[k]
+                if self._state.ndcg_count[k] > 0 else 0.0
             )
         
-        # Brier score
-        metrics['brier_score'] = (
-            self.brier_sum / self.brier_count 
-            if self.brier_count > 0 else 0.0
-        )
+        # MRR
+        if self.compute_mrr:
+            metrics['mrr'] = (
+                self._state.mrr_sum / self._state.mrr_count
+                if self._state.mrr_count > 0 else 0.0
+            )
+        
+        # Positive-Only Brier
+        if self.compute_brier:
+            metrics['positive_brier'] = (
+                self._state.positive_brier_sum / self._state.positive_brier_count
+                if self._state.positive_brier_count > 0 else 0.0
+            )
+        
+        # Metadata
+        metrics['num_samples'] = self._state.num_samples
+        metrics['num_batches'] = self._state.num_batches
         
         return metrics
-
-
-# In[ ]:
-
-
-
+    
+    def __repr__(self) -> str:
+        return (
+            f"StreamingMetrics("
+            f"k_values={self.k_values}, "
+            f"samples={self._state.num_samples}, "
+            f"batches={self._state.num_batches})"
+        )
 
 
 # #### Test
+
+# In[38]:
+
+
+def test_streaming_metrics_quick():
+    """Quick test for StreamingMetrics."""
+    metrics = StreamingMetrics(k_values=(5, 10, 20))
+    predictions = torch.randn(32, 6297)
+    targets = [[i % 100, (i+1) % 100] for i in range(32)]
+    metrics.update(predictions, targets)
+    results = metrics.compute()
+    print(results)
+    print("StreamingMetrics quick test ✔️")
+
+# Uncomment to run:
+test_streaming_metrics_quick()
+
 
 # In[33]:
 
@@ -7620,7 +8857,7 @@ class EmbeddingExtractor:
 
 # #### Test
 
-# In[103]:
+# In[178]:
 
 
 def test_embedding_extractor():
@@ -8285,7 +9522,7 @@ class DownstreamEvaluator:
 
 
 
-# In[27]:
+# In[147]:
 
 
 def run_downstream_evaluation(
@@ -8368,12 +9605,12 @@ def run_downstream_evaluation_from_saved_model(
     print(f"Model type: {downstream_config.model_type}")
     
     # Load checkpoint
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint_data = torch.load(model_path, map_location=device)
     
     # Determine model class from checkpoint
-    model_type = checkpoint.get('model_type', 'FlashAttentionTransformer')
-    config_dict = checkpoint.get('config', {})
-    moe_config_dict = checkpoint.get('moe_config', None)
+    model_type = checkpoint_data.get('model_type', 'FlashAttentionTransformer')
+    config_dict = checkpoint_data.get('config', {})
+    moe_config_dict = checkpoint_data.get('moe_config', None)
     
     # Reconstruct config
     if 'FlashMoE' in model_type:
@@ -8427,7 +9664,7 @@ def run_downstream_evaluation_from_saved_model(
         model = model_class(config)
     
     # Load state dict
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint_data['model_state_dict'])
     model = model.to(device)
     model.eval()
     
@@ -9073,8 +10310,8 @@ def load_trained_model(
     Returns:
         Loaded model
     """
-    checkpoint = torch.load(model_path, map_location=device)
-    moe_config_dict = checkpoint.get('moe_config', None) 
+    checkpoint_data = torch.load(model_path, map_location=device)
+    moe_config_dict = checkpoint_data.get('moe_config', None) 
     
     # Create model instance
     if model_class == FlashMoETransformer:
@@ -9101,26 +10338,14 @@ def load_trained_model(
     else:
         model = model_class(config)
     
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint_data['model_state_dict'])
     model = model.to(device)
     model.eval()
     
     print(f"Model loaded from: {model_path}")
-    print(f"Model type: {checkpoint.get('model_type', 'Unknown')}")
+    print(f"Model type: {checkpoint_data.get('model_type', 'Unknown')}")
     
     return model
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[28]:
-
 
 
 
@@ -9136,7 +10361,7 @@ def compute_code_frequencies(
     train_data: pd.DataFrame,
     config: BaseConfig,
     device: torch.device,
-    max_batches: int = 1000
+    sample_fraction: float = 0.1
 ) -> np.ndarray:
     """
     Compute code frequencies from training data for stratified evaluation.
@@ -9145,7 +10370,7 @@ def compute_code_frequencies(
         train_data: Training DataFrame
         config: Model configuration
         device: Torch device
-        max_batches: Maximum batches to sample (for efficiency)
+        sample_fraction: Fraction of training data to use (1.0 = all data)
     
     Returns:
         code_frequencies: [target_cd_cnt] array with code counts
@@ -9155,21 +10380,21 @@ def compute_code_frequencies(
     code_frequencies = np.zeros(config.target_cd_cnt, dtype=np.int64)
     train_code_counts = Counter()
     
-    # Sample batches for efficiency
-    if len(train_data) < config.batch_size:
-        nbatch = 1
+    if sample_fraction < 1.0:
+        n_samples = int(len(train_data) * sample_fraction)
+        sample_data = train_data.sample(n=n_samples, random_state=42)
     else:
-        nbatch = min(len(train_data) // config.batch_size, max_batches)
-    
+        sample_data = train_data
+    print(f"  Processing {len(sample_data):,} samples...")
     # Create a small dataset for sampling
-    sample_data = train_data.head(nbatch * config.batch_size)
+
     sample_dataset = ClinicalDataset(sample_data, config)
     sample_loader = DataLoader(sample_dataset, 
                                batch_size=config.batch_size, 
                                shuffle=False, 
                                collate_fn=create_collate_fn(config))
     
-    for batch in sample_loader:  # ✅ Iterate over DataLoader
+    for batch_idx, batch in enumerate(sample_loader):  # ✅ Iterate over DataLoader
         y = batch['target']
         
         # Flatten nested structure
@@ -9182,387 +10407,40 @@ def compute_code_frequencies(
         ]
         
         train_code_counts.update(y_flat)
-    
+        if (batch_idx + 1) % 500 == 0:
+            print(f"    Processed {batch_idx + 1} batches, {len(train_code_counts)} unique codes found")    
+            
     # Convert Counter to array
     for code_idx, count in train_code_counts.items():
         if 0 <= code_idx < config.target_cd_cnt:
             code_frequencies[code_idx] = count
     
-    print(f"  Computed frequencies for {len(train_code_counts)} unique codes")
-    print(f"  Most common code: {train_code_counts.most_common(1)[0] if train_code_counts else 'N/A'}")
+    non_zero_codes = np.sum(code_frequencies > 0)
+    total_occurrences = code_frequencies.sum()
+    
+    print(f"  ✅ Code frequency computation complete:")
+    print(f"     - Unique codes found: {non_zero_codes:,} / {config.target_cd_cnt:,}")
+    print(f"     - Total code occurrences: {total_occurrences:,}")
+    print(f"     - Most frequent code: idx={code_frequencies.argmax()}, count={code_frequencies.max():,}")
+    print(f"     - Median frequency: {np.median(code_frequencies[code_frequencies > 0]):.0f}")
     
     return code_frequencies
 
 
-# In[30]:
-
-
-def _calculate_model_dimensions(embedding_size: int, 
-                                use_swiglu: bool = False) -> dict:
-    """
-    Calculate optimal nhead and nhid based on embedding_size and industry best practices.
-    
-    Industry Standards:
-    - nhead: Chosen to give head_dim of 32, 64, or 128 (optimal for Flash Attention)
-    - nhid: For standard FFN: 4x embedding_size
-            For SwiGLU: ~8/3 x embedding_size (LLaMA, PaLM standard)
-    
-    Args:
-        embedding_size: Model dimension (d_model)
-        use_swiglu: Whether using SwiGLU activation (True for Flash/MoE models)
-    
-    Returns:
-        dict with 'nhead' and 'nhid'
-    """
-    # ============================================================
-    # NHEAD CALCULATION (Target head_dim: 64 preferred, 32 or 128 acceptable)
-    # ============================================================
-    if embedding_size <= 256:
-        # 256 / 8 = 32 (good for Flash Attention)
-        nhead = 8
-    elif embedding_size <= 512:
-        # 512 / 8 = 64 (optimal for Flash Attention)
-        nhead = 8
-    elif embedding_size <= 768:
-        # 768 / 12 = 64 (BERT-base standard)
-        nhead = 12
-    elif embedding_size <= 1024:
-        # 1024 / 16 = 64 (optimal)
-        nhead = 16
-    elif embedding_size <= 2048:
-        # 2048 / 32 = 64 (optimal)
-        nhead = 32
-    else:
-        # For very large models, target head_dim=128
-        nhead = embedding_size // 128
-    
-    # ============================================================
-    # NHID CALCULATION
-    # ============================================================
-    if use_swiglu:
-        # SwiGLU uses 3 projections instead of 2
-        # To match parameter count: nhid_swiglu = (2/3) * nhid_standard
-        # Standard: nhid = 4 * d_model
-        # SwiGLU: nhid = (2/3) * 4 * d_model = (8/3) * d_model ≈ 2.67 * d_model
-        # Round to nearest multiple of 64 for memory alignment
-        nhid_raw = int((8 / 3) * embedding_size)
-        nhid = ((nhid_raw + 63) // 64) * 64  # Round up to multiple of 64
-    else:
-        # Standard FFN: 4x expansion (Vaswani et al. 2017)
-        nhid = 4 * embedding_size
-    
-    return {
-        'nhead': nhead,
-        'nhid': nhid,
-        'head_dim': embedding_size // nhead  # For logging
-    }
-
-
 # #### Run experimentation
 
-# In[31]:
-
-
-# ============================================================================
-# EXPERIMENT HELPER FUNCTIONS
-# ============================================================================
-
-def _setup_experiment_directories(
-    log_dir: str,
-    experiment_round: Optional[str],
-    exp_name: str,
-    checkpoint_dir: Optional[str]
-) -> Tuple[str, str]:
-    """Set up logging and checkpoint directories."""
-    if experiment_round is not None:
-        effective_log_dir = os.path.join(log_dir, experiment_round)
-    else:
-        datetime_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        effective_log_dir = os.path.join(log_dir, f"exp_{datetime_string}")
-    
-    if checkpoint_dir is None:
-        checkpoint_dir = os.path.join(effective_log_dir, exp_name, 'checkpoints')
-    
-    return effective_log_dir, checkpoint_dir
-
-
-def _create_model(
-    exp_name: str,
-    eff_d_model: int,
-    eff_nhid: int,
-    eff_nhead: int,
-    moe_config: Optional[MoEConfig],
-    use_learnt_att_pool: bool,
-    device: torch.device,
-    logger: Optional[logging.Logger] = None
-) -> Tuple[nn.Module, BaseConfig, bool, bool]:
-    """
-    Create model based on experiment type.
-    
-    Returns:
-        model, config, use_mixed_precision, use_bucketing
-    """
-    is_baseline = exp_name == 'exp1_dense_baseline'
-    is_flash_dense = exp_name in ['exp2_dense_flash', 'exp2b_flash_learned_pool']
-    is_moe = moe_config is not None and not is_baseline and not is_flash_dense
-    
-    if is_baseline:
-        config = BaseConfig(embedding_size=eff_d_model, nhid=eff_nhid)
-        model = BaselineTransformer(config).to(device)
-        use_mixed_precision = False
-        use_bucketing = False
-        if logger:
-            logger.info(f"Model: Baseline Transformer (FP32)")
-            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead=16 (hardcoded)")
-            
-    elif is_flash_dense:
-        config = FlashAttentionConfig(
-            embedding_size=eff_d_model,
-            nhid=eff_nhid,
-            nhead=eff_nhead,
-            use_swiglu=True,
-            dtype=torch.float16,
-            use_learnt_att_pool=use_learnt_att_pool
-        )
-        model = FlashAttentionTransformer(config).to(device)
-        use_mixed_precision = True
-        use_bucketing = True
-        if logger:
-            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-            logger.info(f"Model: Flash Attention Transformer (FP16)")
-            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
-            logger.info(f"  Daily Encoder: {pooling_str}")
-            
-    else:
-        # MoE variant
-        config = FlashAttentionConfig(
-            embedding_size=eff_d_model,
-            nhid=eff_nhid,
-            nhead=eff_nhead,
-            use_swiglu=True,
-            dtype=torch.float16,
-            use_learnt_att_pool=use_learnt_att_pool
-        )
-        if moe_config:
-            import copy
-            moe_config = copy.deepcopy(moe_config)
-            moe_config.d_model = eff_d_model
-            moe_config.d_ff = eff_nhid
-            
-        model = FlashMoETransformer(config, moe_config).to(device)
-        use_mixed_precision = True
-        use_bucketing = True
-        if logger:
-            pooling_str = "Learned Attention Pooling" if use_learnt_att_pool else "Flash Attention + Max-Pool"
-            logger.info(f"Model: Flash + MoE Transformer (FP16)")
-            logger.info(f"  d_model={eff_d_model}, nhid={eff_nhid}, nhead={eff_nhead}")
-            logger.info(f"  Daily Encoder: {pooling_str}")
-            logger.info(f"  MoE: {moe_config.num_experts} experts, top-{moe_config.top_k}")
-    
-    return model, config, use_mixed_precision, use_bucketing
-
-
-def _create_dataloaders(
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    config: BaseConfig,
-    use_bucketing: bool,
-    world_size: int = 1,
-    logger: Optional[logging.Logger] = None
-) -> Tuple[DataLoader, DataLoader]:
-    """Create train and validation dataloaders."""
-    train_dataset = ClinicalDataset(train_data, config)
-    val_dataset = ClinicalDataset(val_data, config)
-    
-    n_workers = min(4, os.cpu_count() // 4)
-    collate_fn = create_collate_fn(config)
-    
-    if use_bucketing:
-        if logger:
-            logger.info("Bucketing is ENABLED via BatchSampler.")
-        train_batch_sampler = BucketingBatchSampler(
-            data=train_data,
-            batch_size=config.batch_size,
-            shuffle=True
-        )
-        train_loader = DataLoader(
-            train_dataset,
-            batch_sampler=train_batch_sampler,
-            num_workers=n_workers,
-            pin_memory=True,
-            collate_fn=collate_fn,
-            persistent_workers=False 
-        )
-    else:
-        if logger:
-            logger.info("Using standard DataLoader (no bucketing).")
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=n_workers,
-            pin_memory=True,
-            drop_last=True,
-            collate_fn=collate_fn,
-            persistent_workers=False
-        )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=n_workers,
-        pin_memory=True,
-        collate_fn=collate_fn
-    )
-    
-    if logger:
-        logger.info(f"Using DataLoader with {n_workers} workers.")
-    
-    return train_loader, val_loader
-
-
-def _resume_from_checkpoint(
-    resume_path: str,
-    model: nn.Module,
-    optimizer: optim.Optimizer,
-    scheduler: Optional[Any],
-    scaler: Optional[GradScaler],
-    device: torch.device,
-    logger: Optional[logging.Logger] = None
-) -> Tuple[int, int, float]:
-    """
-    Resume training from checkpoint.
-    
-    Returns:
-        start_epoch, global_step, best_val_loss
-    """
-    checkpoint = torch.load(resume_path, map_location=device)
-    
-    if isinstance(model, nn.DataParallel):
-        model.module.load_state_dict(checkpoint['model_state_dict'])
-    else:
-        model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    if scheduler and checkpoint.get('scheduler_state_dict'):
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    
-    if scaler and checkpoint.get('scaler_state_dict'):
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-    
-    start_epoch = checkpoint['epoch'] + 1
-    global_step = checkpoint.get('global_step', 0)
-    
-    best_val_loss = float('inf')
-    if checkpoint.get('metrics'):
-        valid_losses = [m.get('val_loss', float('inf')) for m in checkpoint['metrics'] if 'val_loss' in m]
-        if valid_losses:
-            best_val_loss = min(valid_losses)
-    
-    if logger:
-        logger.info(f"✅ Resumed from epoch {start_epoch}, step {global_step}")
-        logger.info(f"   Previous best val loss: {best_val_loss:.4f}")
-    
-    return start_epoch, global_step, best_val_loss
-
-
-def _build_epoch_metrics(
-    epoch: int,
-    train_metrics: Dict,
-    train_eval_metrics: Dict,
-    val_metrics: Dict
-) -> Dict[str, Any]:
-    """Build comprehensive epoch metrics dictionary."""
-    epoch_metrics = {
-        'epoch': epoch + 1,
-        # Training trajectory
-        'train_loss': train_metrics['train_loss'],
-        'train_loss_mean': train_metrics['train_loss_mean'],
-        'train_loss_first': train_metrics['train_loss_first'],
-        'train_loss_last': train_metrics['train_loss_last'],
-        'train_loss_std': train_metrics['train_loss_std'],
-        'train_loss_improvement': train_metrics['train_loss_improvement'],
-        # Train evaluation
-        'eval_in_train_loss_final': train_eval_metrics['val_loss'],
-        'eval_in_train_recall@1': train_eval_metrics['recall@1'],
-        'eval_in_train_recall@5': train_eval_metrics['recall@5'],
-        'eval_in_train_recall@10': train_eval_metrics['recall@10'],
-        'eval_in_train_recall@20': train_eval_metrics['recall@20'],
-        # Validation
-        'final_val_loss': val_metrics['val_loss'],
-        'final_val_recall@1': val_metrics['recall@1'],
-        'final_val_recall@5': val_metrics['recall@5'],
-        'final_val_recall@10': val_metrics['recall@10'],
-        'final_val_recall@20': val_metrics['recall@20'],
-        'generalization_gap': train_eval_metrics['val_loss'] - val_metrics['val_loss'],
-    }
-    
-    # Add other training metrics
-    for k, v in train_metrics.items():
-        if k.startswith('train_') and k not in epoch_metrics:
-            epoch_metrics[k] = v
-    
-    # Add other validation metrics (embedding quality, etc.)
-    for k, v in val_metrics.items():
-        if k not in epoch_metrics and k not in ['val_loss', 'recall@1', 'recall@5', 'recall@10', 'recall@20']:
-            epoch_metrics[k] = v
-    
-    return epoch_metrics
-
-
-def _build_final_results(
-    exp_name: str,
-    total_params: int,
-    use_learnt_att_pool: bool,
-    use_bucketing: bool,
-    final_metrics: Dict,
-    evaluation: Dict,
-    epoch_history: List[Dict],
-    total_time: float
-) -> Dict[str, Any]:
-    """Build final experiment results dictionary."""
-    return {
-        'experiment': exp_name,
-        'parameters': total_params,
-        'use_learned_pooling': use_learnt_att_pool,
-        'use_bucketing': use_bucketing,
-        'train_loss_mean': final_metrics['train_loss'],
-        'train_loss_learned': final_metrics['train_loss_improvement'],
-        'train_loss_final': final_metrics['eval_in_train_loss_final'],
-        'val_loss_final': final_metrics['final_val_loss'],
-        'generalization_gap': final_metrics['generalization_gap'],
-        'final_train_recall@5': final_metrics['eval_in_train_recall@5'],
-        'final_train_recall@10': final_metrics['eval_in_train_recall@10'],
-        'final_train_recall@20': final_metrics['eval_in_train_recall@20'],
-        'final_val_recall@5': final_metrics['final_val_recall@5'],
-        'final_val_recall@10': final_metrics['final_val_recall@10'],
-        'final_val_recall@20': final_metrics['final_val_recall@20'],
-        'training_time_sec': total_time,
-        'precision@10': evaluation['performance']['precision@10'],
-        'recall@10': evaluation['performance']['recall@10'],
-        'f1@10': evaluation['performance']['f1@10'],
-        'balanced_top10_acc': evaluation['performance']['balanced_top10_acc'],
-        'tail_top10_acc': evaluation['performance']['tail_top10_acc'],
-        'cost_usd': evaluation['resources']['cost_usd'],
-        'peak_memory_gb': evaluation['resources']['total_peak_gb'],
-        'full_evaluation': evaluation,
-        'all_epochs': epoch_history
-    }
-
-
-# In[32]:
+# In[55]:
 
 
 def run_single_experiment(
     exp_name: str,
     moe_config: Optional[MoEConfig],
     use_learnt_att_pool: bool,
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    device: torch.device,
-    epochs: int = 4,
-    code_frequencies: Optional[np.ndarray] = None,
+    prepared_data: Optional[PreparedData] = None,
+    train_data: Optional[pd.DataFrame] = None, # needed for bucketing sampler
+    val_data: Optional[pd.DataFrame] = None, # deprecated
+    device: torch.device = None,
+    epochs: int = 2,
     log_dir: str = "logs",
     experiment_round: Optional[str] = None,
     check_embeddings_every: float = None,
@@ -9572,13 +10450,27 @@ def run_single_experiment(
     embedding_size: Optional[int] = None,
     local_rank: Optional[int] = None,
     world_size: Optional[int] = None,
-    save_model: bool = True
+    save_model: bool = True,
+    optimize_config: Optional[OptimizeConfig] = None
     
 ) -> Dict[str, Any]:
     """
     Run a single experiment with optional downstream evaluation.
     V2: clean up the messy implemenation and put the V1 to legacy
     This is the main entry point for training a model variant.
+    
+    Training Flow:
+    1. Setup directories, logging
+    2. Create model
+    3. Create dataloaders  
+    4. Setup optimizer/scheduler
+    5. Training loop (epochs)
+       - Each epoch: train → evaluate → save_checkpoint()
+    6. total_time = time.time() - start_time
+    7. comprehensive_evaluation()
+    8. Save final model
+    9. Cleanup checkpoints
+    10. Finalize & return results
     """
     # ============================================================
     # 1. SETUP
@@ -9608,8 +10500,7 @@ def run_single_experiment(
     # ============================================================
     eff_d_model = embedding_size if embedding_size is not None else 256
     uses_swiglu = exp_name not in ['exp1_dense_baseline']
-    dims = _calculate_model_dimensions(eff_d_model, use_swiglu=uses_swiglu)
-    
+    dims = _calculate_model_dimensions(eff_d_model, use_swiglu=uses_swiglu)    
     model, config, use_mixed_precision, use_bucketing = _create_model(
         exp_name=exp_name,
         eff_d_model=eff_d_model,
@@ -9625,11 +10516,58 @@ def run_single_experiment(
     logger.info(f"Total parameters: {total_params:,}")
 
     # ============================================================
+    # GET DATASET AND CODE FREQUENCY
+    # ============================================================
+    
+    if prepared_data is not None:
+        train_dataset = prepared_data.train_dataset
+        val_dataset = prepared_data.val_dataset
+        code_frequencies = prepared_data.code_frequencies
+        # For bucketing, we need the original DataFrame - store reference
+        train_data_df = train_data if train_data is not None else None
+        logger.info("✅ Using pre-prepared data")    
+    else:
+        # LEGACY PATH: Create datasets from DataFrames; will deprecate this soon; takes long time
+        if train_data is None or val_data is None:
+            raise ValueError("Either prepared_data or (train_data, val_data) must be provided")
+        
+        logger.info("⚠️ Using legacy mode: parsing datasets from DataFrames")
+        train_dataset = ClinicalDataset(train_data, config)
+        val_dataset = ClinicalDataset(val_data, config)
+        train_data_df = train_data
+        
+        # Calculate code frequency if not provided
+        code_frequencies = _compute_code_frequencies_from_dataset(
+            train_dataset, config, sample_fraction=1.0
+        )    
+
+    # ============================================================
+    # CRITERION CREATION (Focal Loss + multiple weight methods)
+    # ============================================================
+    # Create criterion with pos_weight
+    if optimize_config is not None and (optimize_config.use_pos_weight or optimize_config.use_focal_loss):
+        criterion = create_criterion(
+            code_frequencies=code_frequencies,
+            device=device,
+            optimize_config=optimize_config
+        )
+        # Log details
+        if optimize_config.use_focal_loss:
+            logger.info(f"Using FocalLoss (gamma={optimize_config.focal_gamma}, alpha={optimize_config.focal_alpha})")
+        else:
+            logger.info("Using BCEWithLogitsLoss")
+        if optimize_config.use_pos_weight:
+            logger.info(f"  With pos_weight method: {optimize_config.pos_weight_method}")
+    else:
+        criterion = nn.BCEWithLogitsLoss()
+        logger.info("Using BCEWithLogitsLoss without pos_weight")
+        
+    # ============================================================
     # DATAPARALLEL WRAPPER FOR MULTI-GPU
     # ============================================================    
     num_gpus = torch.cuda.device_count()
     use_data_parallel = num_gpus > 1
-    criterion = nn.BCEWithLogitsLoss()
+    
     # Always wrap model regardless of num_gpus
     wrapped_model = DataParallelWrapper(
         model=model,
@@ -9680,15 +10618,17 @@ def run_single_experiment(
     })
     
     # ============================================================
-    # 3. DATA PREPARATION
+    # CONVERT DATASET TO DATALOADER 
+    # Have to come after the config.batch_size = effective_batch_size gets updated
     # ============================================================
-    if code_frequencies is None:
-        code_frequencies = compute_code_frequencies(train_data, config, device)
-    
     train_loader, val_loader = _create_dataloaders(
-        train_data, val_data, config, use_bucketing, logger=logger
+        train_data=train_dataset, 
+        val_data=val_dataset, 
+        config = config, 
+        use_bucketing = use_bucketing, 
+        train_data_df = train_data_df, 
+        logger=logger
     )
-    
     # ============================================================
     # 4. OPTIMIZER SETUP
     # ============================================================
@@ -9698,7 +10638,18 @@ def run_single_experiment(
         weight_decay=config.weight_decay
     )
     total_steps = len(train_loader) * epochs
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+    
+    scheduler, scheduler_desc = create_scheduler(
+        optimizer=optimizer,
+        optimize_config=optimize_config,
+        total_steps=total_steps,
+        scaled_lr=scaled_lr,
+        logger=logger
+    )  
+    
+    if is_main:
+        logger.info(f"Scheduler: {scheduler_desc}") 
+
     scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
     
     # ============================================================
@@ -9804,7 +10755,10 @@ def run_single_experiment(
         # Log summary
         logger.info(f"\n--- Epoch {epoch+1} Summary ---")
         logger.info(f"  Train loss: {train_metrics['train_loss']:.4f} → {train_metrics['train_loss_last']:.4f}")
-        logger.info(f"  Val loss: {val_metrics['val_loss']:.4f}, Recall@10: {val_metrics['recall@10']:.3f}")
+        logger.info(f"  Val loss: {val_metrics['val_loss']:.4f}, "
+                    f"Recall@10: {val_metrics.get('recall@10', 0):.3f}, "
+                    f"μRecall@10: {val_metrics.get('micro_recall@10', 0):.3f}, "
+                    f"NDCG@20: {val_metrics.get('ndcg@20', 0):.3f}")
         
         metrics_logger.log_epoch(epoch + 1, epoch_metrics)
         loss_tracker.save_trajectory(
@@ -9902,7 +10856,9 @@ def run_selected_experiments(
     embedding_size: Optional[int] = None,
     local_rank: Optional[int] = None,      
     world_size: Optional[int] = None,
-    save_model: bool = True
+    save_model: bool = True,
+    optimize_config: Optional[OptimizeConfig] = None,
+    prepared_data: Optional[PreparedData] = None
 ) -> pd.DataFrame:
     """
     Run SELECTED experiments (flexible subset).
@@ -9937,6 +10893,20 @@ def run_selected_experiments(
         print("\n" + "="*80)
         print(f"RUNNING {len(experiment_names)} SELECTED EXPERIMENTS")
         print("="*80)
+
+    if prepared_data is None:
+        if is_main:
+            print("\n Preparing data once for all experiments...")
+        prepared_data = prepare_data_once(
+            train_data=train_data,
+            val_data=val_data,
+            device=device,
+            code_freq_sample_fraction=1.0
+        )
+    else:
+        if is_main:
+            print("\n Using pre-prepared data")
+            print(f"   {prepared_data}")
         
     # Get all available configurations
     all_configs = get_experiment_configs()
@@ -9965,15 +10935,17 @@ def run_selected_experiments(
             exp_name=exp_name,
             moe_config=moe_config,
             use_learnt_att_pool=use_learnt_att_pool,
+            prepared_data=prepared_data, 
             train_data=train_data,
-            val_data=val_data,
+            val_data = val_data,
             device=device,
             epochs=epochs,
             experiment_round=experiment_round,
             embedding_size=embedding_size,
             local_rank=local_rank,      
             world_size=world_size,
-            save_model = save_model
+            save_model = save_model,
+            optimize_config = optimize_config
         )
         
         all_results.append(results)
@@ -9985,13 +10957,13 @@ def run_selected_experiments(
     
     return df_results
 
-
 def run_all_experiments(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     device: torch.device,
     epochs: int = 10,
-    experiment_round: Optional[str] = None 
+    experiment_round: Optional[str] = None,
+    prepared_data: Optional[PreparedData] = None
 ) -> pd.DataFrame:
     """
     Run ALL experiments (convenience wrapper).
@@ -10010,7 +10982,7 @@ def run_all_experiments(
     # Get all experiment names
     all_configs = get_experiment_configs()
     experiment_names = list(all_configs.keys())
-    
+    optimize_config = OptimizeConfig()
     print(f"\nRunning ALL {len(experiment_names)} experiments:")
     for i, name in enumerate(experiment_names, 1):
         _, use_pool = all_configs[name]
@@ -10024,11 +10996,12 @@ def run_all_experiments(
         val_data=val_data,
         device=device,
         epochs=epochs,
-        experiment_round=experiment_round
+        experiment_round=experiment_round,
+        prepared_data=prepared_data
     )
 
 
-# ##### Test
+# #### Test
 
 # In[44]:
 
@@ -10127,7 +11100,7 @@ test_run_single_experiment_with_downstream()
 
 # ### GPU usage tracking
 
-# In[33]:
+# In[34]:
 
 
 class GPUMemoryTracker:
@@ -10217,7 +11190,7 @@ class GPUMemoryTracker:
 
 # ### Memory management
 
-# In[34]:
+# In[35]:
 
 
 import torch
@@ -10441,18 +11414,18 @@ def load_checkpoint_multigpu(
     """
     Load checkpoint compatible with DataParallel.
     """
-    checkpoint = torch.load(filepath, map_location=device)
+    checkpoint_data = torch.load(filepath, map_location=device)
     
     # If model is wrapped in DataParallel, load to module
     if isinstance(model, nn.DataParallel):
-        model.module.load_state_dict(checkpoint['model_state_dict'])
+        model.module.load_state_dict(checkpoint_data['model_state_dict'])
     else:
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint_data['model_state_dict'])
     
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
     
     print(f"✅ Checkpoint loaded: {filepath}")
-    return checkpoint['epoch'], checkpoint['metrics']
+    return checkpoint_data['epoch'], checkpoint_data['metrics']
         
 
     
@@ -10516,7 +11489,7 @@ def cleanup_checkpoints_after_training(
 
 # ### Time and cost estimation
 
-# In[33]:
+# In[74]:
 
 
 import numpy as np
@@ -10738,7 +11711,7 @@ for members in [100_000, 500_000, 1_000_000, 5_000_000, 12_000_000]:
               f"{result['hours']:.1f}h (${result['cost_usd']})")
 
 
-# ### Final tests
+# ### Final tests (only for v1 and v2)
 
 # In[32]:
 
@@ -11570,7 +12543,7 @@ test_loss_computation_correctness()
 
 # #### Training loop
 
-# In[ ]:
+# In[180]:
 
 
 # ============================================================================
@@ -11880,7 +12853,7 @@ def test_comprehensive_metrics_computation():
     print(f"  Num samples: {len(predictions)}")
     
     # Compute code frequencies for stratified metrics
-    code_freq = compute_code_frequencies(df_train, config, device, max_batches=10)
+    code_freq = compute_code_frequencies(df_train, config, device)
     
     # Test all metric functions
     print("\n  Testing metric functions...")
@@ -12599,7 +13572,7 @@ test_full_experiment_simulation()
 
 # #### Training with real data
 
-# In[31]:
+# In[86]:
 
 
 import google.auth
@@ -13029,7 +14002,7 @@ results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-m
 
 # ### Downstream evaluation   
 
-# In[35]:
+# In[39]:
 
 
 import google.auth
@@ -13042,7 +14015,7 @@ print('credentials:', credentials, ', project:', project)
 
 # #### Test GPU availability
 
-# In[36]:
+# In[37]:
 
 
 import torch
@@ -13072,8 +14045,10 @@ if num_gpus > 1:
     del test_model, test_input, output
     torch.cuda.empty_cache()
 # Force complete cleanup
+print("\nClearing GPU memory...")
 gc.collect()
 torch.cuda.empty_cache()
+cleanup_gpu_memory_hard()
 
 for i in range(torch.cuda.device_count()):
     with torch.cuda.device(i):
@@ -13084,15 +14059,6 @@ for i in range(torch.cuda.device_count()):
 for i in range(torch.cuda.device_count()):
     free, total = torch.cuda.mem_get_info(i)
     print(f"GPU {i}: {free/1e9:.2f} GB free / {total/1e9:.2f} GB total")
-
-
-# In[37]:
-
-
-print("\nClearing GPU memory...")
-gc.collect()
-torch.cuda.empty_cache()
-cleanup_gpu_memory_hard()
 
 
 # #### Formal training v1
@@ -13143,7 +14109,7 @@ df_val_sample.acute_ip_flag.value_counts()
 
 # ##### Exp1 Baseline dense model
 
-# In[74]:
+# In[79]:
 
 
 # Get predefined experiment configs
@@ -13173,8 +14139,8 @@ results = run_single_experiment(
     embedding_size=EMBEDDING_SIZE,
     experiment_round=EXPERIMENT_ROUND,
     log_dir="logs",
-    log_metrics_every=100,  # Log every 100 batches for batch_size of 32
-    check_embeddings_every=1,  # Check embeddings every epoch
+    log_metrics_every=1000,  # Log every 100 batches for batch_size of 32
+    check_embeddings_every=None,  # Check embeddings every epoch
     # Downstream evaluation settings
     outcomes_df=df_val_sample[['individual_id', 'index_dt', 'acute_ip_flag']],
     run_downstream_eval=True,  # Enable downstream evaluation
@@ -13359,7 +14325,7 @@ df_expanded = pd.concat([
 df_expanded.to_excel("experiment_logs/exp4_320k_1epoch_32batch_dim256_downstream_all_Dec13_external_metrics_only.xlsx")
 
 
-# #### Formal Training 2
+# #### Formal Training 2 (all LOBs)
 
 # ##### Summary
 
@@ -13432,7 +14398,7 @@ df_expanded.to_excel("experiment_logs/exp4_320k_1epoch_32batch_dim256_downstream
 
 # ##### Data ingestion
 
-# In[38]:
+# In[40]:
 
 
 input_sql = """
@@ -13442,7 +14408,7 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sam
 input_data = client.query(input_sql).to_dataframe() 
 
 
-# In[39]:
+# In[41]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -13452,10 +14418,10 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[40]:
+# In[42]:
 
 
-# Split training and validation dataset
+## Split training and validation dataset
 # Set your desired train/validation split ratio
 TRAIN_RATIO = 0.8  # 80% train, 20% validation
 RANDOM_SEED = 42   # For reproducibility
@@ -13468,7 +14434,7 @@ train_df, val_df = train_test_split(
 )
 
 
-# In[46]:
+# In[43]:
 
 
 print(f"{'LOB':<15} {'Total':>12} {'Original %':>12} {'Train %':>12} {'Val %':>12}")
@@ -13480,9 +14446,9 @@ for lob in df_unique['lob'].unique():
     print(f"{lob:<15} {total_n:>11.2f} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
 
 
-# ##### Baseline dense model
+# ##### Exp2 flash dense model
 
-# In[42]:
+# In[44]:
 
 
 # Get predefined experiment configs
@@ -13523,42 +14489,590 @@ baseline_results = run_single_experiment(
 )
 
 
+# ##### Resuming comprehensive evaluation and model saving
+
+# In[55]:
+
+
+# Training terminated due to OOM errors before comprehensive evaluation
+# Then run evaluation from checkpoints
+checkpoint_path = "logs/exp_round5_3lobs_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool/checkpoints"
+# for f in os.listdir(checkpoint_path):
+#     filepath = os.path.join(checkpoint_path, f)
+#     size_mb = os.path.getsize(filepath) / (1024 * 1024)
+#     print(f"  {f} ({size_mb:.1f} MB)")
+  # checkpoint_epoch0.pt (289.9 MB)
+  # checkpoint_best.pt (289.9 MB)
+  # checkpoint_latest.pt (289.9 MB)
+
+cleanup_gpu_memory_hard()
+checkpoint_file = os.path.join(checkpoint_path, "checkpoint_best.pt")
+checkpoint_data = torch.load(checkpoint_file, map_location=device, weights_only=False)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+model_type = checkpoint_data.get('model_type', 'FlashMoETransformer')
+exp_configs = get_experiment_configs()
+moe_config, use_learnt_att_pool = exp_configs[EXP_NAME]
+# Calculate dimensions
+EMBEDDING_SIZE = 256
+dims = _calculate_model_dimensions(EMBEDDING_SIZE, use_swiglu=True)
+exp2_model, config, use_mixed_precision, use_bucketing = _create_model(
+    exp_name=EXP_NAME,
+    eff_d_model=EMBEDDING_SIZE,
+    eff_nhid=dims['nhid'],
+    eff_nhead=dims['nhead'],
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    device=device
+)
+
+exp2_model.load_state_dict(checkpoint_data['model_state_dict'])
+
+
+
 # In[ ]:
 
 
-baseline_results
+batch_size_override = 8
+max_samples_for_detailed_metrics = 1000 
+val_dataset = ClinicalDataset(val_df, config)
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=batch_size_override, 
+    shuffle=False,
+    collate_fn=create_collate_fn(config),
+    num_workers=2,
+    pin_memory=True
+)
 
 
-# #### Downstream evaluation - Commercial
+# In[102]:
+
+
+# code_frequencies = np.ones(config.target_cd_cnt, dtype=np.int32)
+code_frequencies = compute_code_frequencies(
+    train_data=train_df, 
+    config=config,        
+    device=device
+)
+
+
+# In[110]:
+
+
+sample_val_dataset = ClinicalDataset(val_df.sample(100), config)
+sample_val_loader = DataLoader(
+    sample_val_dataset,
+    batch_size=batch_size_override, 
+    shuffle=False,
+    collate_fn=create_collate_fn(config),
+    num_workers=2,
+    pin_memory=True
+)
+
+
+# In[111]:
+
+
+len(sample_val_loader)
+
+
+# In[115]:
+
+
+EXP_NAME = "exp2b_flash_learned_pool"  # Your experiment name
+EXPERIMENT_ROUND = "exp_round5_3lobs_pretrain_multi_gpu_test_v2"
+EMBEDDING_SIZE = 256
+EPOCHS = 1  # Number of epochs that were trained
+LOG_DIR = "logs"
+
+cleanup_gpu_memory_hard()
+total_training_time = 20484.5
+completed_epoch = checkpoint_data['epoch']
+epoch_history = checkpoint_data['metrics']
+evaluation = comprehensive_evaluation(
+    model=exp2_model,
+    val_dataloader=val_loader,
+    config=config,
+    device=device,
+    training_time_sec=total_training_time,
+    epoch_history=epoch_history,
+    code_frequencies=code_frequencies,
+    moe_config=moe_config,
+    use_mixed_precision=True,  # enable FP16 for memory savings
+    max_samples_for_detailed_metrics=100
+)
+
+
+# In[116]:
+
+
+# ============================================================
+# 1. BUILD FINAL RESULTS
+# ============================================================
+# Get total parameters
+total_params = sum(p.numel() for p in exp2_model.parameters())
+
+# Get final epoch metrics (last entry in epoch_history)
+final_metrics = epoch_history[-1] if epoch_history else {}
+
+# Determine flags from experiment config
+exp_configs = get_experiment_configs()
+_, use_learnt_att_pool = exp_configs.get(EXP_NAME, (None, False))
+use_bucketing = True  # Set based on your training config
+
+# Build results dictionary
+results = _build_final_results(
+    exp_name=EXP_NAME,
+    total_params=total_params,
+    use_learnt_att_pool=use_learnt_att_pool,
+    use_bucketing=use_bucketing,
+    final_metrics=final_metrics,
+    evaluation=evaluation,
+    epoch_history=epoch_history,
+    total_time=total_training_time
+)
+
+model_name = generate_model_name(
+    exp_name=EXP_NAME,
+    experiment_round=EXPERIMENT_ROUND,
+    batch_size=config.batch_size,
+    epochs=EPOCHS,
+    embedding_size=EMBEDDING_SIZE
+)
+results['model_name'] = model_name
+print(f"\n  Model name: {model_name}")
+
+# ============================================================
+# 3. SAVE TRAINED MODEL
+# ============================================================
+effective_log_dir = os.path.join(LOG_DIR, EXPERIMENT_ROUND)
+model_save_dir = os.path.join(effective_log_dir, EXP_NAME, 'saved_models')
+
+model_path = save_trained_model(
+    model=exp2_model,
+    config=config,
+    model_name=model_name,
+    save_dir=model_save_dir,
+    exp_results=results,
+    checkpoint_dir=checkpoint_path,
+    is_best=True,
+    moe_config=moe_config
+)
+results['model_path'] = model_path
+print(f"  Model saved to: {model_path}")
+
+results_save_path = os.path.join(effective_log_dir, EXP_NAME, 'final_results_recovered.json')
+os.makedirs(os.path.dirname(results_save_path), exist_ok=True)
+
+with open(results_save_path, 'w') as f:
+    json.dump(MetricsLogger.convert_to_serializable(results), f, indent=2)
+
 
 # In[ ]:
 
 
-model_path = baseline_results['model_path']
+
+
+
+# #### Formal Training 2 - MOE variants
+
+# In[44]:
+
+
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 256  # 256, 384, or 512
+EXPERIMENT_ROUND = "exp_round5_3lobs_pretrain_multi_gpu_test_v2"
+
+
+# In[45]:
+
+
+cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
+
+
+# In[47]:
+
+
+# Prepared data for experimentation
+data_prepared = prepare_data_once(
+    train_data=train_df,
+    val_data=val_df,
+    device=device
+)
+
+
+# ##### Understand code frequency and pos_weight
+
+# In[53]:
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import Counter
+
+def analyze_code_frequency_distribution(
+    code_frequencies: np.ndarray,
+    pos_weight_candidates: list = [10, 20, 50, 75, 100],
+    show_plots: bool = True
+):
+    """
+    Comprehensive analysis of code frequency distribution to guide pos_weight selection.
+    
+    Args:
+        code_frequencies: Array from prepare_data_once()
+        pos_weight_candidates: List of pos_weight_max values to compare
+        show_plots: Whether to display matplotlib plots
+    
+    Returns:
+        dict: Analysis results and recommendations
+    """
+    
+    # ============================================================
+    # BASIC STATISTICS
+    # ============================================================
+    total_codes = len(code_frequencies)
+    non_zero_codes = np.sum(code_frequencies > 0)
+    zero_codes = total_codes - non_zero_codes
+    total_occurrences = code_frequencies.sum()
+    
+    print("=" * 70)
+    print("CODE FREQUENCY DISTRIBUTION ANALYSIS")
+    print("=" * 70)
+    
+    print(f"\n📊 BASIC STATISTICS:")
+    print(f"   Total target codes:      {total_codes:,}")
+    print(f"   Non-zero codes:          {non_zero_codes:,} ({100*non_zero_codes/total_codes:.1f}%)")
+    print(f"   Zero-frequency codes:    {zero_codes:,} ({100*zero_codes/total_codes:.1f}%)")
+    print(f"   Total occurrences:       {total_occurrences:,}")
+    
+    # ============================================================
+    # FREQUENCY STATISTICS (non-zero only)
+    # ============================================================
+    freq_nz = code_frequencies[code_frequencies > 0]
+    
+    print(f"\n📈 FREQUENCY STATISTICS (non-zero codes only):")
+    print(f"   Min frequency:           {freq_nz.min():,}")
+    print(f"   Max frequency:           {freq_nz.max():,}")
+    print(f"   Mean frequency:          {freq_nz.mean():,.1f}")
+    print(f"   Median frequency:        {np.median(freq_nz):,.1f}")
+    print(f"   Std deviation:           {freq_nz.std():,.1f}")
+    
+    # ============================================================
+    # IMBALANCE METRICS
+    # ============================================================
+    # Imbalance ratio = max_freq / min_freq (for non-zero)
+    imbalance_ratio = freq_nz.max() / freq_nz.min()
+    
+    # Gini coefficient (inequality measure)
+    sorted_freq = np.sort(freq_nz)
+    n = len(sorted_freq)
+    cumsum = np.cumsum(sorted_freq)
+    gini = (2 * np.sum((np.arange(1, n+1) * sorted_freq))) / (n * sorted_freq.sum()) - (n + 1) / n
+    
+    print(f"\n⚖️ IMBALANCE METRICS:")
+    print(f"   Imbalance ratio (max/min): {imbalance_ratio:,.1f}x")
+    print(f"   Gini coefficient:          {gini:.4f} (0=equal, 1=total inequality)")
+    
+    # ============================================================
+    # PERCENTILE ANALYSIS
+    # ============================================================
+    percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+    pct_values = np.percentile(freq_nz, percentiles)
+    
+    print(f"\n📏 PERCENTILE DISTRIBUTION:")
+    print(f"   {'Percentile':<12} {'Frequency':<15} {'% of Max':<12}")
+    print(f"   {'-'*40}")
+    for p, v in zip(percentiles, pct_values):
+        print(f"   {p:>3}th        {v:>12,.1f}    {100*v/freq_nz.max():>8.2f}%")
+    
+    # ============================================================
+    # TIER ANALYSIS (Common/Medium/Rare/Tail)
+    # ============================================================
+    # Define tiers based on frequency quartiles
+    tier_thresholds = np.percentile(freq_nz, [75, 50, 25])  # Common > 75th, etc.
+    
+    common_mask = code_frequencies >= tier_thresholds[0]
+    medium_mask = (code_frequencies >= tier_thresholds[1]) & (code_frequencies < tier_thresholds[0])
+    rare_mask = (code_frequencies >= tier_thresholds[2]) & (code_frequencies < tier_thresholds[1])
+    tail_mask = (code_frequencies > 0) & (code_frequencies < tier_thresholds[2])
+    
+    print(f"\n🏷️ CODE TIER ANALYSIS:")
+    print(f"   {'Tier':<10} {'Count':<10} {'% of Codes':<12} {'Freq Range':<20} {'% of Total Occurrences':<20}")
+    print(f"   {'-'*75}")
+    
+    tiers = [
+        ('Common', common_mask, f">= {tier_thresholds[0]:.0f}"),
+        ('Medium', medium_mask, f"{tier_thresholds[1]:.0f} - {tier_thresholds[0]:.0f}"),
+        ('Rare', rare_mask, f"{tier_thresholds[2]:.0f} - {tier_thresholds[1]:.0f}"),
+        ('Tail', tail_mask, f"< {tier_thresholds[2]:.0f}"),
+    ]
+    
+    tier_stats = {}
+    for tier_name, mask, freq_range in tiers:
+        count = mask.sum()
+        pct_codes = 100 * count / non_zero_codes
+        tier_occurrences = code_frequencies[mask].sum()
+        pct_occurrences = 100 * tier_occurrences / total_occurrences if total_occurrences > 0 else 0
+        tier_stats[tier_name.lower()] = {
+            'count': count,
+            'pct_codes': pct_codes,
+            'total_occurrences': tier_occurrences,
+            'pct_occurrences': pct_occurrences
+        }
+        print(f"   {tier_name:<10} {count:<10} {pct_codes:>8.1f}%     {freq_range:<20} {pct_occurrences:>10.1f}%")
+    
+    # ============================================================
+    # POS_WEIGHT ANALYSIS
+    # ============================================================
+    print(f"\n🎯 POS_WEIGHT ANALYSIS:")
+    print(f"   Testing different pos_weight_max values...")
+    print(f"\n   {'max_weight':<12} {'Mean':<10} {'Median':<10} {'% at Max':<12} {'Effect on Rare':<20}")
+    print(f"   {'-'*70}")
+    
+    freq_smoothed = code_frequencies.astype(np.float32) + 1.0
+    max_freq = freq_smoothed.max()
+    raw_weights = max_freq / freq_smoothed
+    
+    weight_analysis = {}
+    for max_w in pos_weight_candidates:
+        weights = np.clip(raw_weights, 1.0, max_w)
+        weights_nz = weights[code_frequencies > 0]
+        
+        mean_w = weights_nz.mean()
+        median_w = np.median(weights_nz)
+        pct_at_max = 100 * (weights_nz >= max_w * 0.99).sum() / len(weights_nz)
+        
+        # Effective weight ratio: how much more do rare codes contribute?
+        rare_weight = weights[tail_mask].mean() if tail_mask.sum() > 0 else 0
+        common_weight = weights[common_mask].mean() if common_mask.sum() > 0 else 1
+        rare_boost = rare_weight / common_weight if common_weight > 0 else 0
+        
+        weight_analysis[max_w] = {
+            'mean': mean_w,
+            'median': median_w,
+            'pct_at_max': pct_at_max,
+            'rare_boost': rare_boost
+        }
+        
+        print(f"   {max_w:<12} {mean_w:<10.2f} {median_w:<10.2f} {pct_at_max:>8.1f}%      Rare codes get {rare_boost:.1f}x weight vs common")
+    
+    # ============================================================
+    # RECOMMENDATIONS
+    # ============================================================
+    print(f"\n" + "=" * 70)
+    print("📋 RECOMMENDATIONS")
+    print("=" * 70)
+    
+    # Determine recommended pos_weight_max
+    if imbalance_ratio > 10000:
+        recommended_max = 100
+        severity = "EXTREME"
+    elif imbalance_ratio > 1000:
+        recommended_max = 75
+        severity = "SEVERE"
+    elif imbalance_ratio > 100:
+        recommended_max = 50
+        severity = "MODERATE"
+    else:
+        recommended_max = 20
+        severity = "MILD"
+    
+    print(f"\n   1. IMBALANCE SEVERITY: {severity}")
+    print(f"      - Your imbalance ratio: {imbalance_ratio:,.0f}x")
+    print(f"      - Recommended pos_weight_max: {recommended_max}")
+    
+    # Focal loss recommendation
+    use_focal = imbalance_ratio > 1000 or gini > 0.8
+    print(f"\n   2. FOCAL LOSS RECOMMENDATION: {'YES' if use_focal else 'OPTIONAL'}")
+    if use_focal:
+        print(f"      - Rationale: Imbalance ratio ({imbalance_ratio:,.0f}x) and/or Gini ({gini:.3f}) are very high")
+        print(f"      - Suggested gamma: 2.0 (standard) to 3.0 (aggressive)")
+    else:
+        print(f"      - pos_weight should be sufficient for your imbalance level")
+    
+    # Combined strategy
+    print(f"\n   3. RECOMMENDED CONFIGURATION:")
+    print(f"")
+    print(f"      optimize_config = OptimizeConfig(")
+    print(f"          use_pos_weight=True,")
+    print(f"          pos_weight_max={recommended_max:.1f},")
+    if use_focal:
+        print(f"          # Consider adding FocalLoss with gamma=2.0")
+    print(f"      )")
+    print(f"      ```")
+    
+    # ============================================================
+    # PLOTS (optional)
+    # ============================================================
+    if show_plots:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Plot 1: Histogram of frequencies (log scale)
+        ax1 = axes[0, 0]
+        ax1.hist(np.log10(freq_nz + 1), bins=50, edgecolor='black', alpha=0.7)
+        ax1.set_xlabel('Log10(Frequency + 1)')
+        ax1.set_ylabel('Number of Codes')
+        ax1.set_title('Distribution of Code Frequencies (Log Scale)')
+        ax1.axvline(np.log10(np.median(freq_nz) + 1), color='r', linestyle='--', label=f'Median: {np.median(freq_nz):.0f}')
+        ax1.legend()
+        
+        # Plot 2: Cumulative distribution
+        ax2 = axes[0, 1]
+        sorted_freq = np.sort(freq_nz)[::-1]
+        cumsum = np.cumsum(sorted_freq) / sorted_freq.sum() * 100
+        ax2.plot(range(len(cumsum)), cumsum)
+        ax2.set_xlabel('Number of Codes (sorted by frequency)')
+        ax2.set_ylabel('Cumulative % of Total Occurrences')
+        ax2.set_title('Pareto Analysis: Code Frequency Concentration')
+        ax2.axhline(80, color='r', linestyle='--', label='80% threshold')
+        # Find how many codes account for 80%
+        codes_for_80 = np.searchsorted(cumsum, 80)
+        ax2.axvline(codes_for_80, color='g', linestyle='--', label=f'{codes_for_80} codes = 80%')
+        ax2.legend()
+        
+        # Plot 3: Tier breakdown
+        ax3 = axes[1, 0]
+        tier_names = ['Common', 'Medium', 'Rare', 'Tail']
+        tier_counts = [tier_stats[t.lower()]['count'] for t in tier_names]
+        tier_colors = ['#2ecc71', '#3498db', '#f39c12', '#e74c3c']
+        ax3.bar(tier_names, tier_counts, color=tier_colors, edgecolor='black')
+        ax3.set_ylabel('Number of Codes')
+        ax3.set_title('Code Tier Distribution')
+        for i, (name, count) in enumerate(zip(tier_names, tier_counts)):
+            ax3.text(i, count + 50, f'{count}', ha='center', va='bottom')
+        
+        # Plot 4: pos_weight comparison
+        ax4 = axes[1, 1]
+        max_weights = list(weight_analysis.keys())
+        rare_boosts = [weight_analysis[w]['rare_boost'] for w in max_weights]
+        ax4.bar([str(w) for w in max_weights], rare_boosts, color='steelblue', edgecolor='black')
+        ax4.set_xlabel('pos_weight_max')
+        ax4.set_ylabel('Rare Code Weight Boost vs Common')
+        ax4.set_title('Effect of pos_weight_max on Rare Code Weighting')
+        ax4.axhline(recommended_max / 2, color='r', linestyle='--', 
+                   label=f'Recommended: {recommended_max}')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    # Return analysis results
+    return {
+        'basic_stats': {
+            'total_codes': total_codes,
+            'non_zero_codes': non_zero_codes,
+            'zero_codes': zero_codes,
+            'total_occurrences': total_occurrences
+        },
+        'frequency_stats': {
+            'min': freq_nz.min(),
+            'max': freq_nz.max(),
+            'mean': freq_nz.mean(),
+            'median': np.median(freq_nz),
+            'std': freq_nz.std()
+        },
+        'imbalance_metrics': {
+            'imbalance_ratio': imbalance_ratio,
+            'gini_coefficient': gini
+        },
+        'tier_stats': tier_stats,
+        'weight_analysis': weight_analysis,
+        'recommendations': {
+            'severity': severity,
+            'pos_weight_max': recommended_max,
+            'use_focal_loss': use_focal
+        }
+    }
+analysis = analyze_code_frequency_distribution(
+    code_frequencies=data_prepared.code_frequencies,
+    pos_weight_candidates=[10, 20, 50, 75, 100],
+    show_plots=True  # Set to False if no matplotlib display
+)
+
+
+# ##### Run experiment
+
+# In[62]:
+
+
+exp_round5_EXPERIMENTS = [
+    # 'exp2_dense_flash',  # Flash + Max-Pool
+    # 'exp2b_flash_learned_pool',  # Flash + Learned Pool
+    # 'exp3_standard_moe',  # MoE + Max-Pool
+    # 'exp3b_moe_swiglu_learned_pool',  # MoE + Learned Pool  
+    # 'exp3e_moe_swiglu_learned_pool_layer2_aux001',  # aux_loss=0.001
+    # 'exp4_shared_expert',  # Shared expert
+    # 'exp5_fine_grained',  # Fine-grained
+    # 'exp6b_auxiliary_free_no-share-exp',
+    # 'exp6a_auxiliary_free_layer4',
+    'exp6_auxiliary_free',  # DeepSeek-style auxiliary loss
+    # 'exp6c_auxiliary_free_fine-grained16',
+    # 'exp6d_auxiliary_free_fine-grained16_shared2'
+    
+]
+optimize_config = OptimizeConfig(
+    # scheduler_type='onecycle',      # OneCycleLR for faster convergence
+    # onecycle_pct_start=0.30,
+    warmup_pct=0.15,
+    scheduler_type='linear',       # Linear warmup + plateau + decay
+    plateau_pct=0.45,             # 45% at peak (total 60% before decay)
+    min_lr_ratio=0.2,             # End at 10% of peak (not 1%)
+    use_pos_weight=True,            # Enable weighted BCE
+    pos_weight_method='tiered',     # or 'log_scaled', 'ens', 'inverse'
+    pos_weight_max=100,
+    use_focal_loss=True,
+    focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
+    focal_alpha=0.25,
+)
 
 
 # In[ ]:
 
 
-baseline_results
+cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+EXP_NAME = "exp6_auxiliary_free"
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+exp6_auxiliary_free_results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    prepared_data = data_prepared,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    experiment_round=EXPERIMENT_ROUND,
+    embedding_size=EMBEDDING_SIZE,
+    log_dir='logs',
+    save_model=True,
+    optimize_config=optimize_config
+)
 
 
 # In[ ]:
 
 
-
-
-
-# In[ ]:
-
-
-
+exp6_auxiliary_free_results
 
 
 # In[ ]:
 
 
-
+exp_round_5_results_df = run_selected_experiments(
+    experiment_names=exp_round5_EXPERIMENTS,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    embedding_size=EMBEDDING_SIZE,
+    experiment_round=EXPERIMENT_ROUND,
+    save_model=True,
+    optimize_config=optimize_config
+)
 
 
 # In[ ]:
