@@ -8453,7 +8453,12 @@ class StreamingMetrics:
         
         # Precompute NDCG discount factors: 1/log2(rank+2)
         self._discounts = 1.0 / np.log2(np.arange(2, self._max_k + 2))
-        
+        # Precompute cumulative sums for IDCG (used in vectorized NDCG)
+        self._discount_cumsum = np.cumsum(self._discounts)
+        # Cache for device-specific tensors (lazy initialization)
+        self._cached_device = None
+        self._discounts_tensor = None
+        self._discount_cumsum_tensor = None        
         self.reset()
     
     def reset(self) -> None:
@@ -8468,6 +8473,18 @@ class StreamingMetrics:
             ndcg_sum={k: 0.0 for k in self.k_values},
             ndcg_count={k: 0 for k in self.k_values},
         )
+        
+    def _get_tensors_for_device(self, device: torch.device):
+        """Lazy initialization of device-specific tensors."""
+        if self._cached_device != device:
+            self._discounts_tensor = torch.tensor(
+                self._discounts, dtype=torch.float32, device=device
+            )
+            self._discount_cumsum_tensor = torch.tensor(
+                self._discount_cumsum, dtype=torch.float32, device=device
+            )
+            self._cached_device = device
+        return self._discounts_tensor, self._discount_cumsum_tensor  
     
     def update_loss(self, loss: float) -> None:
         """Accumulate loss from a batch."""
@@ -8488,76 +8505,163 @@ class StreamingMetrics:
             targets: List of target code lists (one per sample)
             probs: Optional sigmoid probabilities for Brier score
         """
-        # Move to CPU and sort once (most expensive operation)
+        batch_size = predictions.shape[0]
+        device = predictions.device
+        # Get device-cached tensors for NDCG
+        discounts_tensor, discount_cumsum_tensor = self._get_tensors_for_device(device)
+        
+        # ================================================================
+        # STEP 1: Get top-K predictions (ONCE for all metrics)
+        # ================================================================
         with torch.no_grad():
-            sorted_indices = torch.argsort(predictions, dim=-1, descending=True).cpu()
-            if probs is None and self.compute_brier:
-                probs = torch.sigmoid(predictions).cpu()
-            elif probs is not None:
-                probs = probs.cpu()
-        
-        batch_size = len(targets)
-        self._state.num_samples += batch_size
-        
+            # topk is O(n) vs argsort O(n log n)
+            _, top_k_indices = torch.topk(predictions, self._max_k, dim=-1)
+            # Keep on GPU for gather, move to CPU only for final extraction
+
+            # Compute probs for Brier if needed
+            if self.compute_brier:
+                if probs is None:
+                    probs_cpu = torch.sigmoid(predictions).cpu()
+                else:
+                    probs_cpu = probs.cpu() if probs.device.type != 'cpu' else probs
+
+        # ================================================================
+        # STEP 2: Build target tensor for vectorized comparison
+        # ================================================================
+        # Create boolean target tensor [batch_size, vocab_size]
+        target_tensor = torch.zeros(batch_size, self.vocab_size, dtype=torch.bool, device=device)
+
+        # Track which samples have valid targets (for filtering)
+        valid_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        num_true_per_sample = torch.zeros(batch_size, dtype=torch.long, device=device)
+
+        # Build target tensor (this loop is unavoidable but fast - just indexing)
         for i, target_codes in enumerate(targets):
-            # Filter valid codes (non-zero)
-            true_codes = set(c for c in target_codes if c != 0)
-            if not true_codes:
-                continue
-            
-            pred_indices = sorted_indices[i]
-            num_true = len(true_codes)
-            
-            # === Recall@K, Micro-Recall@K, Precision@K ===
-            for k in self.k_values:
-                pred_set = set(pred_indices[:k].tolist())
-                hits = len(true_codes & pred_set)
-                
-                # Recall@K (binary: any hit = success)
-                if hits > 0:
-                    self._state.recall_hits[k] += 1
-                self._state.recall_total[k] += 1
-                
-                # Micro-Recall@K (per-code granularity)
-                self._state.micro_recall_hits[k] += hits
-                self._state.micro_recall_true[k] += num_true
-                
-                # Precision@K
-                self._state.precision_sum[k] += hits / k
-                self._state.precision_count[k] += 1
-            
-            # === NDCG@K ===
-            for k in self.k_values:
-                top_k_preds = pred_indices[:k].tolist()
-                dcg = sum(
-                    self._discounts[rank] 
-                    for rank, pred in enumerate(top_k_preds) 
-                    if pred in true_codes
-                )
-                num_relevant = min(num_true, k)
-                idcg = sum(self._discounts[:num_relevant])
-                ndcg = dcg / idcg if idcg > 0 else 0.0
-                self._state.ndcg_sum[k] += ndcg
-                self._state.ndcg_count[k] += 1
-            
-            # === MRR (best-ranked true code) ===
-            if self.compute_mrr:
-                best_rank = self._max_k  # Default to max if not found
-                pred_dict = {code.item(): rank for rank, code in enumerate(pred_indices[:self._max_k])}
-                for code in true_codes:
-                    if code in pred_dict and pred_dict[code] < best_rank:
-                        best_rank = pred_dict[code]
-                if best_rank < self._max_k:
-                    self._state.mrr_sum += 1.0 / (best_rank + 1)
-                self._state.mrr_count += 1
-            
-            # === Positive-Only Brier Score ===
-            if self.compute_brier and probs is not None:
-                for code in true_codes:
+            valid_codes = [c for c in target_codes if 0 < c < self.vocab_size]
+            if valid_codes:
+                target_tensor[i, valid_codes] = True
+                valid_mask[i] = True
+                num_true_per_sample[i] = len(valid_codes)
+
+        num_valid = valid_mask.sum().item()
+        if num_valid == 0:
+            return
+
+        self._state.num_samples += num_valid
+
+        # ================================================================
+        # STEP 3: Vectorized hit detection for Recall, Precision, Micro-Recall
+        # ================================================================
+        for k in self.k_values:
+            top_k = top_k_indices[:, :k]  # [batch, k]
+
+            # Gather target values at predicted positions: [batch, k]
+            hits_matrix = torch.gather(target_tensor, 1, top_k)
+            hits_per_sample = hits_matrix.sum(dim=1)  # [batch]
+
+            # Only count valid samples
+            valid_hits = hits_per_sample[valid_mask]
+            valid_num_true = num_true_per_sample[valid_mask]
+
+            # Recall@K (binary: any hit = success)
+            self._state.recall_hits[k] += (valid_hits > 0).sum().item()
+            self._state.recall_total[k] += num_valid
+
+            # Micro-Recall@K (per-code: total hits / total true codes)
+            self._state.micro_recall_hits[k] += valid_hits.sum().item()
+            self._state.micro_recall_true[k] += valid_num_true.sum().item()
+
+            # Precision@K: hits / k (averaged over samples)
+            precision_per_sample = valid_hits.float() / k
+            self._state.precision_sum[k] += precision_per_sample.sum().item()
+            self._state.precision_count[k] += num_valid
+
+        # ================================================================
+        # STEP 4: Vectorized NDCG@K
+        # ================================================================
+        # Precompute discount factors as tensor [max_k]
+        discounts_tensor = torch.tensor(self._discounts, dtype=torch.float32, device=device)
+
+        for k in self.k_values:
+            top_k = top_k_indices[:, :k]  # [batch, k]
+
+            # hits_matrix: [batch, k] - True where prediction is correct
+            hits_matrix = torch.gather(target_tensor, 1, top_k).float()
+
+            # DCG: sum of discounts where hits occur
+            # discounts[:k] is [k], hits_matrix is [batch, k]
+            dcg_per_sample = (hits_matrix * discounts_tensor[:k]).sum(dim=1)  # [batch]
+
+            # IDCG: sum of first min(num_true, k) discounts
+            # For each sample, IDCG = sum(discounts[:min(num_true, k)])
+            valid_num_true_k = torch.clamp(num_true_per_sample, max=k)  # [batch]
+
+            # Compute IDCG using cumsum of discounts
+            discount_cumsum = torch.cumsum(discounts_tensor[:k], dim=0)  # [k]
+            # idcg[i] = discount_cumsum[valid_num_true_k[i] - 1] if valid_num_true_k[i] > 0 else 0
+            idcg_per_sample = torch.zeros(batch_size, device=device)
+            for num_rel in range(1, k + 1):
+                mask = valid_num_true_k == num_rel
+                idcg_per_sample[mask] = discount_cumsum[num_rel - 1]
+
+            # NDCG = DCG / IDCG (avoid div by zero)
+            ndcg_per_sample = torch.where(
+                idcg_per_sample > 0,
+                dcg_per_sample / idcg_per_sample,
+                torch.zeros_like(dcg_per_sample)
+            )
+
+            # Only count valid samples
+            self._state.ndcg_sum[k] += ndcg_per_sample[valid_mask].sum().item()
+            self._state.ndcg_count[k] += num_valid
+
+        # ================================================================
+        # STEP 5: Vectorized MRR (Mean Reciprocal Rank)
+        # ================================================================
+        if self.compute_mrr:
+            # hits_matrix for max_k: [batch, max_k]
+            hits_matrix = torch.gather(target_tensor, 1, top_k_indices).float()
+
+            # Find first hit position for each sample
+            # Use argmax on cumsum - first True gives cumsum=1
+            cumsum_hits = hits_matrix.cumsum(dim=1)  # [batch, max_k]
+
+            # First hit position: where cumsum first becomes 1
+            # If no hits, argmax returns 0 but we need to check separately
+            has_any_hit = hits_matrix.sum(dim=1) > 0  # [batch]
+
+            # Get rank of first hit (0-indexed)
+            # argmax on (cumsum >= 1) gives first position where True
+            first_hit_mask = cumsum_hits >= 1
+            # Set False entries to max_k so they don't affect argmax
+            first_hit_positions = first_hit_mask.float().argmax(dim=1)  # [batch]
+
+            # Reciprocal rank: 1 / (rank + 1), only for samples with hits
+            reciprocal_ranks = torch.where(
+                has_any_hit & valid_mask,
+                1.0 / (first_hit_positions.float() + 1),
+                torch.zeros(batch_size, device=device)
+            )
+
+            self._state.mrr_sum += reciprocal_ranks.sum().item()
+            self._state.mrr_count += num_valid
+
+        # ================================================================
+        # STEP 6: Positive-Only Brier Score
+        # (Keep as loop - vectorizing requires building sparse indices)
+        # ================================================================
+        if self.compute_brier and probs_cpu is not None:
+            for i, target_codes in enumerate(targets):
+                if not valid_mask[i]:
+                    continue
+                for code in target_codes:
                     if 0 < code < self.vocab_size:
-                        pred_prob = probs[i, code].item()
+                        pred_prob = probs_cpu[i, code].item()
                         self._state.positive_brier_sum += (pred_prob - 1.0) ** 2
                         self._state.positive_brier_count += 1
+
+        # Cleanup
+        del target_tensor, top_k_indices
     
     def compute(self) -> Dict[str, float]:
         """
