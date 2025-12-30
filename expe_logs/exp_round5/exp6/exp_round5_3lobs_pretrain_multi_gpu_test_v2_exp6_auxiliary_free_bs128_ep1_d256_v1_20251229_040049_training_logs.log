@@ -1,0 +1,47 @@
+2025-12-28 21:33:24 - exp6_auxiliary_free - INFO - 
+================================================================================
+2025-12-28 21:33:24 - exp6_auxiliary_free - INFO - EXPERIMENT: exp6_auxiliary_free
+2025-12-28 21:33:24 - exp6_auxiliary_free - INFO - ================================================================================
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -   MoE: 8 experts, top-2
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO - Total parameters: 35,417,753
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO - ✅ Using pre-prepared data
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO - Using BCEWithLogitsLoss
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -   With pos_weight method: log_scaled
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    Per-GPU batch size: 32
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    Effective batch size: 128
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    Base learning rate: 0.0002
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    Scaled learning rate: 8.00e-04
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    DataParallel output_device: 0
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO -    ✅ Using DataParallelWrapper for integrated loss
+2025-12-28 21:33:25 - exp6_auxiliary_free - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-28 21:33:28 - exp6_auxiliary_free - INFO - Using DataLoader with 4 workers.
+2025-12-28 21:33:28 - exp6_auxiliary_free - INFO - Scheduler: LinearPlateau: warmup=1644 steps (15%), plateau until 60%, decay to 1.60e-04
+2025-12-28 21:33:28 - exp6_auxiliary_free - INFO - Scheduler: LinearPlateau: warmup=1644 steps (15%), plateau until 60%, decay to 1.60e-04
+2025-12-28 21:33:28 - exp6_auxiliary_free - INFO - Training for 1 epochs...
+2025-12-28 21:33:28 - exp6_auxiliary_free - INFO - 
+--- Epoch 1/1 ---
+2025-12-29 02:12:58 - exp6_auxiliary_free - INFO -   Evaluating on training subset...
+2025-12-29 02:23:55 - exp6_auxiliary_free - INFO -   Evaluating on validation set...
+2025-12-29 02:35:05 - exp6_auxiliary_free - INFO - 
+--- Epoch 1 Summary ---
+2025-12-29 02:35:05 - exp6_auxiliary_free - INFO -   Train loss: 0.0138 → 0.0030
+2025-12-29 02:35:05 - exp6_auxiliary_free - INFO -   Val loss: 0.0031, Recall@10: 0.823, μRecall@10: 0.453, NDCG@20: 0.428
+2025-12-29 02:35:05 - exp6_auxiliary_free - INFO - 
+Training completed in 18097.2s
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - Model saved as: exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_20251229_040049
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - Complete results saved to logs/exp_round5_3lobs_pretrain_multi_gpu_test_v2/exp6_auxiliary_free/final_results.json
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - 
+================================================================================
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - EXPERIMENT COMPLETE: exp6_auxiliary_free
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - ================================================================================
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - Final Recall@10: 0.823
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - Best Val Loss: 0.0000
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - Training Time: 18097.2s
+2025-12-29 04:00:49 - exp6_auxiliary_free - INFO - ================================================================================
+
