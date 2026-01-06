@@ -1,0 +1,270 @@
+2025-12-31 09:14:29 - exp6_auxiliary_free - INFO - 
+================================================================================
+2025-12-31 09:14:29 - exp6_auxiliary_free - INFO - EXPERIMENT: exp6_auxiliary_free
+2025-12-31 09:14:29 - exp6_auxiliary_free - INFO - ================================================================================
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -   MoE: 8 experts, top-2
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO - Total parameters: 35,417,753
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO - ✅ Using pre-prepared data
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO - Using BCEWithLogitsLoss
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -   With pos_weight method: log_scaled
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    Per-GPU batch size: 32
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    Effective batch size: 128
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    Base learning rate: 0.0002
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    Scaled learning rate: 8.00e-04
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    DataParallel output_device: 0
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO -    ✅ Using DataParallelWrapper for integrated loss
+2025-12-31 09:14:30 - exp6_auxiliary_free - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - Using DataLoader with 4 workers.
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - Optimizer: AdamW: lr=8.00e-04, weight_decay=0.01
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - Scheduler: LinearPlateau: warmup=1644 steps (15%), plateau until 60%, decay to 1.60e-04
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - Optimizer: AdamW: lr=8.00e-04, weight_decay=0.01
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - Scheduler: LinearPlateau: warmup=1644 steps (15%), plateau until 60%, decay to 1.60e-04
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - Training for 1 epochs...
+2025-12-31 09:14:32 - exp6_auxiliary_free - INFO - 
+--- Epoch 1/1 ---
+2025-12-31 09:14:43 - exp6_auxiliary_free - DEBUG -     Loss: 0.8056 | R@10: 0.005 | R@20: 0.010 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.2807
+2025-12-31 09:14:43 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.857 | Collapsed=2 | Gini=0.461 | Router: GradNorm=346.8109 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:17:49 - exp6_auxiliary_free - DEBUG -     Loss: 0.4845 | R@10: 0.002 | R@20: 0.012 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.4298
+2025-12-31 09:17:49 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.180 | Collapsed=3 | Gini=0.606 | Router: GradNorm=10.0068 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:20:17 - exp6_auxiliary_free - DEBUG -     Loss: 0.1541 | R@10: 0.046 | R@20: 0.090 | μR@10: 0.011 | P@10: 0.005 | NDCG@20: 0.009 | PosBrier: 0.7130
+2025-12-31 09:20:17 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.176 | Collapsed=3 | Gini=0.604 | Router: GradNorm=3.2808 | WeightStd=0.0363 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:22:45 - exp6_auxiliary_free - DEBUG -     Loss: 0.0523 | R@10: 0.336 | R@20: 0.363 | μR@10: 0.090 | P@10: 0.043 | NDCG@20: 0.068 | PosBrier: 0.8470
+2025-12-31 09:22:45 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.163 | Collapsed=3 | Gini=0.601 | Router: GradNorm=1.6986 | WeightStd=0.0363 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:25:12 - exp6_auxiliary_free - DEBUG -     Loss: 0.0247 | R@10: 0.389 | R@20: 0.409 | μR@10: 0.161 | P@10: 0.079 | NDCG@20: 0.108 | PosBrier: 0.8887
+2025-12-31 09:25:12 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.133 | Collapsed=3 | Gini=0.582 | Router: GradNorm=0.8554 | WeightStd=0.0363 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:27:38 - exp6_auxiliary_free - DEBUG -     Loss: 0.0145 | R@10: 0.488 | R@20: 0.560 | μR@10: 0.228 | P@10: 0.102 | NDCG@20: 0.156 | PosBrier: 0.8968
+2025-12-31 09:27:38 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.163 | Collapsed=3 | Gini=0.594 | Router: GradNorm=0.5552 | WeightStd=0.0363 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:30:15 - exp6_auxiliary_free - DEBUG -     Loss: 0.0101 | R@10: 0.485 | R@20: 0.615 | μR@10: 0.227 | P@10: 0.105 | NDCG@20: 0.177 | PosBrier: 0.9047
+2025-12-31 09:30:15 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.165 | Collapsed=3 | Gini=0.595 | Router: GradNorm=0.6159 | WeightStd=0.0363 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:32:40 - exp6_auxiliary_free - DEBUG -     Loss: 0.0078 | R@10: 0.523 | R@20: 0.642 | μR@10: 0.239 | P@10: 0.109 | NDCG@20: 0.189 | PosBrier: 0.9018
+2025-12-31 09:32:40 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.163 | Collapsed=3 | Gini=0.594 | Router: GradNorm=0.5356 | WeightStd=0.0363 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:35:10 - exp6_auxiliary_free - DEBUG -     Loss: 0.0067 | R@10: 0.502 | R@20: 0.614 | μR@10: 0.251 | P@10: 0.119 | NDCG@20: 0.188 | PosBrier: 0.8958
+2025-12-31 09:35:10 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.159 | Collapsed=3 | Gini=0.592 | Router: GradNorm=0.7328 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:37:50 - exp6_auxiliary_free - DEBUG -     Loss: 0.0059 | R@10: 0.487 | R@20: 0.609 | μR@10: 0.233 | P@10: 0.107 | NDCG@20: 0.178 | PosBrier: 0.9046
+2025-12-31 09:37:50 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.170 | Collapsed=3 | Gini=0.600 | Router: GradNorm=0.6720 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:40:16 - exp6_auxiliary_free - DEBUG -     Loss: 0.0053 | R@10: 0.504 | R@20: 0.596 | μR@10: 0.224 | P@10: 0.099 | NDCG@20: 0.175 | PosBrier: 0.8989
+2025-12-31 09:40:16 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.165 | Collapsed=3 | Gini=0.598 | Router: GradNorm=1.0741 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:42:48 - exp6_auxiliary_free - DEBUG -     Loss: 0.0052 | R@10: 0.538 | R@20: 0.652 | μR@10: 0.235 | P@10: 0.112 | NDCG@20: 0.197 | PosBrier: 0.9025
+2025-12-31 09:42:48 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.171 | Collapsed=3 | Gini=0.600 | Router: GradNorm=6.5490 | WeightStd=0.0363 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:45:28 - exp6_auxiliary_free - DEBUG -     Loss: 0.0050 | R@10: 0.620 | R@20: 0.723 | μR@10: 0.261 | P@10: 0.130 | NDCG@20: 0.231 | PosBrier: 0.8729
+2025-12-31 09:45:28 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.158 | Collapsed=3 | Gini=0.594 | Router: GradNorm=2.4338 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:47:56 - exp6_auxiliary_free - DEBUG -     Loss: 0.0043 | R@10: 0.528 | R@20: 0.636 | μR@10: 0.242 | P@10: 0.101 | NDCG@20: 0.198 | PosBrier: 0.8869
+2025-12-31 09:47:56 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.136 | Collapsed=3 | Gini=0.580 | Router: GradNorm=0.3992 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:50:24 - exp6_auxiliary_free - DEBUG -     Loss: 0.0045 | R@10: 0.580 | R@20: 0.687 | μR@10: 0.254 | P@10: 0.120 | NDCG@20: 0.221 | PosBrier: 0.8689
+2025-12-31 09:50:24 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.140 | Collapsed=3 | Gini=0.584 | Router: GradNorm=0.7144 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:52:58 - exp6_auxiliary_free - DEBUG -     Loss: 0.0043 | R@10: 0.577 | R@20: 0.675 | μR@10: 0.270 | P@10: 0.121 | NDCG@20: 0.223 | PosBrier: 0.8596
+2025-12-31 09:52:58 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.128 | Collapsed=3 | Gini=0.580 | Router: GradNorm=0.6500 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:55:32 - exp6_auxiliary_free - DEBUG -     Loss: 0.0043 | R@10: 0.590 | R@20: 0.704 | μR@10: 0.275 | P@10: 0.127 | NDCG@20: 0.235 | PosBrier: 0.8639
+2025-12-31 09:55:32 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.134 | Collapsed=3 | Gini=0.586 | Router: GradNorm=1.1918 | WeightStd=0.0362 ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 09:58:02 - exp6_auxiliary_free - DEBUG -     Loss: 0.0043 | R@10: 0.655 | R@20: 0.751 | μR@10: 0.311 | P@10: 0.152 | NDCG@20: 0.273 | PosBrier: 0.8503
+2025-12-31 09:58:02 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.038 | Collapsed=3 | Gini=0.543 | Router: GradNorm=1.1707 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:00:32 - exp6_auxiliary_free - DEBUG -     Loss: 0.0042 | R@10: 0.640 | R@20: 0.743 | μR@10: 0.286 | P@10: 0.132 | NDCG@20: 0.252 | PosBrier: 0.8631
+2025-12-31 10:00:32 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.982 | Collapsed=2 | Gini=0.524 | Router: GradNorm=1.2421 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:03:10 - exp6_auxiliary_free - DEBUG -     Loss: 0.0040 | R@10: 0.611 | R@20: 0.723 | μR@10: 0.332 | P@10: 0.153 | NDCG@20: 0.278 | PosBrier: 0.8185
+2025-12-31 10:03:10 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.959 | Collapsed=2 | Gini=0.512 | Router: GradNorm=0.7046 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:05:40 - exp6_auxiliary_free - DEBUG -     Loss: 0.0040 | R@10: 0.667 | R@20: 0.758 | μR@10: 0.301 | P@10: 0.136 | NDCG@20: 0.270 | PosBrier: 0.8483
+2025-12-31 10:05:40 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.077 | Collapsed=3 | Gini=0.563 | Router: GradNorm=4.9549 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:08:09 - exp6_auxiliary_free - DEBUG -     Loss: 0.0041 | R@10: 0.678 | R@20: 0.790 | μR@10: 0.325 | P@10: 0.158 | NDCG@20: 0.295 | PosBrier: 0.8289
+2025-12-31 10:08:09 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.055 | Collapsed=3 | Gini=0.555 | Router: GradNorm=1.4403 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:10:47 - exp6_auxiliary_free - DEBUG -     Loss: 0.0039 | R@10: 0.656 | R@20: 0.761 | μR@10: 0.355 | P@10: 0.166 | NDCG@20: 0.300 | PosBrier: 0.8035
+2025-12-31 10:10:47 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.948 | Collapsed=2 | Gini=0.505 | Router: GradNorm=1.4513 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:13:18 - exp6_auxiliary_free - DEBUG -     Loss: 0.0039 | R@10: 0.693 | R@20: 0.785 | μR@10: 0.335 | P@10: 0.154 | NDCG@20: 0.301 | PosBrier: 0.8211
+2025-12-31 10:13:18 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.038 | Collapsed=3 | Gini=0.541 | Router: GradNorm=3.4158 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:15:48 - exp6_auxiliary_free - DEBUG -     Loss: 0.0039 | R@10: 0.667 | R@20: 0.766 | μR@10: 0.343 | P@10: 0.165 | NDCG@20: 0.297 | PosBrier: 0.7965
+2025-12-31 10:15:48 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.112 | Collapsed=3 | Gini=0.577 | Router: GradNorm=2.3500 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:18:17 - exp6_auxiliary_free - DEBUG -     Loss: 0.0037 | R@10: 0.718 | R@20: 0.800 | μR@10: 0.356 | P@10: 0.160 | NDCG@20: 0.313 | PosBrier: 0.8098
+2025-12-31 10:18:17 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.078 | Collapsed=3 | Gini=0.566 | Router: GradNorm=2.6689 | WeightStd=0.0362 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:20:53 - exp6_auxiliary_free - DEBUG -     Loss: 0.0038 | R@10: 0.712 | R@20: 0.804 | μR@10: 0.353 | P@10: 0.162 | NDCG@20: 0.318 | PosBrier: 0.7963
+2025-12-31 10:20:53 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.064 | Collapsed=3 | Gini=0.558 | Router: GradNorm=2.8568 | WeightStd=0.0363 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:23:24 - exp6_auxiliary_free - DEBUG -     Loss: 0.0038 | R@10: 0.705 | R@20: 0.798 | μR@10: 0.351 | P@10: 0.167 | NDCG@20: 0.320 | PosBrier: 0.7886
+2025-12-31 10:23:24 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.056 | Collapsed=3 | Gini=0.555 | Router: GradNorm=6.1780 | WeightStd=0.0363 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:25:54 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.702 | R@20: 0.790 | μR@10: 0.368 | P@10: 0.159 | NDCG@20: 0.321 | PosBrier: 0.8034
+2025-12-31 10:25:54 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.004 | Collapsed=2 | Gini=0.532 | Router: GradNorm=1.8092 | WeightStd=0.0363 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:28:37 - exp6_auxiliary_free - DEBUG -     Loss: 0.0048 | R@10: 0.694 | R@20: 0.777 | μR@10: 0.329 | P@10: 0.209 | NDCG@20: 0.318 | PosBrier: 0.7788
+2025-12-31 10:28:37 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.806 | Collapsed=2 | Gini=0.410 | Router: GradNorm=4.6246 | WeightStd=0.0363 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:31:09 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.733 | R@20: 0.812 | μR@10: 0.370 | P@10: 0.167 | NDCG@20: 0.336 | PosBrier: 0.8065
+2025-12-31 10:31:09 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.907 | Collapsed=2 | Gini=0.488 | Router: GradNorm=2.0324 | WeightStd=0.0364 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:33:39 - exp6_auxiliary_free - DEBUG -     Loss: 0.0037 | R@10: 0.719 | R@20: 0.810 | μR@10: 0.370 | P@10: 0.172 | NDCG@20: 0.333 | PosBrier: 0.7996
+2025-12-31 10:33:39 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.877 | Collapsed=2 | Gini=0.470 | Router: GradNorm=2.5059 | WeightStd=0.0364 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:36:13 - exp6_auxiliary_free - DEBUG -     Loss: 0.0038 | R@10: 0.659 | R@20: 0.753 | μR@10: 0.354 | P@10: 0.167 | NDCG@20: 0.308 | PosBrier: 0.8021
+2025-12-31 10:36:13 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.863 | Collapsed=2 | Gini=0.463 | Router: GradNorm=2.1570 | WeightStd=0.0364 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:38:46 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.673 | R@20: 0.778 | μR@10: 0.372 | P@10: 0.165 | NDCG@20: 0.321 | PosBrier: 0.7928
+2025-12-31 10:38:46 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.837 | Collapsed=2 | Gini=0.450 | Router: GradNorm=3.3620 | WeightStd=0.0364 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:41:29 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.660 | R@20: 0.762 | μR@10: 0.378 | P@10: 0.175 | NDCG@20: 0.323 | PosBrier: 0.7735
+2025-12-31 10:41:29 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.833 | Collapsed=2 | Gini=0.442 | Router: GradNorm=4.6295 | WeightStd=0.0365 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:44:01 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.728 | R@20: 0.805 | μR@10: 0.384 | P@10: 0.181 | NDCG@20: 0.346 | PosBrier: 0.7628
+2025-12-31 10:44:01 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.853 | Collapsed=2 | Gini=0.460 | Router: GradNorm=4.0016 | WeightStd=0.0365 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:46:34 - exp6_auxiliary_free - DEBUG -     Loss: 0.0037 | R@10: 0.690 | R@20: 0.779 | μR@10: 0.383 | P@10: 0.180 | NDCG@20: 0.335 | PosBrier: 0.7601
+2025-12-31 10:46:34 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.842 | Collapsed=2 | Gini=0.450 | Router: GradNorm=1.9541 | WeightStd=0.0365 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:49:04 - exp6_auxiliary_free - DEBUG -     Loss: 0.0039 | R@10: 0.728 | R@20: 0.802 | μR@10: 0.351 | P@10: 0.175 | NDCG@20: 0.330 | PosBrier: 0.7824
+2025-12-31 10:49:04 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.947 | Collapsed=2 | Gini=0.506 | Router: GradNorm=1.6091 | WeightStd=0.0366 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:51:34 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.727 | R@20: 0.819 | μR@10: 0.382 | P@10: 0.172 | NDCG@20: 0.345 | PosBrier: 0.7647
+2025-12-31 10:51:34 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.907 | Collapsed=2 | Gini=0.486 | Router: GradNorm=1.8492 | WeightStd=0.0366 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:54:12 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.674 | R@20: 0.779 | μR@10: 0.401 | P@10: 0.178 | NDCG@20: 0.337 | PosBrier: 0.7749
+2025-12-31 10:54:12 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.830 | Collapsed=2 | Gini=0.444 | Router: GradNorm=3.1911 | WeightStd=0.0367 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:56:43 - exp6_auxiliary_free - DEBUG -     Loss: 0.0040 | R@10: 0.752 | R@20: 0.838 | μR@10: 0.357 | P@10: 0.186 | NDCG@20: 0.355 | PosBrier: 0.7812
+2025-12-31 10:56:43 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.935 | Collapsed=2 | Gini=0.503 | Router: GradNorm=4.6932 | WeightStd=0.0367 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 10:59:27 - exp6_auxiliary_free - DEBUG -     Loss: 0.0041 | R@10: 0.737 | R@20: 0.826 | μR@10: 0.399 | P@10: 0.225 | NDCG@20: 0.365 | PosBrier: 0.7348
+2025-12-31 10:59:27 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.742 | Collapsed=1 | Gini=0.384 | Router: GradNorm=8.8739 | WeightStd=0.0367 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:02:04 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.784 | R@20: 0.856 | μR@10: 0.419 | P@10: 0.194 | NDCG@20: 0.377 | PosBrier: 0.7498
+2025-12-31 11:02:04 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.778 | Collapsed=2 | Gini=0.422 | Router: GradNorm=5.3655 | WeightStd=0.0368 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:04:40 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.738 | R@20: 0.830 | μR@10: 0.402 | P@10: 0.173 | NDCG@20: 0.365 | PosBrier: 0.7680
+2025-12-31 11:04:40 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.840 | Collapsed=2 | Gini=0.449 | Router: GradNorm=3.4377 | WeightStd=0.0368 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:07:12 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.733 | R@20: 0.810 | μR@10: 0.375 | P@10: 0.175 | NDCG@20: 0.343 | PosBrier: 0.7753
+2025-12-31 11:07:12 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.853 | Collapsed=2 | Gini=0.459 | Router: GradNorm=3.0573 | WeightStd=0.0369 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:09:47 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.746 | R@20: 0.835 | μR@10: 0.420 | P@10: 0.197 | NDCG@20: 0.377 | PosBrier: 0.7422
+2025-12-31 11:09:47 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.830 | Collapsed=2 | Gini=0.444 | Router: GradNorm=5.0753 | WeightStd=0.0369 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:12:18 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.767 | R@20: 0.842 | μR@10: 0.398 | P@10: 0.187 | NDCG@20: 0.373 | PosBrier: 0.7501
+2025-12-31 11:12:18 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.836 | Collapsed=2 | Gini=0.451 | Router: GradNorm=3.6011 | WeightStd=0.0370 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:14:47 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.754 | R@20: 0.829 | μR@10: 0.405 | P@10: 0.180 | NDCG@20: 0.362 | PosBrier: 0.7638
+2025-12-31 11:14:47 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.840 | Collapsed=2 | Gini=0.458 | Router: GradNorm=4.2104 | WeightStd=0.0370 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:17:18 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.775 | R@20: 0.855 | μR@10: 0.418 | P@10: 0.194 | NDCG@20: 0.380 | PosBrier: 0.7333
+2025-12-31 11:17:18 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.852 | Collapsed=2 | Gini=0.459 | Router: GradNorm=3.8861 | WeightStd=0.0371 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:19:48 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.791 | R@20: 0.861 | μR@10: 0.424 | P@10: 0.212 | NDCG@20: 0.389 | PosBrier: 0.7290
+2025-12-31 11:19:48 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.849 | Collapsed=2 | Gini=0.457 | Router: GradNorm=3.2773 | WeightStd=0.0372 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:22:26 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.706 | R@20: 0.810 | μR@10: 0.388 | P@10: 0.180 | NDCG@20: 0.348 | PosBrier: 0.7727
+2025-12-31 11:22:26 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.799 | Collapsed=2 | Gini=0.426 | Router: GradNorm=3.9427 | WeightStd=0.0372 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:25:01 - exp6_auxiliary_free - DEBUG -     Loss: 0.0037 | R@10: 0.774 | R@20: 0.845 | μR@10: 0.378 | P@10: 0.186 | NDCG@20: 0.368 | PosBrier: 0.7597
+2025-12-31 11:25:01 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.834 | Collapsed=2 | Gini=0.452 | Router: GradNorm=5.4492 | WeightStd=0.0373 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:27:32 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.785 | R@20: 0.850 | μR@10: 0.413 | P@10: 0.187 | NDCG@20: 0.383 | PosBrier: 0.7367
+2025-12-31 11:27:32 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.844 | Collapsed=2 | Gini=0.458 | Router: GradNorm=5.5353 | WeightStd=0.0373 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:30:04 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.777 | R@20: 0.843 | μR@10: 0.401 | P@10: 0.191 | NDCG@20: 0.378 | PosBrier: 0.7480
+2025-12-31 11:30:04 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.828 | Collapsed=2 | Gini=0.448 | Router: GradNorm=3.7827 | WeightStd=0.0374 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:32:36 - exp6_auxiliary_free - DEBUG -     Loss: 0.0037 | R@10: 0.769 | R@20: 0.843 | μR@10: 0.395 | P@10: 0.205 | NDCG@20: 0.372 | PosBrier: 0.7394
+2025-12-31 11:32:36 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.935 | Collapsed=3 | Gini=0.505 | Router: GradNorm=5.3030 | WeightStd=0.0375 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:35:09 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.761 | R@20: 0.839 | μR@10: 0.408 | P@10: 0.187 | NDCG@20: 0.377 | PosBrier: 0.7612
+2025-12-31 11:35:09 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.853 | Collapsed=1 | Gini=0.446 | Router: GradNorm=6.3607 | WeightStd=0.0375 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:37:40 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.793 | R@20: 0.860 | μR@10: 0.410 | P@10: 0.185 | NDCG@20: 0.386 | PosBrier: 0.7551
+2025-12-31 11:37:40 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.871 | Collapsed=2 | Gini=0.470 | Router: GradNorm=3.5799 | WeightStd=0.0376 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:40:15 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.767 | R@20: 0.852 | μR@10: 0.438 | P@10: 0.190 | NDCG@20: 0.392 | PosBrier: 0.7267
+2025-12-31 11:40:15 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.829 | Collapsed=2 | Gini=0.447 | Router: GradNorm=3.5192 | WeightStd=0.0377 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:42:53 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.783 | R@20: 0.854 | μR@10: 0.413 | P@10: 0.182 | NDCG@20: 0.384 | PosBrier: 0.7468
+2025-12-31 11:42:53 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.851 | Collapsed=2 | Gini=0.460 | Router: GradNorm=2.5157 | WeightStd=0.0377 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:45:25 - exp6_auxiliary_free - DEBUG -     Loss: 0.0037 | R@10: 0.777 | R@20: 0.838 | μR@10: 0.393 | P@10: 0.198 | NDCG@20: 0.376 | PosBrier: 0.7481
+2025-12-31 11:45:25 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.927 | Collapsed=2 | Gini=0.497 | Router: GradNorm=3.6836 | WeightStd=0.0378 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:48:01 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.774 | R@20: 0.852 | μR@10: 0.416 | P@10: 0.190 | NDCG@20: 0.384 | PosBrier: 0.7437
+2025-12-31 11:48:01 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.817 | Collapsed=2 | Gini=0.437 | Router: GradNorm=6.3671 | WeightStd=0.0379 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:50:39 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.757 | R@20: 0.846 | μR@10: 0.428 | P@10: 0.198 | NDCG@20: 0.381 | PosBrier: 0.7323
+2025-12-31 11:50:39 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.814 | Collapsed=2 | Gini=0.428 | Router: GradNorm=6.2429 | WeightStd=0.0379 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:53:15 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.798 | R@20: 0.867 | μR@10: 0.405 | P@10: 0.194 | NDCG@20: 0.390 | PosBrier: 0.7367
+2025-12-31 11:53:15 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.942 | Collapsed=2 | Gini=0.506 | Router: GradNorm=7.7720 | WeightStd=0.0380 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 11:55:53 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.811 | R@20: 0.874 | μR@10: 0.437 | P@10: 0.196 | NDCG@20: 0.411 | PosBrier: 0.7224
+2025-12-31 11:55:53 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.884 | Collapsed=2 | Gini=0.487 | Router: GradNorm=7.0869 | WeightStd=0.0381 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 11:58:28 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.771 | R@20: 0.854 | μR@10: 0.429 | P@10: 0.189 | NDCG@20: 0.390 | PosBrier: 0.7340
+2025-12-31 11:58:28 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.862 | Collapsed=2 | Gini=0.456 | Router: GradNorm=5.3806 | WeightStd=0.0382 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:01:00 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.816 | R@20: 0.880 | μR@10: 0.435 | P@10: 0.211 | NDCG@20: 0.416 | PosBrier: 0.7145
+2025-12-31 12:01:00 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.897 | Collapsed=2 | Gini=0.482 | Router: GradNorm=7.9955 | WeightStd=0.0382 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:03:38 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.750 | R@20: 0.843 | μR@10: 0.408 | P@10: 0.189 | NDCG@20: 0.373 | PosBrier: 0.7535
+2025-12-31 12:03:38 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.757 | Collapsed=2 | Gini=0.402 | Router: GradNorm=9.6424 | WeightStd=0.0383 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:06:17 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.851 | R@20: 0.905 | μR@10: 0.431 | P@10: 0.209 | NDCG@20: 0.434 | PosBrier: 0.7028
+2025-12-31 12:06:17 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.842 | Collapsed=2 | Gini=0.459 | Router: GradNorm=7.8573 | WeightStd=0.0384 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:08:50 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.825 | R@20: 0.882 | μR@10: 0.452 | P@10: 0.204 | NDCG@20: 0.417 | PosBrier: 0.7116
+2025-12-31 12:08:50 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.953 | Collapsed=2 | Gini=0.505 | Router: GradNorm=5.9712 | WeightStd=0.0385 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:11:22 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.821 | R@20: 0.889 | μR@10: 0.448 | P@10: 0.209 | NDCG@20: 0.421 | PosBrier: 0.7012
+2025-12-31 12:11:22 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.855 | Collapsed=2 | Gini=0.464 | Router: GradNorm=6.3010 | WeightStd=0.0385 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:13:57 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.791 | R@20: 0.870 | μR@10: 0.446 | P@10: 0.200 | NDCG@20: 0.404 | PosBrier: 0.7247
+2025-12-31 12:13:57 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.808 | Collapsed=2 | Gini=0.430 | Router: GradNorm=6.1518 | WeightStd=0.0386 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:16:29 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.826 | R@20: 0.887 | μR@10: 0.447 | P@10: 0.208 | NDCG@20: 0.425 | PosBrier: 0.6995
+2025-12-31 12:16:29 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.883 | Collapsed=2 | Gini=0.476 | Router: GradNorm=6.1615 | WeightStd=0.0387 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:19:00 - exp6_auxiliary_free - DEBUG -     Loss: 0.0030 | R@10: 0.812 | R@20: 0.875 | μR@10: 0.450 | P@10: 0.196 | NDCG@20: 0.418 | PosBrier: 0.7110
+2025-12-31 12:19:00 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.899 | Collapsed=2 | Gini=0.488 | Router: GradNorm=5.5348 | WeightStd=0.0387 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:21:34 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.801 | R@20: 0.870 | μR@10: 0.399 | P@10: 0.195 | NDCG@20: 0.394 | PosBrier: 0.7510
+2025-12-31 12:21:34 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.842 | Collapsed=2 | Gini=0.455 | Router: GradNorm=5.8041 | WeightStd=0.0388 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:24:12 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.836 | R@20: 0.891 | μR@10: 0.430 | P@10: 0.209 | NDCG@20: 0.416 | PosBrier: 0.7078
+2025-12-31 12:24:12 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.955 | Collapsed=2 | Gini=0.504 | Router: GradNorm=5.7413 | WeightStd=0.0388 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:26:44 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.822 | R@20: 0.884 | μR@10: 0.427 | P@10: 0.201 | NDCG@20: 0.416 | PosBrier: 0.7253
+2025-12-31 12:26:44 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.036 | Collapsed=4 | Gini=0.540 | Router: GradNorm=5.9648 | WeightStd=0.0389 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 12:29:16 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.821 | R@20: 0.879 | μR@10: 0.432 | P@10: 0.198 | NDCG@20: 0.418 | PosBrier: 0.7224
+2025-12-31 12:29:16 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.886 | Collapsed=2 | Gini=0.475 | Router: GradNorm=5.3299 | WeightStd=0.0390 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:31:50 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.805 | R@20: 0.875 | μR@10: 0.434 | P@10: 0.195 | NDCG@20: 0.406 | PosBrier: 0.7200
+2025-12-31 12:31:50 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.840 | Collapsed=2 | Gini=0.454 | Router: GradNorm=5.4109 | WeightStd=0.0390 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:34:22 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.816 | R@20: 0.880 | μR@10: 0.443 | P@10: 0.214 | NDCG@20: 0.415 | PosBrier: 0.6979
+2025-12-31 12:34:22 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.861 | Collapsed=2 | Gini=0.464 | Router: GradNorm=6.7831 | WeightStd=0.0391 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:36:54 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.832 | R@20: 0.889 | μR@10: 0.440 | P@10: 0.209 | NDCG@20: 0.420 | PosBrier: 0.7091
+2025-12-31 12:36:54 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.967 | Collapsed=2 | Gini=0.495 | Router: GradNorm=6.4068 | WeightStd=0.0391 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:39:28 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.792 | R@20: 0.870 | μR@10: 0.440 | P@10: 0.206 | NDCG@20: 0.405 | PosBrier: 0.7146
+2025-12-31 12:39:28 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.812 | Collapsed=2 | Gini=0.421 | Router: GradNorm=10.2753 | WeightStd=0.0392 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:42:06 - exp6_auxiliary_free - DEBUG -     Loss: 0.0034 | R@10: 0.819 | R@20: 0.887 | μR@10: 0.435 | P@10: 0.211 | NDCG@20: 0.417 | PosBrier: 0.7235
+2025-12-31 12:42:06 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.834 | Collapsed=2 | Gini=0.451 | Router: GradNorm=14.8417 | WeightStd=0.0392 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:44:47 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.793 | R@20: 0.869 | μR@10: 0.447 | P@10: 0.211 | NDCG@20: 0.407 | PosBrier: 0.7100
+2025-12-31 12:44:47 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.782 | Collapsed=2 | Gini=0.408 | Router: GradNorm=11.3141 | WeightStd=0.0393 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:47:20 - exp6_auxiliary_free - DEBUG -     Loss: 0.0030 | R@10: 0.821 | R@20: 0.885 | μR@10: 0.459 | P@10: 0.204 | NDCG@20: 0.422 | PosBrier: 0.7112
+2025-12-31 12:47:20 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.870 | Collapsed=2 | Gini=0.472 | Router: GradNorm=12.5346 | WeightStd=0.0393 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:50:03 - exp6_auxiliary_free - DEBUG -     Loss: 0.0035 | R@10: 0.769 | R@20: 0.857 | μR@10: 0.434 | P@10: 0.228 | NDCG@20: 0.396 | PosBrier: 0.6909
+2025-12-31 12:50:03 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.754 | Collapsed=1 | Gini=0.380 | Router: GradNorm=20.9453 | WeightStd=0.0394 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:52:35 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.814 | R@20: 0.870 | μR@10: 0.415 | P@10: 0.195 | NDCG@20: 0.408 | PosBrier: 0.7263
+2025-12-31 12:52:35 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.815 | Collapsed=2 | Gini=0.442 | Router: GradNorm=16.0327 | WeightStd=0.0394 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:55:08 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.797 | R@20: 0.867 | μR@10: 0.429 | P@10: 0.201 | NDCG@20: 0.403 | PosBrier: 0.7218
+2025-12-31 12:55:08 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.831 | Collapsed=2 | Gini=0.449 | Router: GradNorm=14.3307 | WeightStd=0.0395 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 12:57:40 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.825 | R@20: 0.887 | μR@10: 0.427 | P@10: 0.181 | NDCG@20: 0.407 | PosBrier: 0.7246
+2025-12-31 12:57:40 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.850 | Collapsed=2 | Gini=0.461 | Router: GradNorm=14.1058 | WeightStd=0.0395 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:00:15 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.817 | R@20: 0.889 | μR@10: 0.449 | P@10: 0.204 | NDCG@20: 0.415 | PosBrier: 0.7112
+2025-12-31 13:00:15 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.831 | Collapsed=2 | Gini=0.434 | Router: GradNorm=13.4219 | WeightStd=0.0396 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:03:05 - exp6_auxiliary_free - DEBUG -     Loss: 0.0036 | R@10: 0.760 | R@20: 0.847 | μR@10: 0.436 | P@10: 0.251 | NDCG@20: 0.401 | PosBrier: 0.6793
+2025-12-31 13:03:05 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.698 | Collapsed=1 | Gini=0.342 | Router: GradNorm=14.4175 | WeightStd=0.0396 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:05:39 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.824 | R@20: 0.887 | μR@10: 0.412 | P@10: 0.188 | NDCG@20: 0.404 | PosBrier: 0.7398
+2025-12-31 13:05:39 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.888 | Collapsed=2 | Gini=0.477 | Router: GradNorm=11.4615 | WeightStd=0.0396 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:08:12 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.842 | R@20: 0.896 | μR@10: 0.446 | P@10: 0.207 | NDCG@20: 0.427 | PosBrier: 0.7112
+2025-12-31 13:08:12 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.840 | Collapsed=2 | Gini=0.453 | Router: GradNorm=11.0727 | WeightStd=0.0397 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 13:10:44 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.826 | R@20: 0.891 | μR@10: 0.435 | P@10: 0.207 | NDCG@20: 0.422 | PosBrier: 0.7095
+2025-12-31 13:10:44 - exp6_auxiliary_free - DEBUG -     MoE: CV=1.001 | Collapsed=2 | Gini=0.526 | Router: GradNorm=11.9085 | WeightStd=0.0397 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:13:22 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.800 | R@20: 0.882 | μR@10: 0.445 | P@10: 0.203 | NDCG@20: 0.412 | PosBrier: 0.7099
+2025-12-31 13:13:22 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.776 | Collapsed=2 | Gini=0.409 | Router: GradNorm=9.6001 | WeightStd=0.0397 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:16:01 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.819 | R@20: 0.875 | μR@10: 0.446 | P@10: 0.199 | NDCG@20: 0.416 | PosBrier: 0.7033
+2025-12-31 13:16:01 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.813 | Collapsed=2 | Gini=0.437 | Router: GradNorm=10.9501 | WeightStd=0.0398 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:18:35 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.822 | R@20: 0.885 | μR@10: 0.420 | P@10: 0.188 | NDCG@20: 0.407 | PosBrier: 0.7297
+2025-12-31 13:18:35 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.810 | Collapsed=2 | Gini=0.435 | Router: GradNorm=11.3636 | WeightStd=0.0398 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:21:10 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.818 | R@20: 0.887 | μR@10: 0.449 | P@10: 0.202 | NDCG@20: 0.420 | PosBrier: 0.7158
+2025-12-31 13:21:10 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.799 | Collapsed=2 | Gini=0.418 | Router: GradNorm=7.2252 | WeightStd=0.0398 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:23:47 - exp6_auxiliary_free - DEBUG -     Loss: 0.0030 | R@10: 0.813 | R@20: 0.880 | μR@10: 0.466 | P@10: 0.201 | NDCG@20: 0.421 | PosBrier: 0.6967
+2025-12-31 13:23:47 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.815 | Collapsed=1 | Gini=0.416 | Router: GradNorm=8.7407 | WeightStd=0.0398 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:26:26 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.830 | R@20: 0.895 | μR@10: 0.473 | P@10: 0.216 | NDCG@20: 0.430 | PosBrier: 0.6860
+2025-12-31 13:26:26 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.835 | Collapsed=2 | Gini=0.449 | Router: GradNorm=12.3318 | WeightStd=0.0399 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping ⚠️ Router gradients VANISHING! Check focal loss or initialization
+2025-12-31 13:29:00 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.814 | R@20: 0.882 | μR@10: 0.443 | P@10: 0.203 | NDCG@20: 0.416 | PosBrier: 0.7147
+2025-12-31 13:29:00 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.822 | Collapsed=2 | Gini=0.444 | Router: GradNorm=13.3879 | WeightStd=0.0399 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:31:35 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.827 | R@20: 0.886 | μR@10: 0.431 | P@10: 0.208 | NDCG@20: 0.420 | PosBrier: 0.7043
+2025-12-31 13:31:35 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.801 | Collapsed=2 | Gini=0.431 | Router: GradNorm=23.9457 | WeightStd=0.0399 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:34:10 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.823 | R@20: 0.888 | μR@10: 0.450 | P@10: 0.204 | NDCG@20: 0.425 | PosBrier: 0.7035
+2025-12-31 13:34:10 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.798 | Collapsed=2 | Gini=0.428 | Router: GradNorm=22.2967 | WeightStd=0.0399 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:36:43 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.830 | R@20: 0.886 | μR@10: 0.452 | P@10: 0.202 | NDCG@20: 0.425 | PosBrier: 0.7028
+2025-12-31 13:36:43 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.833 | Collapsed=2 | Gini=0.452 | Router: GradNorm=24.0730 | WeightStd=0.0399 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:39:22 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.788 | R@20: 0.874 | μR@10: 0.440 | P@10: 0.216 | NDCG@20: 0.405 | PosBrier: 0.6954
+2025-12-31 13:39:22 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.729 | Collapsed=2 | Gini=0.379 | Router: GradNorm=22.9291 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:42:05 - exp6_auxiliary_free - DEBUG -     Loss: 0.0030 | R@10: 0.801 | R@20: 0.877 | μR@10: 0.462 | P@10: 0.201 | NDCG@20: 0.414 | PosBrier: 0.7091
+2025-12-31 13:42:05 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.789 | Collapsed=2 | Gini=0.417 | Router: GradNorm=22.3980 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:44:40 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.829 | R@20: 0.888 | μR@10: 0.445 | P@10: 0.218 | NDCG@20: 0.422 | PosBrier: 0.7120
+2025-12-31 13:44:40 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.825 | Collapsed=2 | Gini=0.444 | Router: GradNorm=22.6152 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:47:15 - exp6_auxiliary_free - DEBUG -     Loss: 0.0031 | R@10: 0.810 | R@20: 0.881 | μR@10: 0.446 | P@10: 0.198 | NDCG@20: 0.414 | PosBrier: 0.7286
+2025-12-31 13:47:15 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.773 | Collapsed=2 | Gini=0.407 | Router: GradNorm=26.3053 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:49:50 - exp6_auxiliary_free - DEBUG -     Loss: 0.0032 | R@10: 0.813 | R@20: 0.884 | μR@10: 0.458 | P@10: 0.214 | NDCG@20: 0.428 | PosBrier: 0.7001
+2025-12-31 13:49:50 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.792 | Collapsed=2 | Gini=0.419 | Router: GradNorm=18.0024 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:52:29 - exp6_auxiliary_free - DEBUG -     Loss: 0.0030 | R@10: 0.829 | R@20: 0.891 | μR@10: 0.463 | P@10: 0.205 | NDCG@20: 0.433 | PosBrier: 0.6866
+2025-12-31 13:52:29 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.806 | Collapsed=2 | Gini=0.429 | Router: GradNorm=33.6347 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:55:04 - exp6_auxiliary_free - DEBUG -     Loss: 0.0033 | R@10: 0.804 | R@20: 0.875 | μR@10: 0.437 | P@10: 0.208 | NDCG@20: 0.408 | PosBrier: 0.7059
+2025-12-31 13:55:04 - exp6_auxiliary_free - DEBUG -     MoE: CV=0.783 | Collapsed=1 | Gini=0.412 | Router: GradNorm=20.8780 | WeightStd=0.0400 ⚠️ Router gradients EXPLODING! Consider reducing LR or adding clipping
+2025-12-31 13:59:01 - exp6_auxiliary_free - INFO -   Using batch-averaged training metrics (no re-evaluation)
+2025-12-31 13:59:01 - exp6_auxiliary_free - INFO -   Final epoch: Running comprehensive evaluation...
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO - 
+--- Epoch 1 Summary ---
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO -   Train loss: 0.0138 → 0.0033
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO -   Val loss: 0.0000, Recall@10: 0.827, μRecall@10: 0.461, NDCG@20: 0.434
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO - 
+Training completed in 22205.2s
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO -   Using cached comprehensive evaluation from final epoch
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO - Model saved as: exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_20251231_152438
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO - Complete results saved to logs/exp_round5_3lobs_pretrain_multi_gpu_test_v2/exp6_auxiliary_free/final_results.json
+2025-12-31 15:24:38 - exp6_auxiliary_free - INFO - 
+================================================================================
+2025-12-31 15:24:39 - exp6_auxiliary_free - INFO - EXPERIMENT COMPLETE: exp6_auxiliary_free
+2025-12-31 15:24:39 - exp6_auxiliary_free - INFO - ================================================================================
+2025-12-31 15:24:39 - exp6_auxiliary_free - INFO - Final Recall@10: 0.827
+2025-12-31 15:24:39 - exp6_auxiliary_free - INFO - Best Val Loss: 0.0000
+2025-12-31 15:24:39 - exp6_auxiliary_free - INFO - Training Time: 22205.2s
+2025-12-31 15:24:39 - exp6_auxiliary_free - INFO - ================================================================================
+
