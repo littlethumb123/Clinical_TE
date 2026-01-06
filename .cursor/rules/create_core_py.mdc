@@ -1,0 +1,207 @@
+---
+alwaysApply: false
+---
+# Task: Extract Core Components from Jupyter Notebook to Python Module
+
+## Objective
+Create a clean Python module `moe_flashattn_3_core.py` by extracting **only the essential classes, functions, dataclasses, and configurations** from the Jupyter notebook `moe_flashattn_3.ipynb` that are required for:
+1. Loading pretrained transformer models from `.pt` checkpoint files
+2. Extracting embeddings from member claim data
+3. Running downstream classification tasks (logistic regression, XGBoost, LightGBM probes)
+
+---
+
+## Critical Rules (MUST FOLLOW)
+
+### 1. Code Preservation
+- **DO NOT** modify, refactor, optimize, or "improve" any code
+- **DO NOT** rename variables, functions, classes, or parameters
+- **DO NOT** change function signatures, default values, or type hints
+- **DO NOT** reformat code style (keep original indentation, spacing, line breaks)
+- **DO NOT** add docstrings, comments, or annotations that don't exist in the original
+- **DO NOT** remove any existing comments or docstrings
+- Copy code **EXACTLY** as it appears in the source notebook
+
+### 2. Completeness Requirements
+- Include **ALL** imports required by the extracted code
+- Include **ALL** helper functions that are called by the main classes/functions
+- Include **ALL** dataclasses and configuration classes
+- Include **ALL** constants and module-level variables referenced by the code
+- Preserve the **original order** of definitions (dependencies must come before dependents)
+
+### 3. Exclusion Rules
+- **EXCLUDE** all test functions (functions starting with `test_`)
+- **EXCLUDE** all diagnostic/debugging functions (e.g., `diagnose_*`, `debug_*`)
+- **EXCLUDE** all cells that are script execution (top-level code that runs experiments)
+- **EXCLUDE** all `if __name__ == "__main__":` blocks
+- **EXCLUDE** all inline examples, demonstrations, or sample runs
+- **EXCLUDE** all `print()` statements that are for debugging (keep those inside functions for logging)
+- **EXCLUDE** Jupyter magic commands (`%run`, `%%time`, etc.)
+- **EXCLUDE** cells that define sample/dummy data for testing
+
+### 4. Dependency Chain Verification
+Before finalizing, verify that:
+- Every class referenced is defined in the file or imported
+- Every function called is defined in the file or imported
+- Every constant/variable used is defined in the file or imported
+- No circular dependencies exist
+- Import order follows Python convention (stdlib → third-party → local)
+
+---
+
+## Required Components to Extract
+
+### A. Imports Section
+Extract all import statements. Group them as:
+```python
+# Standard library
+import os
+import json
+import time
+...
+
+# Third-party
+import torch
+import numpy as np
+import pandas as pd
+...
+
+# Type hints
+from typing import Dict, Tuple, Optional, List, Any, Union
+```
+
+### B. Configuration Dataclasses (in order)
+1. `BaseConfig` - Base model configuration
+2. `BaseExpDenseConfig` - Dense baseline configuration  
+3. `FlashAttentionConfig` - Flash attention model configuration
+4. `MoEConfig` - Mixture of Experts configuration
+5. `OptimizeConfig` - Training optimization configuration
+6. `DownstreamConfig` - Downstream task configuration
+
+### C. Helper Functions/Classes (in dependency order)
+1. `get_experiment_configs()` - Returns experiment name → config mapping
+2. `_calculate_model_dimensions()` - Calculate model dimensions from embedding size
+3. `create_collate_fn()` - Creates DataLoader collate function
+4. `ClinicalDataset` - PyTorch Dataset class for clinical data
+5. Any other utility functions these depend on
+
+### D. Model Architecture Components (in order)
+1. `RotaryPositionalEncoding` - RoPE implementation
+2. `FlashAttentionLayer` - Flash attention layer
+3. `LearnedAttentionPooling` - Learned pooling layer
+4. `SwiGLU` - SwiGLU activation
+5. `Expert` - Single MoE expert
+6. `MoELayer` - Mixture of Experts layer
+7. `DataParallelWrapper` - Multi-GPU wrapper (if used)
+
+### E. Main Model Classes (in order)
+1. `BaselineTransformer` - Standard transformer baseline
+2. `FlashAttentionTransformer` - Flash attention transformer
+3. `FlashMoETransformer` - Flash attention + MoE transformer
+
+### F. Embedding Extraction
+1. `EmbeddingExtractor` - Hook-based embedding extraction class
+
+### G. Model Loading/Saving
+1. `load_trained_model()` - Load model from checkpoint
+2. `save_trained_model()` - Save model (if needed for downstream)
+3. `generate_model_name()` - Generate standardized model names
+
+### H. Downstream Evaluation
+1. `DownstreamEvaluator` - Full downstream evaluation class including:
+   - `extract_embeddings()`
+   - `prepare_downstream_data()`
+   - `train_linear_probe()`
+   - `train_xgboost_probe()`
+   - `train_lightgbm_probe()`
+   - `evaluate()` and related methods
+
+### I. Metrics (if defined in notebook, or note external import)
+- Check if metrics like `lift_at_percentage`, `precision_at_percentage`, etc. are defined in notebook or imported from external module
+
+---
+
+## Output File Structure
+
+```python
+"""
+moe_flashattn_3_core.py
+
+Core components for clinical transformer embedding generation and downstream tasks.
+Extracted from moe_flashattn_3.ipynb
+
+Usage:
+    from moe_flashattn_3_core import (
+        FlashMoETransformer, FlashAttentionConfig, MoEConfig,
+        EmbeddingExtractor, ClinicalDataset, create_collate_fn,
+        load_trained_model, DownstreamEvaluator, DownstreamConfig,
+    )
+"""
+
+# ============================================================================
+# IMPORTS
+# ============================================================================
+[All imports here]
+
+# ============================================================================
+# CONFIGURATION DATACLASSES
+# ============================================================================
+[All config classes here]
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+[Helper functions here]
+
+# ============================================================================
+# DATASET AND DATA LOADING
+# ============================================================================
+[ClinicalDataset, collate_fn, etc.]
+
+# ============================================================================
+# MODEL COMPONENTS
+# ============================================================================
+[Attention layers, MoE components, etc.]
+
+# ============================================================================
+# TRANSFORMER MODELS
+# ============================================================================
+[BaselineTransformer, FlashAttentionTransformer, FlashMoETransformer]
+
+# ============================================================================
+# EMBEDDING EXTRACTION
+# ============================================================================
+[EmbeddingExtractor class]
+
+# ============================================================================
+# MODEL LOADING
+# ============================================================================
+[load_trained_model, etc.]
+
+# ============================================================================
+# DOWNSTREAM EVALUATION
+# ============================================================================
+[DownstreamEvaluator, DownstreamConfig]
+```
+
+---
+
+## Validation Checklist (Perform Before Submitting)
+
+□ All imports are present and correctly ordered
+□ All dataclasses have their `@dataclass` decorators
+□ All classes have complete `__init__` methods
+□ All method definitions are complete (no truncation)
+□ No syntax errors (mentally trace through the code)
+□ No undefined references (every name used is defined or imported)
+□ No test/debug/script code included
+□ Original code formatting preserved
+□ Section headers match the structure above
+□ File can be imported without executing any code
+
+---
+
+## Source Notebook
+The source notebook is: `moe_flashattn_3.ipynb` (or `moe_flashattn_3.py` converted version)
+
+---

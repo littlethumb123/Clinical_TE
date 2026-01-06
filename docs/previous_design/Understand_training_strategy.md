@@ -1659,3 +1659,173 @@ This is achieved through:
 - Next-day target shifting for forecasting
 
 **The training code and SQL pipeline are both complete and correct** - all mysteries solved! 🎯
+
+
+## Two different files distinction
+
+---
+
+# Comparison: `min_transformer_finetune.py` vs `min_transformer_train.py`
+
+## Structure Overview
+
+| Aspect | `min_transformer_finetune.py` (544 lines) | `min_transformer_train.py` (366 lines) |
+|--------|-------------------------------------------|----------------------------------------|
+| **Comments at top** | `### train general ###` + `### fine tune ###` | None |
+| **Sections** | **TWO** sections (pre-train + fine-tune) | **ONE** section only |
+| **Total lines** | 544 | 366 |
+| **Code organization** | More complete, labeled sections | Single-purpose, simpler |
+
+---
+
+## `min_transformer_finetune.py` - TWO Distinct Sections
+
+### Section 1: Pre-training (Lines 1-382)
+```python
+###############################
+### train general #############
+###############################
+```
+
+| Parameter | Value |
+|-----------|-------|
+| `batch_size` | 512 |
+| `ndropout` | 0.05 |
+| `cd_cnt` | 84,010 |
+| `target_cd_cnt` | 2,767 |
+| `criterion` | `BCEWithLogitsLoss` |
+| `parallel` | True |
+| `target` column | `'target'` |
+
+### Section 2: Fine-tuning (Lines 385-544)
+```python
+###############################
+### fine tune #################
+###############################
+```
+
+| Parameter | Value |
+|-----------|-------|
+| `target_cd_cnt` | 2 (binary) |
+| `criterion` | `NLLLoss` |
+| `parallel` | False |
+| `target` column | `'ip_6m'` |
+
+Adds a new classifier head:
+```python
+class class_ip(nn.Module):
+    def __init__(self):
+        super(class_ip, self).__init__()
+        self.decoder_ip = nn.Linear(embedding_size, 2)
+```
+
+---
+
+## `min_transformer_train.py` - SINGLE Section
+
+| Parameter | Value |
+|-----------|-------|
+| `batch_size` | 256 |
+| `ndropout` | 0.1 |
+| `cd_cnt` | 98,041 |
+| `target_cd_cnt` | 2 |
+| `criterion` | `NLLLoss` |
+| `parallel` | False |
+| `target` column | `'ip_3m'` |
+
+---
+
+## Key Code Differences
+
+### 1. Loss Function & Task Type
+
+| File | Loss | Task | Output Activation |
+|------|------|------|-------------------|
+| `finetune.py` Section 1 | `BCEWithLogitsLoss` | Multi-label (2,767 targets) | `log_softmax` ❌ |
+| `finetune.py` Section 2 | `NLLLoss` | Binary (IP prediction) | `log_softmax` ✅ |
+| `train.py` | `NLLLoss` | Binary (IP prediction) | `log_softmax` ✅ |
+
+### 2. Optimizer Settings
+
+| File | Learning Rate | Optimizer |
+|------|--------------|-----------|
+| `finetune.py` Section 1 | 1e-3 | SGD(momentum=0.9) |
+| `finetune.py` Section 2 | Uses loaded checkpoint | SGD(momentum=0.9) |
+| `train.py` | 1e-2 | SGD(momentum=0.9) |
+
+### 3. Model Architecture Differences
+
+| Parameter | `finetune.py` | `train.py` |
+|-----------|---------------|------------|
+| `embedding_size` | 256 | 256 |
+| `len_dy` | 70 | 70 |
+| `len_cd` | 25 | 25 |
+| `nhead` | 16 | 16 |
+| `nhid` | 512 | 512 |
+| `nlayers` | 6 | 6 |
+| `dropout` | 0.05 (section 1), 0.1 (section 2) | 0.1 |
+
+### 4. Target Handling
+
+**`finetune.py` Section 1** - Multi-label targets:
+```python
+def conv_target(target):
+    target = target.split('*')
+    target = target[:len_dy]
+    target = [dy.split(',') for dy in target]  # Multiple codes per day
+    target = [[int(cd) if cd!='' else 0 for cd in dy] for dy in target]
+    return target
+```
+
+**`train.py`** - Single-label targets:
+```python
+def conv_dy(x):
+    x = x.split('*')
+    x = x[:len_dy]
+    x = [int(cd) for cd in x]  # Single value per day
+    return x
+```
+
+---
+
+## Inference: Which is the "Real" Pre-training?
+
+### `min_transformer_finetune.py` Section 1 is the **Formal Pre-training**
+
+**Evidence:**
+
+1. **Has section header comment**: `### train general ###` suggests this is the main pre-training
+2. **Multi-label task** with 2,767 target codes (medical code prediction)
+3. **Uses `BCEWithLogitsLoss`** intended for multi-label (though combined incorrectly with `log_softmax`)
+4. **Larger batch size** (512) typical for pre-training
+5. **Uses DataParallel** (`parallel = True`) for faster training
+6. **Lower dropout** (0.05) - less regularization for pre-training
+7. **Saves to** `'bestModel'` and `'checkpoint'` (generic names)
+
+### `min_transformer_train.py` is a **Direct Fine-tuning Script**
+
+**Evidence:**
+
+1. **No header comments** - less documented
+2. **Binary classification** (`target_cd_cnt = 2`)
+3. **Uses `NLLLoss`** with `log_softmax` - correctly configured for single-label
+4. **Target column is** `'ip_3m'` - specific downstream task
+5. **Smaller batch size** (256)
+6. **No DataParallel** (`parallel = False`)
+7. **Higher dropout** (0.1) - more regularization for fine-tuning
+8. **Saves to** `'bestModel_ip'` and `'checkpoint_ip'` (task-specific names)
+
+---
+
+## Summary
+
+| File | Purpose | Completeness |
+|------|---------|--------------|
+| `min_transformer_finetune.py` | **Complete pipeline**: Pre-train (Section 1) → Fine-tune (Section 2) | More complete, documented sections |
+| `min_transformer_train.py` | **Standalone fine-tuning** for IP prediction | Simpler, single-purpose |
+
+### The Pre-training Model Used for Embeddings
+
+Your embeddings were likely generated from **`min_transformer_finetune.py` Section 1** (pre-training with multi-label task), which has the `log_softmax` + `BCEWithLogitsLoss` mismatch.
+
+The `min_transformer_train.py` file appears to be a **simpler/earlier version** or **alternative script** that directly trains for binary IP classification without the multi-label pre-training step.
