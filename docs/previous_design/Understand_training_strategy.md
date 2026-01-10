@@ -1666,7 +1666,7 @@ This is achieved through:
 ---
 
 # Comparison: `min_transformer_finetune.py` vs `min_transformer_train.py`
-
+Jan 6, 2026
 ## Structure Overview
 
 | Aspect | `min_transformer_finetune.py` (544 lines) | `min_transformer_train.py` (366 lines) |
@@ -1829,3 +1829,98 @@ def conv_dy(x):
 Your embeddings were likely generated from **`min_transformer_finetune.py` Section 1** (pre-training with multi-label task), which has the `log_softmax` + `BCEWithLogitsLoss` mismatch.
 
 The `min_transformer_train.py` file appears to be a **simpler/earlier version** or **alternative script** that directly trains for binary IP classification without the multi-label pre-training step.
+
+
+# Comparison: `min_transformer_train.py` vs `min_transformer.py`
+Based on my earlier read of `min_transformer_train.py` and the just-attached `min_transformer.py`, let me compare them:
+
+---
+
+## Side-by-Side Comparison
+
+| Aspect | `min_transformer_train.py` | `min_transformer.py` |
+|--------|---------------------------|---------------------|
+| **Loss Function** | `NLLLoss` | `NLLLoss` |
+| **Model Output** | `log_softmax` | `log_softmax` |
+| **Classification Type** | Single-label ✅ | Single-label ✅ |
+| | | |
+| **`target_cd_cnt`** | 2 (binary) | 2,767 (multi-class) |
+| **`cd_cnt`** | 98,041 | 84,010 |
+| **`len_dy`** | 70 | 200 |
+| **`len_cd`** | 25 | 80 |
+| **`batch_size`** | 256 | 16 |
+| **`ndropout`** | 0.1 | 0.1 |
+| | | |
+| **Target column** | `'ip_3m'` | Not specified (inference only) |
+| **Purpose** | Training for IP prediction | **Embedding extraction** |
+| **Has `score()` function** | ❌ No | ✅ Yes |
+| **Has `get_daily_embedding()`** | ❌ No | ✅ Yes |
+| **Has `train()` with targets** | ✅ Yes | ✅ Yes (but incomplete) |
+
+---
+
+## Key Similarities
+
+1. **Both use `NLLLoss` + `log_softmax`** → Single-label classification ✅ Correct
+2. **Same model architecture** (`TransformerModel` class)
+3. **Same `conv_dy` function** for single-label target parsing
+4. **Same optimizer pattern** (SGD with double-update bug)
+
+---
+
+## Key Differences
+
+### 1. Primary Purpose
+
+**`min_transformer_train.py`**: Training for binary IP prediction
+```python
+target_cd_cnt = 2  # Binary classification
+target = 'ip_3m'
+```
+
+**`min_transformer.py`**: Embedding extraction (inference)
+```python
+target_cd_cnt = 2767  # Multi-class (but for embedding extraction)
+# Has score() and get_daily_embedding() functions
+```
+
+### 2. Data Dimensions
+
+| Dimension | `min_transformer_train.py` | `min_transformer.py` |
+|-----------|---------------------------|---------------------|
+| Sequence length | 70 days | 200 days |
+| Codes per day | 25 | 80 |
+| Vocabulary | 98,041 | 84,010 |
+
+### 3. Additional Functions in `min_transformer.py`
+
+```python
+def score(model, data):
+    """Extract embeddings using forward hook"""
+    model.transformer_encoder_dy.register_forward_hook(...)
+    intermedia_output = activation['transformer_encoder_dy']
+    ...
+
+def get_daily_embedding(model, data):
+    """Get member's daily embedding for all days"""
+    ...
+```
+
+These are **inference-only functions** for extracting embeddings.
+
+---
+
+## Conclusion
+
+**YES, they are structurally similar** - both use:
+- Same `TransformerModel` architecture
+- Same `NLLLoss` + `log_softmax` (single-label, correctly paired)
+- Same training loop pattern
+
+**BUT they serve different purposes**:
+- `min_transformer_train.py` → **Training** for binary IP classification
+- `min_transformer.py` → **Embedding extraction** (inference) with a pre-trained model
+
+`min_transformer.py` appears to be an **inference/scoring script** that loads a pre-trained model and extracts embeddings, rather than a training script. The `train()` function exists but is incomplete (no target loading - `prepare_tensor` doesn't return `y`).
+
+

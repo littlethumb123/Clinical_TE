@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[2]:
+# In[169]:
 
 
 import os
@@ -1465,7 +1465,7 @@ def prepare_features(
 
 
 
-# In[155]:
+# In[175]:
 
 
 @dataclass
@@ -1517,7 +1517,7 @@ def prepare_evaluation_data(
         raise ValueError(f"feature_set must be one of {valid_feature_sets}")
     
     step_start = time.time()
-    print(f"\n[Step 1/6] Loading and preparing data...")
+    print(f"\n Loading and preparing data...")
     # Load embeddings (skip for tabular_only)
     if feature_set != 'tabular_only':
         print(f"  Loading embeddings from: {embedding_location_path}")
@@ -1531,11 +1531,24 @@ def prepare_evaluation_data(
         else:
             df_merged = join_embeddings_with_features(emb_df, df_features)
     else:
-        print(f"  Preparing tabular-only data (no embeddings) joined with member ID im embedding table...")
-        # For tabular-only, just apply filters directly
-        df_members = load_mbrs_have_embed(embedding_location_path)
-        df_merged = join_embeddings_with_features(df_members[['individual_id', 'index_dt']], df_features)
-    
+        if embedding_location_path:
+            print(f"  Preparing tabular-only data (no embeddings) joined with member ID im embedding table...")
+            # For tabular-only, just apply filters directly
+            df_members = load_mbrs_have_embed(embedding_location_path)
+            df_merged = join_embeddings_with_features(df_members[['individual_id', 'index_dt']], df_features)
+        # using entire table without joining to match 30% samples
+        else:
+            # For tabular-only, just apply filters directly
+            df_merged = df_features.copy()
+            df_merged['index_dt'] = pd.to_datetime(df_merged['index_dt']).dt.strftime('%Y-%m-%d')
+            if 'mon_6_include' in df_merged.columns:
+                df_merged = df_merged[df_merged['mon_6_include'] == 1]
+            if 'exclude_ip' in df_merged.columns:
+                df_merged = df_merged[(df_merged['exclude_ip'] == 0) | (df_merged['exclude_ip'].isna())]
+            if 'include_post_6_status' in df_merged.columns:
+                df_merged = df_merged[df_merged['include_post_6_status'] == 1]
+            df_merged = df_merged.drop_duplicates(subset=['individual_id', 'index_dt'], keep='last')    
+            
     step_times['step1_data_loading'] = time.time() - step_start
     print(f"  Step 1 complete ({step_times['step1_data_loading']:.2f}s)")
     print(f"\n[Step 2/6] Creating data splits...")
@@ -1603,7 +1616,7 @@ def prepare_evaluation_data(
     )
 
 
-# In[156]:
+# In[176]:
 
 
 # =============================================================================
@@ -1629,22 +1642,33 @@ def evaluate_model_on_splits(
     Returns:
         Dict with split names as keys, metrics dict as values
     """
+    total_start_time = time.time()
+    step_times = {}
+    
     # Clone model to avoid modifying original
     model = clone(model)
     
     X_train, y_train = X_splits['train'], y_splits['train']
-        
+    
+    
+    step_start = time.time()
+
     # Handle scaling
     scaler = None
     if apply_scaling:
         scaler = StandardScaler()
         X_train_processed = scaler.fit_transform(X_train)
+    step_times['scaling'] = time.time() - step_start
+    print(f"\n Scaling done {step_times['scaling']}...")
     else:
         X_train_processed = X_train
+
     
     # Handle CatBoost-specific training
     model_type = type(model).__name__
     
+    
+    step_start = time.time()
     if model_type == 'CatBoostClassifier':
         # CatBoost uses Pool for categorical features
         from catboost import Pool
@@ -1655,10 +1679,14 @@ def evaluate_model_on_splits(
         model.fit(train_pool, eval_set=val_pool, verbose=0)
     else:
         model.fit(X_train_processed, y_train)
+    step_times['model_fit'] = time.time() - step_start
+    print(f"\n Fit model done {model_type}: {step_times['model_fit']}")
     
     # Evaluate on all splits
+    step_start = time.time()
     results = {}
-    for split_name in ['val', 'test', 'oot', 'oot_strict']:
+    for split_name in tqdm(['val', 'test', 'oot', 'oot_strict']):
+        print(f"\n Evaluating {split_name}...")
         X_split = X_splits.get(split_name)
         y_split = y_splits.get(split_name)
         
@@ -1681,11 +1709,12 @@ def evaluate_model_on_splits(
         
         # Compute metrics
         results[split_name] = compute_split_metrics(np.array(y_split), y_prob)
-    
+    step_times['model_eval'] = time.time() - step_start
+    print(f"\n Evaluate model done {model_type}: {step_times['model_eval']}")
     return results
 
 
-# In[165]:
+# In[177]:
 
 
 def evaluate_with_prepared_data(
@@ -1862,62 +1891,68 @@ catboost_model_legacy = CatBoostClassifier(
 )
 
 
-# In[162]:
+# In[173]:
 
 
 experiment_configs = [
-    # These 3 share (exp1 path, embedding_only) - data prepared ONCE
+    # # These 3 share (exp1 path, embedding_only) - data prepared ONCE
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "exp1_catboost_emb_only",
+    #     'feature_set': 'embedding_only',
+    #     'apply_scaling': False
+    # },
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "exp2b_catboost_emb_only",
+    #     'feature_set': 'embedding_only',
+    #     'apply_scaling': False
+    # },
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp6_auxiliary_free_v3",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "exp6_catboost_emb_only",
+    #     'feature_set': 'embedding_only',
+    #     'apply_scaling': False
+    # },
+    # # These 3 share (exp1 path, embedding_only) - data prepared ONCE
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "tabular_only_catboost",
+    #     'feature_set': 'tabular_only',
+    #     'apply_scaling': False
+    # },
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "exp1_catboost_hybrid",
+    #     'feature_set': 'hybrid',
+    #     'apply_scaling': False
+    # },
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "exp2b_catboost_hybrid",
+    #     'feature_set': 'hybrid',
+    #     'apply_scaling': False
+    # },
+    # {
+    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp6_auxiliary_free_v3",
+    #     'ml_model_object': catboost_model,
+    #     'exp_name': "exp6_catboost_hybrid",
+    #     'feature_set': 'hybrid',
+    #     'apply_scaling': False
+    # }, 
     {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline",
+        'embedding_location_path': f"", # use full dataset commericial what is the ceiline
         'ml_model_object': catboost_model,
-        'exp_name': "exp1_catboost_emb_only",
-        'feature_set': 'embedding_only',
-        'apply_scaling': False
-    },
-    {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
-        'ml_model_object': catboost_model,
-        'exp_name': "exp2b_catboost_emb_only",
-        'feature_set': 'embedding_only',
-        'apply_scaling': False
-    },
-    {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp6_auxiliary_free_v3",
-        'ml_model_object': catboost_model,
-        'exp_name': "exp6_catboost_emb_only",
-        'feature_set': 'embedding_only',
-        'apply_scaling': False
-    },
-    # These 3 share (exp1 path, embedding_only) - data prepared ONCE
-    {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline",
-        'ml_model_object': catboost_model,
-        'exp_name': "tabular_only_catboost",
+        'exp_name': "full_tabular_only_catboost",
         'feature_set': 'tabular_only',
         'apply_scaling': False
-    },
-    {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline",
-        'ml_model_object': catboost_model,
-        'exp_name': "exp1_catboost_hybrid",
-        'feature_set': 'hybrid',
-        'apply_scaling': False
-    },
-    {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
-        'ml_model_object': catboost_model,
-        'exp_name': "exp2b_catboost_hybrid",
-        'feature_set': 'hybrid',
-        'apply_scaling': False
-    },
-    {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp6_auxiliary_free_v3",
-        'ml_model_object': catboost_model,
-        'exp_name': "exp6_catboost_hybrid",
-        'feature_set': 'hybrid',
-        'apply_scaling': False
     }
-
 
 ]
 
@@ -1968,10 +2003,10 @@ embedding_dfs['exp1_dense_baseline']['index_dt'] = pd.to_datetime(embedding_dfs[
 
 # #### Evaluate
 
-# In[166]:
+# In[178]:
 
 
-results_df = evaluate_all_experiments(experiment_configs, df_ip_features, downsample_ratio=10.0)
+results_df_fulltabular = evaluate_all_experiments(experiment_configs, df_ip_features, downsample_ratio=10.0)
 
 
 # In[168]:
@@ -1980,8 +2015,8 @@ results_df = evaluate_all_experiments(experiment_configs, df_ip_features, downsa
 results_df.T
 
 
-# In[ ]:
+# In[179]:
 
 
-
+results_df_fulltabular.T
 

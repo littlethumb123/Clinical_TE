@@ -1,0 +1,157 @@
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - 
+================================================================================
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - EXPERIMENT: exp1_dense_baseline
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - ================================================================================
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Model: Baseline Transformer (FP32)
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -   d_model=256, nhid=1024, nhead=16 (hardcoded)
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Total parameters: 26,455,961
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - ✅ Using pre-prepared data
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Using BCEWithLogitsLoss without pos_weight
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    Per-GPU batch size: 32
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    Effective batch size: 128
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    Base learning rate: 0.0002
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    Scaled learning rate: 8.00e-04
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    DataParallel output_device: 0
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO -    ✅ Using DataParallelWrapper for integrated loss
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Using standard DataLoader (no bucketing).
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Using DataLoader with 4 workers.
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Optimizer: SGD: lr=1.00e-02, momentum=0.9, weight_decay=0.0, nesterov=False
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Scheduler: CosineWarmup: warmup=0, peak=8.00e-04, end=0.00e+00
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Optimizer: SGD: lr=1.00e-02, momentum=0.9, weight_decay=0.0, nesterov=False
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Scheduler: CosineWarmup: warmup=0, peak=8.00e-04, end=0.00e+00
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - Training for 1 epochs...
+2025-12-29 22:13:44 - exp1_dense_baseline - INFO - 
+--- Epoch 1/1 ---
+2025-12-29 22:13:56 - exp1_dense_baseline - DEBUG -     Loss: 0.8045 | R@10: 0.007 | R@20: 0.015 | μR@10: 0.002 | P@10: 0.001 | NDCG@20: 0.001 | PosBrier: 0.2949
+2025-12-29 22:17:54 - exp1_dense_baseline - DEBUG -     Loss: 0.6474 | R@10: 0.004 | R@20: 0.008 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.3424
+2025-12-29 22:21:21 - exp1_dense_baseline - DEBUG -     Loss: 0.5683 | R@10: 0.002 | R@20: 0.007 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.3734
+2025-12-29 22:24:47 - exp1_dense_baseline - DEBUG -     Loss: 0.5001 | R@10: 0.002 | R@20: 0.004 | μR@10: 0.000 | P@10: 0.000 | NDCG@20: 0.000 | PosBrier: 0.4095
+2025-12-29 22:28:08 - exp1_dense_baseline - DEBUG -     Loss: 0.4394 | R@10: 0.002 | R@20: 0.005 | μR@10: 0.000 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.4342
+2025-12-29 22:31:29 - exp1_dense_baseline - DEBUG -     Loss: 0.3852 | R@10: 0.003 | R@20: 0.006 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.4805
+2025-12-29 22:34:51 - exp1_dense_baseline - DEBUG -     Loss: 0.3363 | R@10: 0.005 | R@20: 0.012 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.5137
+2025-12-29 22:38:16 - exp1_dense_baseline - DEBUG -     Loss: 0.2931 | R@10: 0.005 | R@20: 0.011 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.002 | PosBrier: 0.5545
+2025-12-29 22:41:38 - exp1_dense_baseline - DEBUG -     Loss: 0.2550 | R@10: 0.008 | R@20: 0.020 | μR@10: 0.002 | P@10: 0.001 | NDCG@20: 0.002 | PosBrier: 0.5890
+2025-12-29 22:45:01 - exp1_dense_baseline - DEBUG -     Loss: 0.2221 | R@10: 0.013 | R@20: 0.029 | μR@10: 0.003 | P@10: 0.001 | NDCG@20: 0.003 | PosBrier: 0.6226
+2025-12-29 22:48:22 - exp1_dense_baseline - DEBUG -     Loss: 0.1942 | R@10: 0.025 | R@20: 0.050 | μR@10: 0.005 | P@10: 0.003 | NDCG@20: 0.006 | PosBrier: 0.6511
+2025-12-29 22:51:44 - exp1_dense_baseline - DEBUG -     Loss: 0.1699 | R@10: 0.030 | R@20: 0.055 | μR@10: 0.007 | P@10: 0.003 | NDCG@20: 0.006 | PosBrier: 0.6852
+2025-12-29 22:55:06 - exp1_dense_baseline - DEBUG -     Loss: 0.1492 | R@10: 0.053 | R@20: 0.084 | μR@10: 0.011 | P@10: 0.005 | NDCG@20: 0.009 | PosBrier: 0.7103
+2025-12-29 22:58:29 - exp1_dense_baseline - DEBUG -     Loss: 0.1320 | R@10: 0.067 | R@20: 0.108 | μR@10: 0.014 | P@10: 0.007 | NDCG@20: 0.012 | PosBrier: 0.7312
+2025-12-29 23:01:50 - exp1_dense_baseline - DEBUG -     Loss: 0.1171 | R@10: 0.079 | R@20: 0.119 | μR@10: 0.017 | P@10: 0.008 | NDCG@20: 0.013 | PosBrier: 0.7513
+2025-12-29 23:05:10 - exp1_dense_baseline - DEBUG -     Loss: 0.1048 | R@10: 0.106 | R@20: 0.150 | μR@10: 0.023 | P@10: 0.011 | NDCG@20: 0.018 | PosBrier: 0.7702
+2025-12-29 23:08:31 - exp1_dense_baseline - DEBUG -     Loss: 0.0938 | R@10: 0.132 | R@20: 0.187 | μR@10: 0.029 | P@10: 0.014 | NDCG@20: 0.024 | PosBrier: 0.7846
+2025-12-29 23:11:56 - exp1_dense_baseline - DEBUG -     Loss: 0.0849 | R@10: 0.161 | R@20: 0.212 | μR@10: 0.036 | P@10: 0.017 | NDCG@20: 0.028 | PosBrier: 0.7957
+2025-12-29 23:15:20 - exp1_dense_baseline - DEBUG -     Loss: 0.0775 | R@10: 0.189 | R@20: 0.238 | μR@10: 0.042 | P@10: 0.021 | NDCG@20: 0.034 | PosBrier: 0.8101
+2025-12-29 23:18:45 - exp1_dense_baseline - DEBUG -     Loss: 0.0705 | R@10: 0.202 | R@20: 0.250 | μR@10: 0.049 | P@10: 0.023 | NDCG@20: 0.037 | PosBrier: 0.8198
+2025-12-29 23:22:10 - exp1_dense_baseline - DEBUG -     Loss: 0.0645 | R@10: 0.209 | R@20: 0.254 | μR@10: 0.056 | P@10: 0.025 | NDCG@20: 0.040 | PosBrier: 0.8285
+2025-12-29 23:25:32 - exp1_dense_baseline - DEBUG -     Loss: 0.0594 | R@10: 0.241 | R@20: 0.283 | μR@10: 0.065 | P@10: 0.030 | NDCG@20: 0.047 | PosBrier: 0.8389
+2025-12-29 23:28:57 - exp1_dense_baseline - DEBUG -     Loss: 0.0551 | R@10: 0.243 | R@20: 0.290 | μR@10: 0.070 | P@10: 0.032 | NDCG@20: 0.050 | PosBrier: 0.8451
+2025-12-29 23:32:22 - exp1_dense_baseline - DEBUG -     Loss: 0.0513 | R@10: 0.284 | R@20: 0.323 | μR@10: 0.084 | P@10: 0.038 | NDCG@20: 0.059 | PosBrier: 0.8491
+2025-12-29 23:35:46 - exp1_dense_baseline - DEBUG -     Loss: 0.0477 | R@10: 0.277 | R@20: 0.315 | μR@10: 0.087 | P@10: 0.040 | NDCG@20: 0.060 | PosBrier: 0.8554
+2025-12-29 23:39:05 - exp1_dense_baseline - DEBUG -     Loss: 0.0448 | R@10: 0.305 | R@20: 0.343 | μR@10: 0.099 | P@10: 0.047 | NDCG@20: 0.069 | PosBrier: 0.8563
+2025-12-29 23:42:25 - exp1_dense_baseline - DEBUG -     Loss: 0.0423 | R@10: 0.290 | R@20: 0.324 | μR@10: 0.096 | P@10: 0.044 | NDCG@20: 0.067 | PosBrier: 0.8654
+2025-12-29 23:45:46 - exp1_dense_baseline - DEBUG -     Loss: 0.0397 | R@10: 0.301 | R@20: 0.331 | μR@10: 0.106 | P@10: 0.048 | NDCG@20: 0.068 | PosBrier: 0.8689
+2025-12-29 23:49:06 - exp1_dense_baseline - DEBUG -     Loss: 0.0372 | R@10: 0.295 | R@20: 0.324 | μR@10: 0.114 | P@10: 0.047 | NDCG@20: 0.073 | PosBrier: 0.8702
+2025-12-29 23:52:31 - exp1_dense_baseline - DEBUG -     Loss: 0.0360 | R@10: 0.375 | R@20: 0.409 | μR@10: 0.125 | P@10: 0.062 | NDCG@20: 0.091 | PosBrier: 0.8718
+2025-12-29 23:55:50 - exp1_dense_baseline - DEBUG -     Loss: 0.0340 | R@10: 0.342 | R@20: 0.371 | μR@10: 0.126 | P@10: 0.057 | NDCG@20: 0.084 | PosBrier: 0.8772
+2025-12-29 23:59:11 - exp1_dense_baseline - DEBUG -     Loss: 0.0327 | R@10: 0.374 | R@20: 0.401 | μR@10: 0.134 | P@10: 0.066 | NDCG@20: 0.092 | PosBrier: 0.8777
+2025-12-30 00:02:32 - exp1_dense_baseline - DEBUG -     Loss: 0.0311 | R@10: 0.396 | R@20: 0.423 | μR@10: 0.138 | P@10: 0.069 | NDCG@20: 0.099 | PosBrier: 0.8794
+2025-12-30 00:05:56 - exp1_dense_baseline - DEBUG -     Loss: 0.0296 | R@10: 0.373 | R@20: 0.399 | μR@10: 0.142 | P@10: 0.064 | NDCG@20: 0.095 | PosBrier: 0.8797
+2025-12-30 00:09:16 - exp1_dense_baseline - DEBUG -     Loss: 0.0283 | R@10: 0.321 | R@20: 0.346 | μR@10: 0.125 | P@10: 0.056 | NDCG@20: 0.082 | PosBrier: 0.8906
+2025-12-30 00:12:41 - exp1_dense_baseline - DEBUG -     Loss: 0.0274 | R@10: 0.381 | R@20: 0.409 | μR@10: 0.159 | P@10: 0.075 | NDCG@20: 0.105 | PosBrier: 0.8818
+2025-12-30 00:16:07 - exp1_dense_baseline - DEBUG -     Loss: 0.0262 | R@10: 0.353 | R@20: 0.382 | μR@10: 0.149 | P@10: 0.066 | NDCG@20: 0.096 | PosBrier: 0.8869
+2025-12-30 00:19:25 - exp1_dense_baseline - DEBUG -     Loss: 0.0257 | R@10: 0.412 | R@20: 0.439 | μR@10: 0.164 | P@10: 0.085 | NDCG@20: 0.114 | PosBrier: 0.8856
+2025-12-30 00:22:50 - exp1_dense_baseline - DEBUG -     Loss: 0.0249 | R@10: 0.388 | R@20: 0.417 | μR@10: 0.162 | P@10: 0.076 | NDCG@20: 0.108 | PosBrier: 0.8880
+2025-12-30 00:26:10 - exp1_dense_baseline - DEBUG -     Loss: 0.0243 | R@10: 0.394 | R@20: 0.427 | μR@10: 0.153 | P@10: 0.074 | NDCG@20: 0.109 | PosBrier: 0.8911
+2025-12-30 00:29:34 - exp1_dense_baseline - DEBUG -     Loss: 0.0233 | R@10: 0.383 | R@20: 0.414 | μR@10: 0.159 | P@10: 0.076 | NDCG@20: 0.107 | PosBrier: 0.8906
+2025-12-30 00:32:51 - exp1_dense_baseline - DEBUG -     Loss: 0.0227 | R@10: 0.396 | R@20: 0.427 | μR@10: 0.159 | P@10: 0.074 | NDCG@20: 0.109 | PosBrier: 0.8918
+2025-12-30 00:36:15 - exp1_dense_baseline - DEBUG -     Loss: 0.0223 | R@10: 0.450 | R@20: 0.481 | μR@10: 0.177 | P@10: 0.093 | NDCG@20: 0.128 | PosBrier: 0.8887
+2025-12-30 00:39:34 - exp1_dense_baseline - DEBUG -     Loss: 0.0217 | R@10: 0.408 | R@20: 0.440 | μR@10: 0.172 | P@10: 0.081 | NDCG@20: 0.116 | PosBrier: 0.8889
+2025-12-30 00:42:51 - exp1_dense_baseline - DEBUG -     Loss: 0.0214 | R@10: 0.390 | R@20: 0.425 | μR@10: 0.166 | P@10: 0.079 | NDCG@20: 0.113 | PosBrier: 0.8935
+2025-12-30 00:46:15 - exp1_dense_baseline - DEBUG -     Loss: 0.0205 | R@10: 0.437 | R@20: 0.469 | μR@10: 0.185 | P@10: 0.089 | NDCG@20: 0.127 | PosBrier: 0.8880
+2025-12-30 00:49:32 - exp1_dense_baseline - DEBUG -     Loss: 0.0202 | R@10: 0.399 | R@20: 0.434 | μR@10: 0.172 | P@10: 0.082 | NDCG@20: 0.116 | PosBrier: 0.8952
+2025-12-30 00:52:50 - exp1_dense_baseline - DEBUG -     Loss: 0.0196 | R@10: 0.459 | R@20: 0.493 | μR@10: 0.188 | P@10: 0.094 | NDCG@20: 0.134 | PosBrier: 0.8901
+2025-12-30 00:56:13 - exp1_dense_baseline - DEBUG -     Loss: 0.0189 | R@10: 0.354 | R@20: 0.390 | μR@10: 0.165 | P@10: 0.068 | NDCG@20: 0.103 | PosBrier: 0.8994
+2025-12-30 00:59:30 - exp1_dense_baseline - DEBUG -     Loss: 0.0188 | R@10: 0.452 | R@20: 0.486 | μR@10: 0.186 | P@10: 0.086 | NDCG@20: 0.130 | PosBrier: 0.8919
+2025-12-30 01:02:47 - exp1_dense_baseline - DEBUG -     Loss: 0.0184 | R@10: 0.379 | R@20: 0.424 | μR@10: 0.163 | P@10: 0.075 | NDCG@20: 0.109 | PosBrier: 0.9007
+2025-12-30 01:06:10 - exp1_dense_baseline - DEBUG -     Loss: 0.0188 | R@10: 0.488 | R@20: 0.528 | μR@10: 0.176 | P@10: 0.096 | NDCG@20: 0.136 | PosBrier: 0.8987
+2025-12-30 01:09:29 - exp1_dense_baseline - DEBUG -     Loss: 0.0179 | R@10: 0.428 | R@20: 0.472 | μR@10: 0.165 | P@10: 0.083 | NDCG@20: 0.122 | PosBrier: 0.9022
+2025-12-30 01:12:47 - exp1_dense_baseline - DEBUG -     Loss: 0.0175 | R@10: 0.427 | R@20: 0.467 | μR@10: 0.199 | P@10: 0.089 | NDCG@20: 0.132 | PosBrier: 0.8911
+2025-12-30 01:16:04 - exp1_dense_baseline - DEBUG -     Loss: 0.0172 | R@10: 0.424 | R@20: 0.469 | μR@10: 0.184 | P@10: 0.082 | NDCG@20: 0.125 | PosBrier: 0.8957
+2025-12-30 01:19:26 - exp1_dense_baseline - DEBUG -     Loss: 0.0170 | R@10: 0.439 | R@20: 0.479 | μR@10: 0.175 | P@10: 0.083 | NDCG@20: 0.123 | PosBrier: 0.9020
+2025-12-30 01:22:45 - exp1_dense_baseline - DEBUG -     Loss: 0.0169 | R@10: 0.446 | R@20: 0.486 | μR@10: 0.191 | P@10: 0.096 | NDCG@20: 0.136 | PosBrier: 0.8970
+2025-12-30 01:26:02 - exp1_dense_baseline - DEBUG -     Loss: 0.0166 | R@10: 0.468 | R@20: 0.514 | μR@10: 0.178 | P@10: 0.086 | NDCG@20: 0.133 | PosBrier: 0.9001
+2025-12-30 01:29:19 - exp1_dense_baseline - DEBUG -     Loss: 0.0162 | R@10: 0.423 | R@20: 0.464 | μR@10: 0.184 | P@10: 0.081 | NDCG@20: 0.124 | PosBrier: 0.8989
+2025-12-30 01:32:36 - exp1_dense_baseline - DEBUG -     Loss: 0.0161 | R@10: 0.439 | R@20: 0.486 | μR@10: 0.185 | P@10: 0.087 | NDCG@20: 0.130 | PosBrier: 0.8995
+2025-12-30 01:35:59 - exp1_dense_baseline - DEBUG -     Loss: 0.0162 | R@10: 0.453 | R@20: 0.497 | μR@10: 0.187 | P@10: 0.095 | NDCG@20: 0.135 | PosBrier: 0.9000
+2025-12-30 01:39:18 - exp1_dense_baseline - DEBUG -     Loss: 0.0157 | R@10: 0.443 | R@20: 0.498 | μR@10: 0.190 | P@10: 0.087 | NDCG@20: 0.135 | PosBrier: 0.8979
+2025-12-30 01:42:36 - exp1_dense_baseline - DEBUG -     Loss: 0.0157 | R@10: 0.453 | R@20: 0.504 | μR@10: 0.188 | P@10: 0.089 | NDCG@20: 0.136 | PosBrier: 0.8996
+2025-12-30 01:45:54 - exp1_dense_baseline - DEBUG -     Loss: 0.0154 | R@10: 0.432 | R@20: 0.479 | μR@10: 0.185 | P@10: 0.085 | NDCG@20: 0.129 | PosBrier: 0.9013
+2025-12-30 01:49:11 - exp1_dense_baseline - DEBUG -     Loss: 0.0154 | R@10: 0.424 | R@20: 0.479 | μR@10: 0.193 | P@10: 0.090 | NDCG@20: 0.136 | PosBrier: 0.8987
+2025-12-30 01:52:35 - exp1_dense_baseline - DEBUG -     Loss: 0.0153 | R@10: 0.434 | R@20: 0.479 | μR@10: 0.189 | P@10: 0.089 | NDCG@20: 0.131 | PosBrier: 0.8992
+2025-12-30 01:55:54 - exp1_dense_baseline - DEBUG -     Loss: 0.0153 | R@10: 0.464 | R@20: 0.514 | μR@10: 0.196 | P@10: 0.098 | NDCG@20: 0.143 | PosBrier: 0.8969
+2025-12-30 01:59:12 - exp1_dense_baseline - DEBUG -     Loss: 0.0150 | R@10: 0.450 | R@20: 0.500 | μR@10: 0.194 | P@10: 0.091 | NDCG@20: 0.135 | PosBrier: 0.8997
+2025-12-30 02:02:29 - exp1_dense_baseline - DEBUG -     Loss: 0.0148 | R@10: 0.439 | R@20: 0.494 | μR@10: 0.206 | P@10: 0.092 | NDCG@20: 0.142 | PosBrier: 0.8947
+2025-12-30 02:05:46 - exp1_dense_baseline - DEBUG -     Loss: 0.0150 | R@10: 0.449 | R@20: 0.500 | μR@10: 0.181 | P@10: 0.091 | NDCG@20: 0.132 | PosBrier: 0.9075
+2025-12-30 02:09:08 - exp1_dense_baseline - DEBUG -     Loss: 0.0149 | R@10: 0.463 | R@20: 0.515 | μR@10: 0.186 | P@10: 0.097 | NDCG@20: 0.141 | PosBrier: 0.9040
+2025-12-30 02:12:28 - exp1_dense_baseline - DEBUG -     Loss: 0.0147 | R@10: 0.463 | R@20: 0.514 | μR@10: 0.197 | P@10: 0.094 | NDCG@20: 0.139 | PosBrier: 0.8987
+2025-12-30 02:15:46 - exp1_dense_baseline - DEBUG -     Loss: 0.0143 | R@10: 0.455 | R@20: 0.512 | μR@10: 0.187 | P@10: 0.089 | NDCG@20: 0.135 | PosBrier: 0.9037
+2025-12-30 02:19:04 - exp1_dense_baseline - DEBUG -     Loss: 0.0146 | R@10: 0.475 | R@20: 0.532 | μR@10: 0.185 | P@10: 0.093 | NDCG@20: 0.139 | PosBrier: 0.9040
+2025-12-30 02:22:21 - exp1_dense_baseline - DEBUG -     Loss: 0.0145 | R@10: 0.501 | R@20: 0.554 | μR@10: 0.217 | P@10: 0.110 | NDCG@20: 0.161 | PosBrier: 0.8953
+2025-12-30 02:25:39 - exp1_dense_baseline - DEBUG -     Loss: 0.0146 | R@10: 0.479 | R@20: 0.529 | μR@10: 0.203 | P@10: 0.104 | NDCG@20: 0.151 | PosBrier: 0.8978
+2025-12-30 02:29:03 - exp1_dense_baseline - DEBUG -     Loss: 0.0141 | R@10: 0.472 | R@20: 0.526 | μR@10: 0.208 | P@10: 0.099 | NDCG@20: 0.147 | PosBrier: 0.8969
+2025-12-30 02:32:22 - exp1_dense_baseline - DEBUG -     Loss: 0.0143 | R@10: 0.436 | R@20: 0.497 | μR@10: 0.185 | P@10: 0.092 | NDCG@20: 0.134 | PosBrier: 0.9059
+2025-12-30 02:35:41 - exp1_dense_baseline - DEBUG -     Loss: 0.0145 | R@10: 0.467 | R@20: 0.522 | μR@10: 0.198 | P@10: 0.098 | NDCG@20: 0.145 | PosBrier: 0.9005
+2025-12-30 02:38:58 - exp1_dense_baseline - DEBUG -     Loss: 0.0142 | R@10: 0.442 | R@20: 0.500 | μR@10: 0.186 | P@10: 0.089 | NDCG@20: 0.134 | PosBrier: 0.9040
+2025-12-30 02:42:23 - exp1_dense_baseline - DEBUG -     Loss: 0.0141 | R@10: 0.470 | R@20: 0.527 | μR@10: 0.202 | P@10: 0.098 | NDCG@20: 0.146 | PosBrier: 0.8983
+2025-12-30 02:45:42 - exp1_dense_baseline - DEBUG -     Loss: 0.0139 | R@10: 0.444 | R@20: 0.496 | μR@10: 0.201 | P@10: 0.091 | NDCG@20: 0.139 | PosBrier: 0.8995
+2025-12-30 02:49:01 - exp1_dense_baseline - DEBUG -     Loss: 0.0138 | R@10: 0.451 | R@20: 0.504 | μR@10: 0.198 | P@10: 0.093 | NDCG@20: 0.140 | PosBrier: 0.9002
+2025-12-30 02:52:20 - exp1_dense_baseline - DEBUG -     Loss: 0.0137 | R@10: 0.462 | R@20: 0.522 | μR@10: 0.204 | P@10: 0.099 | NDCG@20: 0.148 | PosBrier: 0.8992
+2025-12-30 02:55:37 - exp1_dense_baseline - DEBUG -     Loss: 0.0136 | R@10: 0.426 | R@20: 0.485 | μR@10: 0.202 | P@10: 0.090 | NDCG@20: 0.137 | PosBrier: 0.8990
+2025-12-30 02:58:57 - exp1_dense_baseline - DEBUG -     Loss: 0.0133 | R@10: 0.414 | R@20: 0.479 | μR@10: 0.202 | P@10: 0.083 | NDCG@20: 0.133 | PosBrier: 0.8992
+2025-12-30 03:02:22 - exp1_dense_baseline - DEBUG -     Loss: 0.0136 | R@10: 0.445 | R@20: 0.501 | μR@10: 0.194 | P@10: 0.091 | NDCG@20: 0.137 | PosBrier: 0.9024
+2025-12-30 03:05:40 - exp1_dense_baseline - DEBUG -     Loss: 0.0140 | R@10: 0.458 | R@20: 0.512 | μR@10: 0.188 | P@10: 0.093 | NDCG@20: 0.142 | PosBrier: 0.9035
+2025-12-30 03:08:59 - exp1_dense_baseline - DEBUG -     Loss: 0.0135 | R@10: 0.420 | R@20: 0.477 | μR@10: 0.186 | P@10: 0.085 | NDCG@20: 0.128 | PosBrier: 0.9068
+2025-12-30 03:12:16 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.461 | R@20: 0.518 | μR@10: 0.211 | P@10: 0.095 | NDCG@20: 0.153 | PosBrier: 0.8978
+2025-12-30 03:15:38 - exp1_dense_baseline - DEBUG -     Loss: 0.0136 | R@10: 0.466 | R@20: 0.521 | μR@10: 0.207 | P@10: 0.099 | NDCG@20: 0.148 | PosBrier: 0.8998
+2025-12-30 03:19:00 - exp1_dense_baseline - DEBUG -     Loss: 0.0139 | R@10: 0.454 | R@20: 0.516 | μR@10: 0.189 | P@10: 0.093 | NDCG@20: 0.140 | PosBrier: 0.9024
+2025-12-30 03:22:18 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.451 | R@20: 0.507 | μR@10: 0.205 | P@10: 0.090 | NDCG@20: 0.143 | PosBrier: 0.8981
+2025-12-30 03:25:37 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.442 | R@20: 0.502 | μR@10: 0.206 | P@10: 0.093 | NDCG@20: 0.142 | PosBrier: 0.8993
+2025-12-30 03:28:54 - exp1_dense_baseline - DEBUG -     Loss: 0.0138 | R@10: 0.475 | R@20: 0.537 | μR@10: 0.193 | P@10: 0.103 | NDCG@20: 0.149 | PosBrier: 0.9045
+2025-12-30 03:32:18 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.430 | R@20: 0.492 | μR@10: 0.181 | P@10: 0.083 | NDCG@20: 0.131 | PosBrier: 0.9071
+2025-12-30 03:35:37 - exp1_dense_baseline - DEBUG -     Loss: 0.0135 | R@10: 0.419 | R@20: 0.486 | μR@10: 0.183 | P@10: 0.084 | NDCG@20: 0.132 | PosBrier: 0.9060
+2025-12-30 03:38:56 - exp1_dense_baseline - DEBUG -     Loss: 0.0131 | R@10: 0.422 | R@20: 0.480 | μR@10: 0.193 | P@10: 0.085 | NDCG@20: 0.134 | PosBrier: 0.9044
+2025-12-30 03:42:13 - exp1_dense_baseline - DEBUG -     Loss: 0.0136 | R@10: 0.464 | R@20: 0.510 | μR@10: 0.209 | P@10: 0.105 | NDCG@20: 0.150 | PosBrier: 0.8994
+2025-12-30 03:45:30 - exp1_dense_baseline - DEBUG -     Loss: 0.0135 | R@10: 0.453 | R@20: 0.513 | μR@10: 0.216 | P@10: 0.095 | NDCG@20: 0.149 | PosBrier: 0.8933
+2025-12-30 03:48:52 - exp1_dense_baseline - DEBUG -     Loss: 0.0135 | R@10: 0.452 | R@20: 0.518 | μR@10: 0.182 | P@10: 0.083 | NDCG@20: 0.136 | PosBrier: 0.9067
+2025-12-30 03:52:11 - exp1_dense_baseline - DEBUG -     Loss: 0.0131 | R@10: 0.406 | R@20: 0.474 | μR@10: 0.194 | P@10: 0.082 | NDCG@20: 0.132 | PosBrier: 0.9044
+2025-12-30 03:55:30 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.417 | R@20: 0.480 | μR@10: 0.190 | P@10: 0.086 | NDCG@20: 0.131 | PosBrier: 0.9047
+2025-12-30 03:58:49 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.435 | R@20: 0.492 | μR@10: 0.181 | P@10: 0.085 | NDCG@20: 0.127 | PosBrier: 0.9086
+2025-12-30 04:02:07 - exp1_dense_baseline - DEBUG -     Loss: 0.0137 | R@10: 0.488 | R@20: 0.548 | μR@10: 0.218 | P@10: 0.110 | NDCG@20: 0.161 | PosBrier: 0.8954
+2025-12-30 04:05:32 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.466 | R@20: 0.523 | μR@10: 0.204 | P@10: 0.098 | NDCG@20: 0.147 | PosBrier: 0.9011
+2025-12-30 04:08:51 - exp1_dense_baseline - DEBUG -     Loss: 0.0132 | R@10: 0.406 | R@20: 0.470 | μR@10: 0.190 | P@10: 0.084 | NDCG@20: 0.131 | PosBrier: 0.9062
+2025-12-30 04:12:09 - exp1_dense_baseline - DEBUG -     Loss: 0.0134 | R@10: 0.476 | R@20: 0.533 | μR@10: 0.208 | P@10: 0.094 | NDCG@20: 0.150 | PosBrier: 0.8960
+2025-12-30 04:15:26 - exp1_dense_baseline - DEBUG -     Loss: 0.0132 | R@10: 0.418 | R@20: 0.480 | μR@10: 0.196 | P@10: 0.082 | NDCG@20: 0.133 | PosBrier: 0.9022
+2025-12-30 04:18:46 - exp1_dense_baseline - DEBUG -     Loss: 0.0135 | R@10: 0.484 | R@20: 0.544 | μR@10: 0.193 | P@10: 0.097 | NDCG@20: 0.146 | PosBrier: 0.9037
+2025-12-30 04:23:12 - exp1_dense_baseline - INFO -   Using batch-averaged training metrics (no re-evaluation)
+2025-12-30 04:23:12 - exp1_dense_baseline - INFO -   Final epoch: Running comprehensive evaluation...
+2025-12-30 05:57:16 - exp1_dense_baseline - INFO - 
+--- Epoch 1 Summary ---
+2025-12-30 05:57:16 - exp1_dense_baseline - INFO -   Train loss: 0.0645 → 0.0135
+2025-12-30 05:57:16 - exp1_dense_baseline - INFO -   Val loss: 0.0000, Recall@10: 0.579, μRecall@10: 0.234, NDCG@20: 0.191
+2025-12-30 05:57:16 - exp1_dense_baseline - INFO - 
+Training completed in 27812.5s
+2025-12-30 05:57:16 - exp1_dense_baseline - INFO -   Using cached comprehensive evaluation from final epoch
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - Model saved as: exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp1_dense_baseline_bs128_ep1_d256_20251230_055716
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 0.59 GB
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - Complete results saved to logs/exp_round5_3lobs_pretrain_multi_gpu_test_v2/exp1_dense_baseline/final_results.json
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - 
+================================================================================
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - EXPERIMENT COMPLETE: exp1_dense_baseline
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - ================================================================================
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - Final Recall@10: 0.579
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - Best Val Loss: 0.0000
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - Training Time: 27812.5s
+2025-12-30 05:57:17 - exp1_dense_baseline - INFO - ================================================================================
+
