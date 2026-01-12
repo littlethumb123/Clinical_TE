@@ -1,44 +1,38 @@
 ### Model overview and new components
 Before I discusse the the architecure we proposed; 
-I'd like to give refresh on the legacy version so that you can tell where each new pieces comes from.
-This is a conceptual diagram of the model architecture; on the left hand is the backbone; it is designed in a herarchical structure where it first processes each member's claim codes in a daily basis and then aggregate them and pass them to a series of encoder layers to capture the temporal patterns; this is trying to adapt to what the claim looks like and how it's processed by human in real life and also validated by a few prior research
-The entire model is trained to predict each member's next day's codes based on the history; so it's a multilabeling with 6297 target codes groups; the embedding is an intermediate output between the final temporal layer with final output layer; what it really represent is a patient history summary of the past 200 days. 
+I'd like to give a quick refresh on the legacy version what it looks like, how it works so that you could tell the new pieces where they come from.
+The legacy model has a hierarchical structure, if you look at the diagram on the left hand side, from bottom to top. it takes features like age, gender everyday's codes; and in the first level it processes the codes within each day for a member; then aggregated together as a single vector going through a series of encoder layers to capture the temporal patterns across days; and final goal is to predict the next day's codes for a each member. The embedding we are using is an intermediate output to the end of the temporal encoders. 
 
-Now here are three major points we tried to improve from model architecture perspective; (3min) 
+Now, this architecture was designed a couple of years ago and we are including more data sources and more advanced archtiecture design or components are available; there are opportunities to improve both the computational efficiency and performance. 
 
-1) Faster training and (potential) inference;
-- the legacy model uses self-attention to capture the relationship between codes and between different days; this has been found to be extremely memory intensive inefficient for GPU. The GPU has two major parts, one for data temporary storage, just like the hard disk in your laptop and a place for fast computation, just like CPU, the pain point is when the relation between tokens or beteen days is calculted as a big matrix; there will be a huge size of data transaction between those two parts; this is not what GPU likes; what we use instead is something called flash attention; it chunks the computation of the matrics into smaller pieces and speed up teh computation by condensing it into a fused kernel; this has been widely validated and used in the industry for large language model. 
+First of all computational efficiency. the core of the entire transformer model is something called self-attention; it captures the relationship bewteen codes, between different days; the bottleneck is that this is an extremely memory intensive operation inside GPU. A GPU has two parts, one part for data storage and one part for computation; just like the hard drive vs. CPU in our laptop; and the calculation happens during the back and forth between these two parts; the traditional way to calculate the relation scores is moving a very large matrix from one place to another; this is not what GPU likes. what we did differently is someting called flash attention; it chunks the matrics into smaller pieces and speed up the calculation by condensing it into a fused kernel; this provides faster training with lower GPU requirements; this is very important for teams with limited GPU resources
 
-2) Second improve the training and optimization strategies
-these modifications are made for the purpose of improving prediction of the rare codes, stablizing the training converge process and optimzie the GPU memory usage given the constraints of T4 GPU we used. 
-The these two modifications is primarily planned for engineering efficiency and training quality
+Second, we tried to improve the training and optimization strategies. this is a suite of modifications to improve the training quality and stability given very imbalanced and long-tailed distributed data from different sources and also improve the GPU memory usage given the constraints of GPU resoures we are using. I will leave this for QA for time constraints if you may have any questions. 
 
-3) better embedding representation; we are trying to better the embedding representation by adding a little bit specialization to the model; that is,  we try to have model to process tokens in a more specialized way with a hope that the final emebdding can better reflect the heterogeneity of the data. the idea comes from last year thinkubator when we were trying to interpret how the transformer processed information, we found that the transformer started to learn different clinical concepts, such as depression, hypertension diabetes, from the second layer all the way to the final; 
+These two modifications are more from engineerng perspective; 
+The third one is more from embedding quality perspective and thus more exploratory and experimental
+
+we are trying to improve the way the information is encoded to the embedding. the idea is driven by the some outcomes in our last thinkubator;  by adding a little bit specialization to the model; that is,  we try to have model to process tokens in a more specialized way with a hope that the final emebdding can better reflect the heterogeneity of the data. the idea comes from last year thinkubator when we were trying to interpret how the transformer processed information, we found that the transformer started to learn different clinical concepts, such as depression, hypertension diabetes, from the second layer all the way to the final; 
 we replace the feedforward neural network with a mixture of experts; this is a component that improves the model specializaiton without increasing model size and inference cost. during the inference each token or the code will be routed to two favorite dense layers to be processed. 
 
 ### Model experimentation results
-For the experimentations; We have a series of setups and experiment with each of them for a couple of rounds and applied the modifications incrementally. Due to the constraints of GPU resources and time consuming training procedure, we can only train it with 1 epoch and 10% of the entire population to experiment as many setups as we could.
-Now we ended up with four versions
-the one that exactly replicate the current model architecture; 
-the one that keep the backbone and implement the optimized training strategies
-the one that keep the backbone and impelement flash attention and optimized training strategies
-teh one implemented MOE
+In order to make sure the modifications are effective and do not introduce any unnecessary complexity and computational cost. We set up a series of ablations.
+the data we are using to pretrain the TE is a 1.75M sampled members across 3 LOBs with at least 10 days of medical activtiies over the past 36 months. 90day claim finalization window is applied to the data to make sure the data is complete and fully adjudicated. The reason we use sampled population is to have quick turnaround for the changes we are going to make given the limited GPU resources. 
+Now the results; 
+The changes are applied incrementally from top to bottom; starting with the legacy model which replicate the existing model architecture and configurations as closely as possible; then apply the optimized training strategies to the legacy architecture; compare these two, we want to see if the optimized configurations make sense; if you look at all performance metrics, the recall, precision and micro-recall at top 10 predictions are roughly doubled and GPU usage is a little reduced; 
+Then compare the third one with fourth one which one uses flash attention and one does not. the performance are roughly identical but the training time and GPU usage get reduced by 50%. 
+All of these are what we expected to see. 
+Now the interesting part comes to the MOE; it didn't bring at least 2-5% performance lift we expected at the beginning. The reason is multifaceted
+1) model size; The MOE is usually used to serve billion level LLM, while our model is only 27M parameters; the downside of a small model is smaller embedding dimension, smaller hidden dimension, the experts don't have enough room to learn and specialized; 
+2) The routing is hard to stablize the training: small model has small batch_size, that means the experts can see way fewer tokens than in a larger model during training; this means he informaiton is high variance and noisy and hard to learn
+3) data diversity; the clinical claims compare to natural language is more homogeneous; this added another layer of difficulty for expert to be specialized. 
+Simply put, it's like you put a V12 engine on a honda civic. no means to be offensive to civic owner but the overhead outwighs the benefits.
 
-The metrics we are using are relatively intrinsic and primarily indicates about the training performance of predicting next days' sequence. 
-Recall 
+However, all of these ablations are intrinsic, preliminary and going to inform our next downstream evaluation; that is where we take the model to real world and see how the embedding actually performs. 
 
-there are two stage evaluations in our plan, first is to evaluate intrinsic performance of the model; that is how accurate it predicts the next day's codes; how long it takes 
-
-
-### Model experiment results
-1. we have designed a series of experimentations to evaluate the efficiency and performance lift of those three primary improvements; 
+the last lessons we learnt around computational resources. 
+the GPU resources are limited on GCP across enterprise; for any pretraining or finetuning works, the GPU resource planing needs to be part of hte project scoping at day 1 to do a cost estimation, governance approval and plan and reserve compute resource for more advanced GPU; 
+The infrastructure shapes what's technically feasible and get ready for walkaround solutions; we have made several adaptations to the model architecture to make it work with T4. 
 
 
 
-### Lesson learnt
-1. mis-scale; the MOE was originally designed for billion parameters while the current model is only 27M parameters; it's like putting V12 engine on a honda civic. overhead associated with the routing mechanisms outweighs any potential advantages,
-2. small dimensions: the router that routes the tokens must learn to differentiate which expert should process; only 256 dimension does not provide sufficient variance for learning. 
-3. data itself, the clinical concepts are inherently homogeneous and it's not like natural language. 
-4. Hard to tune; a critical issue is expert collapse; the router is routing most of the tokens to very few experts and other experts died out and learn nothing; this will collapse to a single expert. there could be a lot of factors, 
-    - router initialization: small perturbation at teh beginning can get amplified and favor one of two of experts; then these expert start to dominate. 
-    - loss over regularization
