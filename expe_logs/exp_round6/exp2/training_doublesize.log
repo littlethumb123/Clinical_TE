@@ -1,0 +1,292 @@
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - 
+================================================================================
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - EXPERIMENT: exp2b_flash_learned_pool
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - Model: Flash Attention Transformer (FP16)
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -   d_model=256, nhid=704, nhead=8
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -   Daily Encoder: Learned Attention Pooling
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - Total parameters: 25,325,209
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - ✅ Using pre-prepared data
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - Using BCEWithLogitsLoss
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -   With pos_weight method: log_scaled
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -  Enabling DataParallel with 4 GPUs
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    Per-GPU batch size: 32
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    Effective batch size: 128
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    Base learning rate: 0.0002
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    Scaled learning rate: 8.00e-04
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    DataParallel output_device: 0
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO -    ✅ Using DataParallelWrapper for integrated loss
+2026-01-09 23:49:15 - exp2b_flash_learned_pool - INFO - Bucketing is ENABLED via BatchSampler.
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - Using DataLoader with 4 workers.
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - Optimizer: AdamW: lr=8.00e-04, weight_decay=0.01
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - Scheduler: LinearPlateau: warmup=3641 steps (15%), plateau until 60%, decay to 1.60e-04
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - Optimizer: AdamW: lr=8.00e-04, weight_decay=0.01
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - Scheduler: LinearPlateau: warmup=3641 steps (15%), plateau until 60%, decay to 1.60e-04
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - Training for 1 epochs...
+2026-01-09 23:49:22 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 1/1 ---
+2026-01-09 23:49:38 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.8020 | R@10: 0.002 | R@20: 0.009 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.002 | PosBrier: 0.3247
+2026-01-09 23:53:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.6102 | R@10: 0.005 | R@20: 0.013 | μR@10: 0.001 | P@10: 0.001 | NDCG@20: 0.001 | PosBrier: 0.3363
+2026-01-09 23:56:17 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.3390 | R@10: 0.007 | R@20: 0.021 | μR@10: 0.001 | P@10: 0.001 | NDCG@20: 0.001 | PosBrier: 0.5274
+2026-01-09 23:58:52 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.1521 | R@10: 0.011 | R@20: 0.025 | μR@10: 0.002 | P@10: 0.001 | NDCG@20: 0.002 | PosBrier: 0.7170
+2026-01-10 00:01:26 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0717 | R@10: 0.259 | R@20: 0.318 | μR@10: 0.059 | P@10: 0.027 | NDCG@20: 0.041 | PosBrier: 0.8172
+2026-01-10 00:04:33 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0391 | R@10: 0.385 | R@20: 0.395 | μR@10: 0.130 | P@10: 0.063 | NDCG@20: 0.094 | PosBrier: 0.8636
+2026-01-10 00:07:23 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0243 | R@10: 0.431 | R@20: 0.456 | μR@10: 0.166 | P@10: 0.081 | NDCG@20: 0.118 | PosBrier: 0.8871
+2026-01-10 00:09:56 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0167 | R@10: 0.515 | R@20: 0.567 | μR@10: 0.214 | P@10: 0.109 | NDCG@20: 0.163 | PosBrier: 0.8913
+2026-01-10 00:12:27 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0123 | R@10: 0.515 | R@20: 0.627 | μR@10: 0.214 | P@10: 0.100 | NDCG@20: 0.177 | PosBrier: 0.9015
+2026-01-10 00:14:59 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0098 | R@10: 0.550 | R@20: 0.657 | μR@10: 0.236 | P@10: 0.116 | NDCG@20: 0.193 | PosBrier: 0.8998
+2026-01-10 00:17:33 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0082 | R@10: 0.540 | R@20: 0.630 | μR@10: 0.231 | P@10: 0.112 | NDCG@20: 0.187 | PosBrier: 0.8976
+2026-01-10 00:20:01 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0072 | R@10: 0.501 | R@20: 0.627 | μR@10: 0.222 | P@10: 0.109 | NDCG@20: 0.185 | PosBrier: 0.9048
+2026-01-10 00:22:36 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0065 | R@10: 0.526 | R@20: 0.627 | μR@10: 0.224 | P@10: 0.109 | NDCG@20: 0.184 | PosBrier: 0.9041
+2026-01-10 00:25:08 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0059 | R@10: 0.553 | R@20: 0.645 | μR@10: 0.241 | P@10: 0.120 | NDCG@20: 0.195 | PosBrier: 0.9001
+2026-01-10 00:27:40 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0058 | R@10: 0.585 | R@20: 0.666 | μR@10: 0.226 | P@10: 0.118 | NDCG@20: 0.193 | PosBrier: 0.9053
+2026-01-10 00:30:13 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0051 | R@10: 0.524 | R@20: 0.634 | μR@10: 0.224 | P@10: 0.102 | NDCG@20: 0.182 | PosBrier: 0.9051
+2026-01-10 00:32:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0050 | R@10: 0.469 | R@20: 0.591 | μR@10: 0.209 | P@10: 0.098 | NDCG@20: 0.168 | PosBrier: 0.9100
+2026-01-10 00:35:17 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0048 | R@10: 0.531 | R@20: 0.632 | μR@10: 0.226 | P@10: 0.106 | NDCG@20: 0.184 | PosBrier: 0.9000
+2026-01-10 00:37:51 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0049 | R@10: 0.550 | R@20: 0.664 | μR@10: 0.215 | P@10: 0.105 | NDCG@20: 0.187 | PosBrier: 0.9045
+2026-01-10 00:40:24 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0047 | R@10: 0.575 | R@20: 0.670 | μR@10: 0.236 | P@10: 0.116 | NDCG@20: 0.197 | PosBrier: 0.8879
+2026-01-10 00:43:06 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0054 | R@10: 0.542 | R@20: 0.649 | μR@10: 0.209 | P@10: 0.119 | NDCG@20: 0.186 | PosBrier: 0.8747
+2026-01-10 00:45:51 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0051 | R@10: 0.521 | R@20: 0.621 | μR@10: 0.217 | P@10: 0.117 | NDCG@20: 0.188 | PosBrier: 0.8701
+2026-01-10 00:48:25 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0042 | R@10: 0.598 | R@20: 0.708 | μR@10: 0.257 | P@10: 0.113 | NDCG@20: 0.228 | PosBrier: 0.8768
+2026-01-10 00:50:59 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0041 | R@10: 0.627 | R@20: 0.724 | μR@10: 0.290 | P@10: 0.139 | NDCG@20: 0.246 | PosBrier: 0.8365
+2026-01-10 00:53:34 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0042 | R@10: 0.581 | R@20: 0.689 | μR@10: 0.287 | P@10: 0.135 | NDCG@20: 0.241 | PosBrier: 0.8517
+2026-01-10 00:56:09 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0039 | R@10: 0.579 | R@20: 0.712 | μR@10: 0.275 | P@10: 0.120 | NDCG@20: 0.245 | PosBrier: 0.8639
+2026-01-10 00:58:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0043 | R@10: 0.673 | R@20: 0.772 | μR@10: 0.294 | P@10: 0.151 | NDCG@20: 0.269 | PosBrier: 0.8425
+2026-01-10 01:01:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0037 | R@10: 0.561 | R@20: 0.689 | μR@10: 0.303 | P@10: 0.126 | NDCG@20: 0.246 | PosBrier: 0.8462
+2026-01-10 01:03:55 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0041 | R@10: 0.682 | R@20: 0.782 | μR@10: 0.315 | P@10: 0.157 | NDCG@20: 0.286 | PosBrier: 0.8216
+2026-01-10 01:06:28 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0040 | R@10: 0.686 | R@20: 0.781 | μR@10: 0.331 | P@10: 0.163 | NDCG@20: 0.294 | PosBrier: 0.8210
+2026-01-10 01:09:03 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0040 | R@10: 0.666 | R@20: 0.780 | μR@10: 0.339 | P@10: 0.168 | NDCG@20: 0.304 | PosBrier: 0.7986
+2026-01-10 01:11:34 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0039 | R@10: 0.644 | R@20: 0.760 | μR@10: 0.304 | P@10: 0.143 | NDCG@20: 0.273 | PosBrier: 0.8385
+2026-01-10 01:14:07 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0040 | R@10: 0.645 | R@20: 0.741 | μR@10: 0.320 | P@10: 0.154 | NDCG@20: 0.277 | PosBrier: 0.8101
+2026-01-10 01:16:40 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.704 | R@20: 0.792 | μR@10: 0.361 | P@10: 0.172 | NDCG@20: 0.318 | PosBrier: 0.7993
+2026-01-10 01:19:22 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0045 | R@10: 0.640 | R@20: 0.741 | μR@10: 0.296 | P@10: 0.165 | NDCG@20: 0.275 | PosBrier: 0.8274
+2026-01-10 01:21:58 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0037 | R@10: 0.633 | R@20: 0.735 | μR@10: 0.340 | P@10: 0.152 | NDCG@20: 0.287 | PosBrier: 0.8092
+2026-01-10 01:24:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0037 | R@10: 0.694 | R@20: 0.799 | μR@10: 0.343 | P@10: 0.161 | NDCG@20: 0.312 | PosBrier: 0.7979
+2026-01-10 01:27:03 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0039 | R@10: 0.669 | R@20: 0.762 | μR@10: 0.345 | P@10: 0.169 | NDCG@20: 0.298 | PosBrier: 0.7779
+2026-01-10 01:29:37 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.712 | R@20: 0.789 | μR@10: 0.363 | P@10: 0.179 | NDCG@20: 0.322 | PosBrier: 0.7782
+2026-01-10 01:32:11 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.686 | R@20: 0.796 | μR@10: 0.400 | P@10: 0.179 | NDCG@20: 0.338 | PosBrier: 0.7698
+2026-01-10 01:34:41 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0037 | R@10: 0.719 | R@20: 0.798 | μR@10: 0.370 | P@10: 0.177 | NDCG@20: 0.337 | PosBrier: 0.7860
+2026-01-10 01:37:11 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.736 | R@20: 0.822 | μR@10: 0.354 | P@10: 0.176 | NDCG@20: 0.326 | PosBrier: 0.7818
+2026-01-10 01:39:49 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.670 | R@20: 0.773 | μR@10: 0.353 | P@10: 0.171 | NDCG@20: 0.313 | PosBrier: 0.7931
+2026-01-10 01:42:23 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.749 | R@20: 0.836 | μR@10: 0.382 | P@10: 0.195 | NDCG@20: 0.355 | PosBrier: 0.7675
+2026-01-10 01:45:07 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0043 | R@10: 0.687 | R@20: 0.792 | μR@10: 0.346 | P@10: 0.193 | NDCG@20: 0.319 | PosBrier: 0.7935
+2026-01-10 01:47:40 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0037 | R@10: 0.768 | R@20: 0.837 | μR@10: 0.370 | P@10: 0.179 | NDCG@20: 0.351 | PosBrier: 0.7752
+2026-01-10 01:50:13 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.760 | R@20: 0.835 | μR@10: 0.402 | P@10: 0.183 | NDCG@20: 0.363 | PosBrier: 0.7659
+2026-01-10 01:52:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.711 | R@20: 0.799 | μR@10: 0.355 | P@10: 0.162 | NDCG@20: 0.326 | PosBrier: 0.7877
+2026-01-10 01:55:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0039 | R@10: 0.758 | R@20: 0.831 | μR@10: 0.373 | P@10: 0.196 | NDCG@20: 0.350 | PosBrier: 0.7640
+2026-01-10 01:57:54 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0039 | R@10: 0.720 | R@20: 0.802 | μR@10: 0.354 | P@10: 0.181 | NDCG@20: 0.329 | PosBrier: 0.7737
+2026-01-10 02:00:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.699 | R@20: 0.793 | μR@10: 0.376 | P@10: 0.165 | NDCG@20: 0.334 | PosBrier: 0.7869
+2026-01-10 02:03:04 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.775 | R@20: 0.841 | μR@10: 0.388 | P@10: 0.190 | NDCG@20: 0.366 | PosBrier: 0.7545
+2026-01-10 02:05:38 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.758 | R@20: 0.837 | μR@10: 0.384 | P@10: 0.180 | NDCG@20: 0.358 | PosBrier: 0.7591
+2026-01-10 02:08:12 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.798 | R@20: 0.867 | μR@10: 0.404 | P@10: 0.183 | NDCG@20: 0.388 | PosBrier: 0.7475
+2026-01-10 02:10:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0037 | R@10: 0.767 | R@20: 0.838 | μR@10: 0.391 | P@10: 0.195 | NDCG@20: 0.369 | PosBrier: 0.7508
+2026-01-10 02:13:23 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.750 | R@20: 0.839 | μR@10: 0.425 | P@10: 0.185 | NDCG@20: 0.379 | PosBrier: 0.7412
+2026-01-10 02:15:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.801 | R@20: 0.860 | μR@10: 0.410 | P@10: 0.194 | NDCG@20: 0.394 | PosBrier: 0.7310
+2026-01-10 02:18:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.774 | R@20: 0.853 | μR@10: 0.396 | P@10: 0.194 | NDCG@20: 0.372 | PosBrier: 0.7374
+2026-01-10 02:21:04 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.804 | R@20: 0.862 | μR@10: 0.396 | P@10: 0.184 | NDCG@20: 0.387 | PosBrier: 0.7541
+2026-01-10 02:23:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.730 | R@20: 0.824 | μR@10: 0.391 | P@10: 0.183 | NDCG@20: 0.356 | PosBrier: 0.7712
+2026-01-10 02:26:18 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.805 | R@20: 0.864 | μR@10: 0.419 | P@10: 0.200 | NDCG@20: 0.400 | PosBrier: 0.7367
+2026-01-10 02:28:59 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.811 | R@20: 0.876 | μR@10: 0.399 | P@10: 0.189 | NDCG@20: 0.393 | PosBrier: 0.7455
+2026-01-10 02:31:41 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.771 | R@20: 0.856 | μR@10: 0.422 | P@10: 0.189 | NDCG@20: 0.381 | PosBrier: 0.7404
+2026-01-10 02:34:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.787 | R@20: 0.842 | μR@10: 0.399 | P@10: 0.187 | NDCG@20: 0.366 | PosBrier: 0.7585
+2026-01-10 02:36:48 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.792 | R@20: 0.860 | μR@10: 0.413 | P@10: 0.184 | NDCG@20: 0.381 | PosBrier: 0.7605
+2026-01-10 02:39:22 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.823 | R@20: 0.871 | μR@10: 0.407 | P@10: 0.192 | NDCG@20: 0.398 | PosBrier: 0.7271
+2026-01-10 02:41:54 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.782 | R@20: 0.845 | μR@10: 0.407 | P@10: 0.185 | NDCG@20: 0.372 | PosBrier: 0.7522
+2026-01-10 02:44:27 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.784 | R@20: 0.858 | μR@10: 0.391 | P@10: 0.190 | NDCG@20: 0.387 | PosBrier: 0.7440
+2026-01-10 02:47:01 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.787 | R@20: 0.862 | μR@10: 0.417 | P@10: 0.187 | NDCG@20: 0.395 | PosBrier: 0.7479
+2026-01-10 02:49:36 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.799 | R@20: 0.858 | μR@10: 0.404 | P@10: 0.204 | NDCG@20: 0.387 | PosBrier: 0.7353
+2026-01-10 02:52:08 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.793 | R@20: 0.854 | μR@10: 0.429 | P@10: 0.199 | NDCG@20: 0.398 | PosBrier: 0.7087
+2026-01-10 02:54:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.816 | R@20: 0.881 | μR@10: 0.422 | P@10: 0.200 | NDCG@20: 0.407 | PosBrier: 0.7245
+2026-01-10 02:57:17 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.792 | R@20: 0.859 | μR@10: 0.404 | P@10: 0.200 | NDCG@20: 0.388 | PosBrier: 0.7262
+2026-01-10 02:59:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.742 | R@20: 0.830 | μR@10: 0.408 | P@10: 0.197 | NDCG@20: 0.372 | PosBrier: 0.7254
+2026-01-10 03:02:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.804 | R@20: 0.864 | μR@10: 0.429 | P@10: 0.200 | NDCG@20: 0.400 | PosBrier: 0.7290
+2026-01-10 03:05:02 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.820 | R@20: 0.881 | μR@10: 0.415 | P@10: 0.190 | NDCG@20: 0.406 | PosBrier: 0.7366
+2026-01-10 03:07:36 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.814 | R@20: 0.875 | μR@10: 0.418 | P@10: 0.201 | NDCG@20: 0.400 | PosBrier: 0.7286
+2026-01-10 03:10:16 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.767 | R@20: 0.849 | μR@10: 0.409 | P@10: 0.210 | NDCG@20: 0.384 | PosBrier: 0.7271
+2026-01-10 03:12:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.812 | R@20: 0.880 | μR@10: 0.408 | P@10: 0.195 | NDCG@20: 0.406 | PosBrier: 0.7400
+2026-01-10 03:15:23 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.814 | R@20: 0.878 | μR@10: 0.411 | P@10: 0.199 | NDCG@20: 0.399 | PosBrier: 0.7400
+2026-01-10 03:17:55 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.820 | R@20: 0.880 | μR@10: 0.399 | P@10: 0.195 | NDCG@20: 0.390 | PosBrier: 0.7319
+2026-01-10 03:20:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.829 | R@20: 0.888 | μR@10: 0.410 | P@10: 0.196 | NDCG@20: 0.403 | PosBrier: 0.7283
+2026-01-10 03:23:01 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.801 | R@20: 0.864 | μR@10: 0.434 | P@10: 0.211 | NDCG@20: 0.401 | PosBrier: 0.7082
+2026-01-10 03:25:35 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.806 | R@20: 0.886 | μR@10: 0.417 | P@10: 0.200 | NDCG@20: 0.413 | PosBrier: 0.7266
+2026-01-10 03:28:10 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.808 | R@20: 0.868 | μR@10: 0.411 | P@10: 0.192 | NDCG@20: 0.395 | PosBrier: 0.7341
+2026-01-10 03:30:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.791 | R@20: 0.865 | μR@10: 0.445 | P@10: 0.201 | NDCG@20: 0.404 | PosBrier: 0.7219
+2026-01-10 03:33:19 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.815 | R@20: 0.878 | μR@10: 0.409 | P@10: 0.195 | NDCG@20: 0.407 | PosBrier: 0.7344
+2026-01-10 03:36:02 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.748 | R@20: 0.839 | μR@10: 0.416 | P@10: 0.200 | NDCG@20: 0.375 | PosBrier: 0.7322
+2026-01-10 03:38:36 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.830 | R@20: 0.884 | μR@10: 0.424 | P@10: 0.194 | NDCG@20: 0.406 | PosBrier: 0.7336
+2026-01-10 03:41:10 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.802 | R@20: 0.869 | μR@10: 0.419 | P@10: 0.195 | NDCG@20: 0.398 | PosBrier: 0.7271
+2026-01-10 03:43:47 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.803 | R@20: 0.876 | μR@10: 0.437 | P@10: 0.191 | NDCG@20: 0.405 | PosBrier: 0.7335
+2026-01-10 03:46:22 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.809 | R@20: 0.864 | μR@10: 0.412 | P@10: 0.187 | NDCG@20: 0.398 | PosBrier: 0.7272
+2026-01-10 03:48:52 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.823 | R@20: 0.883 | μR@10: 0.422 | P@10: 0.193 | NDCG@20: 0.415 | PosBrier: 0.7215
+2026-01-10 03:51:27 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.812 | R@20: 0.869 | μR@10: 0.436 | P@10: 0.222 | NDCG@20: 0.406 | PosBrier: 0.6980
+2026-01-10 03:54:01 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.824 | R@20: 0.883 | μR@10: 0.436 | P@10: 0.211 | NDCG@20: 0.421 | PosBrier: 0.6913
+2026-01-10 03:56:35 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.836 | R@20: 0.897 | μR@10: 0.419 | P@10: 0.199 | NDCG@20: 0.411 | PosBrier: 0.7108
+2026-01-10 03:59:08 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.823 | R@20: 0.882 | μR@10: 0.435 | P@10: 0.210 | NDCG@20: 0.419 | PosBrier: 0.7144
+2026-01-10 04:01:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.823 | R@20: 0.888 | μR@10: 0.414 | P@10: 0.196 | NDCG@20: 0.405 | PosBrier: 0.7373
+2026-01-10 04:04:18 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.796 | R@20: 0.876 | μR@10: 0.435 | P@10: 0.206 | NDCG@20: 0.404 | PosBrier: 0.7124
+2026-01-10 04:06:53 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.807 | R@20: 0.859 | μR@10: 0.426 | P@10: 0.206 | NDCG@20: 0.410 | PosBrier: 0.7080
+2026-01-10 04:09:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.807 | R@20: 0.885 | μR@10: 0.447 | P@10: 0.195 | NDCG@20: 0.411 | PosBrier: 0.7213
+2026-01-10 04:12:04 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.838 | R@20: 0.900 | μR@10: 0.449 | P@10: 0.202 | NDCG@20: 0.430 | PosBrier: 0.7017
+2026-01-10 04:14:39 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.822 | R@20: 0.891 | μR@10: 0.422 | P@10: 0.202 | NDCG@20: 0.406 | PosBrier: 0.7100
+2026-01-10 04:17:13 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.822 | R@20: 0.878 | μR@10: 0.443 | P@10: 0.196 | NDCG@20: 0.417 | PosBrier: 0.7127
+2026-01-10 04:19:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.816 | R@20: 0.889 | μR@10: 0.411 | P@10: 0.195 | NDCG@20: 0.399 | PosBrier: 0.7439
+2026-01-10 04:22:18 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.817 | R@20: 0.883 | μR@10: 0.415 | P@10: 0.208 | NDCG@20: 0.411 | PosBrier: 0.7248
+2026-01-10 04:24:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.806 | R@20: 0.864 | μR@10: 0.413 | P@10: 0.197 | NDCG@20: 0.396 | PosBrier: 0.7290
+2026-01-10 04:27:22 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.829 | R@20: 0.885 | μR@10: 0.446 | P@10: 0.220 | NDCG@20: 0.422 | PosBrier: 0.6962
+2026-01-10 04:29:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.840 | R@20: 0.900 | μR@10: 0.445 | P@10: 0.210 | NDCG@20: 0.431 | PosBrier: 0.7073
+2026-01-10 04:32:32 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.823 | R@20: 0.885 | μR@10: 0.437 | P@10: 0.210 | NDCG@20: 0.422 | PosBrier: 0.7156
+2026-01-10 04:35:07 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.829 | R@20: 0.884 | μR@10: 0.436 | P@10: 0.201 | NDCG@20: 0.413 | PosBrier: 0.7210
+2026-01-10 04:37:41 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.819 | R@20: 0.882 | μR@10: 0.442 | P@10: 0.211 | NDCG@20: 0.408 | PosBrier: 0.7080
+2026-01-10 04:40:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.839 | R@20: 0.891 | μR@10: 0.464 | P@10: 0.209 | NDCG@20: 0.436 | PosBrier: 0.6914
+2026-01-10 04:42:48 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.820 | R@20: 0.877 | μR@10: 0.448 | P@10: 0.228 | NDCG@20: 0.424 | PosBrier: 0.6937
+2026-01-10 04:45:23 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.823 | R@20: 0.883 | μR@10: 0.417 | P@10: 0.189 | NDCG@20: 0.405 | PosBrier: 0.7361
+2026-01-10 04:47:55 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.819 | R@20: 0.880 | μR@10: 0.423 | P@10: 0.221 | NDCG@20: 0.406 | PosBrier: 0.6971
+2026-01-10 04:50:29 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.827 | R@20: 0.889 | μR@10: 0.431 | P@10: 0.208 | NDCG@20: 0.416 | PosBrier: 0.7051
+2026-01-10 04:53:02 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.817 | R@20: 0.876 | μR@10: 0.408 | P@10: 0.213 | NDCG@20: 0.411 | PosBrier: 0.7068
+2026-01-10 04:55:33 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.844 | R@20: 0.897 | μR@10: 0.443 | P@10: 0.206 | NDCG@20: 0.422 | PosBrier: 0.7096
+2026-01-10 04:58:08 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.824 | R@20: 0.882 | μR@10: 0.448 | P@10: 0.212 | NDCG@20: 0.411 | PosBrier: 0.6875
+2026-01-10 05:00:42 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.805 | R@20: 0.881 | μR@10: 0.451 | P@10: 0.202 | NDCG@20: 0.414 | PosBrier: 0.7258
+2026-01-10 05:03:16 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.818 | R@20: 0.886 | μR@10: 0.442 | P@10: 0.211 | NDCG@20: 0.422 | PosBrier: 0.7047
+2026-01-10 05:05:53 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.804 | R@20: 0.880 | μR@10: 0.449 | P@10: 0.198 | NDCG@20: 0.414 | PosBrier: 0.7147
+2026-01-10 05:08:29 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.812 | R@20: 0.890 | μR@10: 0.456 | P@10: 0.199 | NDCG@20: 0.424 | PosBrier: 0.7152
+2026-01-10 05:11:05 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.812 | R@20: 0.886 | μR@10: 0.441 | P@10: 0.205 | NDCG@20: 0.419 | PosBrier: 0.7156
+2026-01-10 05:13:40 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.838 | R@20: 0.899 | μR@10: 0.440 | P@10: 0.213 | NDCG@20: 0.428 | PosBrier: 0.6959
+2026-01-10 05:16:11 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.836 | R@20: 0.888 | μR@10: 0.449 | P@10: 0.215 | NDCG@20: 0.429 | PosBrier: 0.7011
+2026-01-10 05:18:44 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.843 | R@20: 0.887 | μR@10: 0.429 | P@10: 0.227 | NDCG@20: 0.415 | PosBrier: 0.7007
+2026-01-10 05:21:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.837 | R@20: 0.889 | μR@10: 0.422 | P@10: 0.203 | NDCG@20: 0.416 | PosBrier: 0.7193
+2026-01-10 05:23:52 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.818 | R@20: 0.893 | μR@10: 0.468 | P@10: 0.208 | NDCG@20: 0.430 | PosBrier: 0.6975
+2026-01-10 05:26:29 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.818 | R@20: 0.896 | μR@10: 0.455 | P@10: 0.215 | NDCG@20: 0.428 | PosBrier: 0.6954
+2026-01-10 05:29:02 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.842 | R@20: 0.891 | μR@10: 0.448 | P@10: 0.220 | NDCG@20: 0.431 | PosBrier: 0.6894
+2026-01-10 05:31:36 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.836 | R@20: 0.892 | μR@10: 0.453 | P@10: 0.215 | NDCG@20: 0.432 | PosBrier: 0.6957
+2026-01-10 05:34:17 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.785 | R@20: 0.868 | μR@10: 0.437 | P@10: 0.254 | NDCG@20: 0.414 | PosBrier: 0.6503
+2026-01-10 05:36:48 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.835 | R@20: 0.890 | μR@10: 0.442 | P@10: 0.204 | NDCG@20: 0.427 | PosBrier: 0.6963
+2026-01-10 05:39:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.815 | R@20: 0.880 | μR@10: 0.426 | P@10: 0.212 | NDCG@20: 0.417 | PosBrier: 0.7038
+2026-01-10 05:41:51 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.829 | R@20: 0.889 | μR@10: 0.463 | P@10: 0.228 | NDCG@20: 0.435 | PosBrier: 0.6821
+2026-01-10 05:44:24 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.829 | R@20: 0.894 | μR@10: 0.463 | P@10: 0.211 | NDCG@20: 0.427 | PosBrier: 0.6957
+2026-01-10 05:46:58 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.829 | R@20: 0.898 | μR@10: 0.467 | P@10: 0.210 | NDCG@20: 0.436 | PosBrier: 0.6852
+2026-01-10 05:49:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.826 | R@20: 0.881 | μR@10: 0.461 | P@10: 0.217 | NDCG@20: 0.429 | PosBrier: 0.6949
+2026-01-10 05:51:58 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.837 | R@20: 0.890 | μR@10: 0.476 | P@10: 0.232 | NDCG@20: 0.442 | PosBrier: 0.6600
+2026-01-10 05:54:38 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.780 | R@20: 0.870 | μR@10: 0.464 | P@10: 0.219 | NDCG@20: 0.408 | PosBrier: 0.7000
+2026-01-10 05:57:06 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.821 | R@20: 0.885 | μR@10: 0.433 | P@10: 0.212 | NDCG@20: 0.418 | PosBrier: 0.7023
+2026-01-10 05:59:37 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.838 | R@20: 0.897 | μR@10: 0.461 | P@10: 0.212 | NDCG@20: 0.438 | PosBrier: 0.6831
+2026-01-10 06:02:05 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.827 | R@20: 0.884 | μR@10: 0.449 | P@10: 0.216 | NDCG@20: 0.429 | PosBrier: 0.6860
+2026-01-10 06:05:13 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.853 | R@20: 0.906 | μR@10: 0.448 | P@10: 0.230 | NDCG@20: 0.435 | PosBrier: 0.6883
+2026-01-10 06:08:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.795 | R@20: 0.868 | μR@10: 0.441 | P@10: 0.211 | NDCG@20: 0.412 | PosBrier: 0.7062
+2026-01-10 06:10:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.839 | R@20: 0.900 | μR@10: 0.454 | P@10: 0.201 | NDCG@20: 0.427 | PosBrier: 0.7063
+2026-01-10 06:13:13 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.854 | R@20: 0.902 | μR@10: 0.449 | P@10: 0.208 | NDCG@20: 0.437 | PosBrier: 0.7031
+2026-01-10 06:15:43 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.863 | R@20: 0.911 | μR@10: 0.461 | P@10: 0.213 | NDCG@20: 0.445 | PosBrier: 0.6838
+2026-01-10 06:18:12 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.832 | R@20: 0.898 | μR@10: 0.476 | P@10: 0.214 | NDCG@20: 0.445 | PosBrier: 0.6760
+2026-01-10 06:20:39 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.838 | R@20: 0.893 | μR@10: 0.430 | P@10: 0.221 | NDCG@20: 0.421 | PosBrier: 0.7019
+2026-01-10 06:23:15 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.790 | R@20: 0.881 | μR@10: 0.440 | P@10: 0.217 | NDCG@20: 0.410 | PosBrier: 0.7115
+2026-01-10 06:25:41 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.845 | R@20: 0.901 | μR@10: 0.442 | P@10: 0.215 | NDCG@20: 0.432 | PosBrier: 0.6887
+2026-01-10 06:28:06 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.845 | R@20: 0.897 | μR@10: 0.468 | P@10: 0.215 | NDCG@20: 0.450 | PosBrier: 0.6818
+2026-01-10 06:30:32 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.832 | R@20: 0.891 | μR@10: 0.425 | P@10: 0.213 | NDCG@20: 0.422 | PosBrier: 0.7199
+2026-01-10 06:32:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.833 | R@20: 0.894 | μR@10: 0.409 | P@10: 0.207 | NDCG@20: 0.419 | PosBrier: 0.7244
+2026-01-10 06:35:21 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.831 | R@20: 0.895 | μR@10: 0.433 | P@10: 0.208 | NDCG@20: 0.423 | PosBrier: 0.7043
+2026-01-10 06:37:44 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.819 | R@20: 0.885 | μR@10: 0.448 | P@10: 0.198 | NDCG@20: 0.423 | PosBrier: 0.6962
+2026-01-10 06:40:07 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.820 | R@20: 0.894 | μR@10: 0.440 | P@10: 0.193 | NDCG@20: 0.419 | PosBrier: 0.7155
+2026-01-10 06:42:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.839 | R@20: 0.897 | μR@10: 0.427 | P@10: 0.207 | NDCG@20: 0.428 | PosBrier: 0.7199
+2026-01-10 06:44:56 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.830 | R@20: 0.896 | μR@10: 0.454 | P@10: 0.225 | NDCG@20: 0.428 | PosBrier: 0.6923
+2026-01-10 06:47:24 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.836 | R@20: 0.891 | μR@10: 0.456 | P@10: 0.220 | NDCG@20: 0.439 | PosBrier: 0.6738
+2026-01-10 06:49:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.834 | R@20: 0.894 | μR@10: 0.453 | P@10: 0.222 | NDCG@20: 0.426 | PosBrier: 0.6863
+2026-01-10 06:52:12 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.850 | R@20: 0.904 | μR@10: 0.439 | P@10: 0.229 | NDCG@20: 0.434 | PosBrier: 0.6942
+2026-01-10 06:54:38 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.852 | R@20: 0.903 | μR@10: 0.453 | P@10: 0.221 | NDCG@20: 0.441 | PosBrier: 0.6822
+2026-01-10 06:57:05 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.831 | R@20: 0.898 | μR@10: 0.493 | P@10: 0.232 | NDCG@20: 0.448 | PosBrier: 0.6639
+2026-01-10 06:59:29 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.843 | R@20: 0.895 | μR@10: 0.465 | P@10: 0.212 | NDCG@20: 0.430 | PosBrier: 0.6888
+2026-01-10 07:01:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.838 | R@20: 0.900 | μR@10: 0.430 | P@10: 0.225 | NDCG@20: 0.425 | PosBrier: 0.7042
+2026-01-10 07:04:13 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.833 | R@20: 0.895 | μR@10: 0.440 | P@10: 0.206 | NDCG@20: 0.420 | PosBrier: 0.6944
+2026-01-10 07:06:37 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.846 | R@20: 0.897 | μR@10: 0.487 | P@10: 0.221 | NDCG@20: 0.448 | PosBrier: 0.6706
+2026-01-10 07:08:58 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.826 | R@20: 0.881 | μR@10: 0.443 | P@10: 0.197 | NDCG@20: 0.428 | PosBrier: 0.6868
+2026-01-10 07:11:22 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.856 | R@20: 0.906 | μR@10: 0.480 | P@10: 0.227 | NDCG@20: 0.449 | PosBrier: 0.6713
+2026-01-10 07:13:55 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.802 | R@20: 0.888 | μR@10: 0.477 | P@10: 0.221 | NDCG@20: 0.425 | PosBrier: 0.6853
+2026-01-10 07:16:21 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.823 | R@20: 0.884 | μR@10: 0.446 | P@10: 0.219 | NDCG@20: 0.419 | PosBrier: 0.6866
+2026-01-10 07:18:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.853 | R@20: 0.896 | μR@10: 0.464 | P@10: 0.208 | NDCG@20: 0.447 | PosBrier: 0.6847
+2026-01-10 07:21:10 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.840 | R@20: 0.904 | μR@10: 0.447 | P@10: 0.215 | NDCG@20: 0.435 | PosBrier: 0.6916
+2026-01-10 07:23:34 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.854 | R@20: 0.905 | μR@10: 0.469 | P@10: 0.222 | NDCG@20: 0.443 | PosBrier: 0.6715
+2026-01-10 07:25:58 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.829 | R@20: 0.886 | μR@10: 0.455 | P@10: 0.224 | NDCG@20: 0.429 | PosBrier: 0.6886
+2026-01-10 07:28:21 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.846 | R@20: 0.899 | μR@10: 0.495 | P@10: 0.232 | NDCG@20: 0.450 | PosBrier: 0.6554
+2026-01-10 07:30:46 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.842 | R@20: 0.901 | μR@10: 0.454 | P@10: 0.214 | NDCG@20: 0.446 | PosBrier: 0.6947
+2026-01-10 07:33:10 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.835 | R@20: 0.891 | μR@10: 0.447 | P@10: 0.217 | NDCG@20: 0.429 | PosBrier: 0.7055
+2026-01-10 07:35:44 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.799 | R@20: 0.880 | μR@10: 0.483 | P@10: 0.269 | NDCG@20: 0.438 | PosBrier: 0.6313
+2026-01-10 07:38:11 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.860 | R@20: 0.913 | μR@10: 0.471 | P@10: 0.235 | NDCG@20: 0.452 | PosBrier: 0.6735
+2026-01-10 07:40:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.844 | R@20: 0.901 | μR@10: 0.484 | P@10: 0.215 | NDCG@20: 0.449 | PosBrier: 0.6717
+2026-01-10 07:42:51 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.854 | R@20: 0.900 | μR@10: 0.476 | P@10: 0.237 | NDCG@20: 0.453 | PosBrier: 0.6663
+2026-01-10 07:45:12 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.830 | R@20: 0.885 | μR@10: 0.464 | P@10: 0.220 | NDCG@20: 0.429 | PosBrier: 0.6940
+2026-01-10 07:48:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.824 | R@20: 0.901 | μR@10: 0.478 | P@10: 0.218 | NDCG@20: 0.437 | PosBrier: 0.6773
+2026-01-10 07:51:01 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.822 | R@20: 0.895 | μR@10: 0.470 | P@10: 0.228 | NDCG@20: 0.438 | PosBrier: 0.6774
+2026-01-10 07:53:26 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.849 | R@20: 0.893 | μR@10: 0.467 | P@10: 0.209 | NDCG@20: 0.444 | PosBrier: 0.6717
+2026-01-10 07:55:51 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.817 | R@20: 0.889 | μR@10: 0.450 | P@10: 0.199 | NDCG@20: 0.424 | PosBrier: 0.7101
+2026-01-10 07:58:16 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0035 | R@10: 0.824 | R@20: 0.880 | μR@10: 0.417 | P@10: 0.216 | NDCG@20: 0.410 | PosBrier: 0.7088
+2026-01-10 08:00:38 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.843 | R@20: 0.895 | μR@10: 0.483 | P@10: 0.226 | NDCG@20: 0.445 | PosBrier: 0.6683
+2026-01-10 08:03:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.806 | R@20: 0.889 | μR@10: 0.474 | P@10: 0.262 | NDCG@20: 0.439 | PosBrier: 0.6313
+2026-01-10 08:06:47 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.852 | R@20: 0.907 | μR@10: 0.461 | P@10: 0.210 | NDCG@20: 0.449 | PosBrier: 0.6875
+2026-01-10 08:09:08 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.870 | R@20: 0.917 | μR@10: 0.460 | P@10: 0.213 | NDCG@20: 0.447 | PosBrier: 0.6735
+2026-01-10 08:11:26 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.828 | R@20: 0.883 | μR@10: 0.459 | P@10: 0.208 | NDCG@20: 0.428 | PosBrier: 0.6860
+2026-01-10 08:13:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.841 | R@20: 0.904 | μR@10: 0.471 | P@10: 0.219 | NDCG@20: 0.450 | PosBrier: 0.6816
+2026-01-10 08:16:17 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.812 | R@20: 0.897 | μR@10: 0.470 | P@10: 0.217 | NDCG@20: 0.431 | PosBrier: 0.6822
+2026-01-10 08:18:40 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.857 | R@20: 0.912 | μR@10: 0.445 | P@10: 0.218 | NDCG@20: 0.441 | PosBrier: 0.6896
+2026-01-10 08:21:09 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.816 | R@20: 0.893 | μR@10: 0.473 | P@10: 0.210 | NDCG@20: 0.441 | PosBrier: 0.6928
+2026-01-10 08:23:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.828 | R@20: 0.892 | μR@10: 0.419 | P@10: 0.205 | NDCG@20: 0.428 | PosBrier: 0.7096
+2026-01-10 08:25:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.822 | R@20: 0.892 | μR@10: 0.452 | P@10: 0.219 | NDCG@20: 0.431 | PosBrier: 0.6928
+2026-01-10 08:28:16 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.833 | R@20: 0.906 | μR@10: 0.470 | P@10: 0.210 | NDCG@20: 0.442 | PosBrier: 0.6962
+2026-01-10 08:31:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.837 | R@20: 0.887 | μR@10: 0.448 | P@10: 0.207 | NDCG@20: 0.431 | PosBrier: 0.7077
+2026-01-10 08:34:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.848 | R@20: 0.904 | μR@10: 0.476 | P@10: 0.210 | NDCG@20: 0.448 | PosBrier: 0.6856
+2026-01-10 08:36:38 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0028 | R@10: 0.878 | R@20: 0.920 | μR@10: 0.498 | P@10: 0.220 | NDCG@20: 0.471 | PosBrier: 0.6538
+2026-01-10 08:38:58 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.828 | R@20: 0.897 | μR@10: 0.456 | P@10: 0.228 | NDCG@20: 0.432 | PosBrier: 0.6719
+2026-01-10 08:41:18 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.832 | R@20: 0.899 | μR@10: 0.460 | P@10: 0.203 | NDCG@20: 0.437 | PosBrier: 0.6953
+2026-01-10 08:43:39 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.820 | R@20: 0.891 | μR@10: 0.470 | P@10: 0.222 | NDCG@20: 0.433 | PosBrier: 0.6878
+2026-01-10 08:45:55 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.842 | R@20: 0.900 | μR@10: 0.454 | P@10: 0.199 | NDCG@20: 0.435 | PosBrier: 0.7082
+2026-01-10 08:48:18 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.850 | R@20: 0.904 | μR@10: 0.475 | P@10: 0.222 | NDCG@20: 0.453 | PosBrier: 0.6631
+2026-01-10 08:50:44 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.822 | R@20: 0.900 | μR@10: 0.452 | P@10: 0.204 | NDCG@20: 0.429 | PosBrier: 0.7008
+2026-01-10 08:53:05 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.843 | R@20: 0.906 | μR@10: 0.457 | P@10: 0.219 | NDCG@20: 0.440 | PosBrier: 0.6818
+2026-01-10 08:55:21 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.829 | R@20: 0.889 | μR@10: 0.475 | P@10: 0.219 | NDCG@20: 0.434 | PosBrier: 0.6700
+2026-01-10 08:57:41 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.823 | R@20: 0.885 | μR@10: 0.417 | P@10: 0.207 | NDCG@20: 0.415 | PosBrier: 0.7096
+2026-01-10 09:00:01 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.845 | R@20: 0.901 | μR@10: 0.451 | P@10: 0.218 | NDCG@20: 0.451 | PosBrier: 0.6791
+2026-01-10 09:02:15 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.843 | R@20: 0.905 | μR@10: 0.458 | P@10: 0.215 | NDCG@20: 0.435 | PosBrier: 0.6892
+2026-01-10 09:04:36 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0028 | R@10: 0.826 | R@20: 0.901 | μR@10: 0.479 | P@10: 0.204 | NDCG@20: 0.436 | PosBrier: 0.6922
+2026-01-10 09:06:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.826 | R@20: 0.895 | μR@10: 0.443 | P@10: 0.221 | NDCG@20: 0.420 | PosBrier: 0.6936
+2026-01-10 09:09:16 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.847 | R@20: 0.905 | μR@10: 0.474 | P@10: 0.230 | NDCG@20: 0.457 | PosBrier: 0.6554
+2026-01-10 09:11:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.842 | R@20: 0.896 | μR@10: 0.445 | P@10: 0.234 | NDCG@20: 0.433 | PosBrier: 0.6898
+2026-01-10 09:13:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.848 | R@20: 0.900 | μR@10: 0.489 | P@10: 0.232 | NDCG@20: 0.450 | PosBrier: 0.6606
+2026-01-10 09:16:06 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.823 | R@20: 0.887 | μR@10: 0.494 | P@10: 0.237 | NDCG@20: 0.450 | PosBrier: 0.6436
+2026-01-10 09:18:23 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.820 | R@20: 0.889 | μR@10: 0.453 | P@10: 0.214 | NDCG@20: 0.432 | PosBrier: 0.6882
+2026-01-10 09:20:42 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.844 | R@20: 0.896 | μR@10: 0.476 | P@10: 0.215 | NDCG@20: 0.442 | PosBrier: 0.6701
+2026-01-10 09:23:09 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.844 | R@20: 0.908 | μR@10: 0.487 | P@10: 0.220 | NDCG@20: 0.452 | PosBrier: 0.6723
+2026-01-10 09:25:31 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.810 | R@20: 0.885 | μR@10: 0.468 | P@10: 0.224 | NDCG@20: 0.431 | PosBrier: 0.6737
+2026-01-10 09:27:52 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.843 | R@20: 0.902 | μR@10: 0.474 | P@10: 0.228 | NDCG@20: 0.454 | PosBrier: 0.6707
+2026-01-10 09:30:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.830 | R@20: 0.902 | μR@10: 0.481 | P@10: 0.209 | NDCG@20: 0.443 | PosBrier: 0.6870
+2026-01-10 09:32:37 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.823 | R@20: 0.898 | μR@10: 0.481 | P@10: 0.222 | NDCG@20: 0.438 | PosBrier: 0.6774
+2026-01-10 09:34:56 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.853 | R@20: 0.906 | μR@10: 0.467 | P@10: 0.224 | NDCG@20: 0.443 | PosBrier: 0.6792
+2026-01-10 09:37:26 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.816 | R@20: 0.895 | μR@10: 0.478 | P@10: 0.274 | NDCG@20: 0.453 | PosBrier: 0.6220
+2026-01-10 09:39:49 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.818 | R@20: 0.901 | μR@10: 0.484 | P@10: 0.214 | NDCG@20: 0.436 | PosBrier: 0.6829
+2026-01-10 09:42:07 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.848 | R@20: 0.913 | μR@10: 0.453 | P@10: 0.228 | NDCG@20: 0.441 | PosBrier: 0.6815
+2026-01-10 09:44:27 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.869 | R@20: 0.913 | μR@10: 0.498 | P@10: 0.233 | NDCG@20: 0.473 | PosBrier: 0.6388
+2026-01-10 09:46:45 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0029 | R@10: 0.848 | R@20: 0.901 | μR@10: 0.490 | P@10: 0.223 | NDCG@20: 0.451 | PosBrier: 0.6546
+2026-01-10 09:49:00 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.867 | R@20: 0.916 | μR@10: 0.468 | P@10: 0.236 | NDCG@20: 0.464 | PosBrier: 0.6600
+2026-01-10 09:51:29 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.815 | R@20: 0.895 | μR@10: 0.483 | P@10: 0.226 | NDCG@20: 0.436 | PosBrier: 0.6727
+2026-01-10 09:53:47 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.848 | R@20: 0.899 | μR@10: 0.460 | P@10: 0.238 | NDCG@20: 0.438 | PosBrier: 0.6761
+2026-01-10 09:56:08 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.822 | R@20: 0.896 | μR@10: 0.469 | P@10: 0.212 | NDCG@20: 0.431 | PosBrier: 0.6940
+2026-01-10 09:58:30 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.845 | R@20: 0.897 | μR@10: 0.451 | P@10: 0.213 | NDCG@20: 0.434 | PosBrier: 0.6940
+2026-01-10 10:00:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.836 | R@20: 0.909 | μR@10: 0.486 | P@10: 0.227 | NDCG@20: 0.454 | PosBrier: 0.6649
+2026-01-10 10:04:51 - exp2b_flash_learned_pool - INFO -   Using batch-averaged training metrics (no re-evaluation)
+2026-01-10 10:04:51 - exp2b_flash_learned_pool - INFO -   Final epoch: Running comprehensive evaluation...
+2026-01-10 11:27:09 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 1 Summary ---
+2026-01-10 11:27:09 - exp2b_flash_learned_pool - INFO -   Train loss: 0.0102 → 0.0033
+2026-01-10 11:27:09 - exp2b_flash_learned_pool - INFO -   Val loss: 0.0030, Recall@10: 0.834, μRecall@10: 0.477, NDCG@20: 0.447
+2026-01-10 11:27:09 - exp2b_flash_learned_pool - INFO - 
+Training completed in 41867.1s
+2026-01-10 11:27:09 - exp2b_flash_learned_pool - INFO -   Using cached comprehensive evaluation from final epoch
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - Model saved as: exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260110_112709
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 0.85 GB
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - Complete results saved to logs/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool/final_results.json
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - 
+================================================================================
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - EXPERIMENT COMPLETE: exp2b_flash_learned_pool
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - Final Recall@10: 0.834
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - Best Val Loss: 0.0000
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - Training Time: 41867.1s
+2026-01-10 11:27:10 - exp2b_flash_learned_pool - INFO - ================================================================================
+
