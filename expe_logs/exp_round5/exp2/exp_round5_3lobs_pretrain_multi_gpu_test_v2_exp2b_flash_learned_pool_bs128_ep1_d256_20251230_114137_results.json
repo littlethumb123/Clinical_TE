@@ -207,5 +207,6 @@
       "val_num_codes_evaluated": 200
     }
   ],
-  "model_name": "exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20251230_114137"
+  "model_name": "exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20251230_114137",
+  "model_path": "logs/exp_round5_3lobs_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool/saved_models/exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20251230_114137_final.pt"
 }
