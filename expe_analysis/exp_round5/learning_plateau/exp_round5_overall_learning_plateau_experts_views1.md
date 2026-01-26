@@ -1,3 +1,7 @@
+---
+title: "Expert 1: Comprehensive Training Plateau Analysis: Experiments Round 5 & 6"
+date: 2026-01-23
+---
 # Expert 1: Comprehensive Training Plateau Analysis: Experiments Round 5 & 6
 
 ## (A) OBSERVED FACTS: Configuration & Results Summary
@@ -795,3 +799,402 @@ Expected outcome: If plateau is underfitting, all metrics improve; if overfittin
 - Different attention mechanisms (Flash ≈ Standard)
 
 The key insight is that this is fundamentally a **long-tail distribution problem**, not a model capacity problem. The solution lies in objective function and curriculum design, not architecture.
+
+
+# Expert 5: Adjudicator: Independent Technical Analysis: Learning Plateau in Clinical Transformer
+
+## Part 1: Critical Review of Expert Opinions
+
+### **Expert 1 Analysis - Strengths & Weaknesses**
+
+**Strengths:**
+- Correctly identifies the convergence pattern (all optimized experiments reach ~0.82-0.83 R@10)
+- The "Capacity-Limited Regime" hypothesis is well-articulated with specific evidence
+- Correctly notes that doubling data yielded marginal improvement
+
+**Weaknesses/Errors:**
+1. **Inaccurate claim on exp1_legacy nhead**: Expert 1 states "nhead=8 (legacy says 16)" but the config file shows `"nhead": 8`. The training log shows `nhead=16 (hardcoded)` for exp1_opt, not exp1_legacy.
+
+2. **Overstates d_model bottleneck significance**: Claims 256-dim is "extremely small" but doesn't account that clinical code prediction may not need transformer-scale representations—this is a multi-label classification task, not language modeling.
+
+3. **The "ranking-aware loss will give +10-15% μRecall" claim is speculative**: No evidence for this specific prediction.
+
+### **Expert 2 Analysis - Strengths & Weaknesses**
+
+**Strengths:**
+- Correctly identifies the "Representation Bottleneck" concept
+- Properly notes that nhid=704 is constrained (should be 1024 for 4× expansion with d_model=256)
+- Identifies the "L-shaped" loss curve pattern correctly
+
+**Weaknesses/Errors:**
+1. **FALSE STATEMENT**: Expert 2 claims "Doubling the data size (Round 6 Exp 2) resulted in **zero marginal gain**". The actual data shows:
+   - Round 5 exp2: R@10=0.828, μR@10=0.462, NDCG=0.432
+   - Round 6 exp2: R@10=0.834, μR@10=0.477, NDCG=0.447
+   - This is +0.6% R@10, +3.2% μRecall, +3.5% NDCG—not "zero"
+
+2. **Conflates exp2 with exp2b_flash_learned_pool**: The naming in the document is inconsistent. Exp2 uses Flash + learned pooling, not plain MoE.
+
+3. **Overstates the d_model claim without citing counterexamples**: Many successful clinical ML models use embeddings <256 dims.
+
+### **Expert 3 Analysis - Strengths & Weaknesses**
+
+**Strengths:**
+- Most rigorous in actually reading the files and noting inconsistencies
+- Correctly identifies the `val_loss=0.0` logging artifact (exp2, exp6 show 0.0 but BCE loss is non-zero)
+- Properly notes the MoE health issues from actual log data
+- Correctly identifies that "more data didn't help" because it mostly added head examples
+
+**Weaknesses/Errors:**
+1. **Claims results files are "byte-identical"**: This appears to be an error—the round 6 results show clearly different metrics (R@10=0.834 vs 0.828)
+
+2. **Missing key insight**: Doesn't notice that exp1_opt uses batch_size=64 while others use 128, giving it 2× the gradient updates
+
+### **Expert 4 Analysis - Strengths & Weaknesses**
+
+**Strengths:**
+- Most complete table with per-tier accuracy breakdown
+- Correctly identifies "Representation Collapse" concept
+- Good coverage of the gradient/embedding bottleneck hypothesis
+
+**Weaknesses/Errors:**
+1. **False claim about exp1_opt steps**: Claims exp1_opt runs "more steps (~22K vs ~11K)" but from the logs, warmup steps are 3289 for exp1_opt vs 1644 for exp2, suggesting total steps scale similarly.
+
+2. **Bits-per-code calculation is misleading**: "log₂(256)/75516 ≈ 0.0001 bits" is not how embeddings work—each code gets 256 dimensions, not 0.0001 bits.
+
+3. **"Multi-epoch training" as a quick win is questionable**: The current setup runs 1 epoch. Multi-epoch on 6000+ output codes with BCE loss will likely overfit without curriculum changes.
+
+---
+
+## Part 2: Cross-Expert Synthesis
+
+### **Points of Agreement (Validated Against Evidence)**
+
+| Claim | Expert 1 | Expert 2 | Expert 3 | Expert 4 | Verified? |
+|-------|----------|----------|----------|----------|-----------|
+| All optimized experiments converge to same performance | ✓ | ✓ | ✓ | ✓ | **YES** - R@10≈0.82-0.83 |
+| Tail/rare code accuracy is 0% | ✓ | ✓ | ✓ | ✓ | **YES** |
+| MoE doesn't help vs dense | ✓ | ✓ | ✓ | ✓ | **YES** |
+| BCE objective may be misaligned with ranking | ✓ | ✓ | ✓ | ✓ | Plausible |
+| d_model=256 is a bottleneck | Partial | ✓ | — | ✓ | **UNVERIFIED** |
+| 2× data gives minimal improvement | ✓ | ✓ (overstated) | ✓ | ✓ | **YES** (+3% on μRecall) |
+
+### **Points of Disagreement**
+
+| Topic | Experts 1,2,4 | Expert 3 |
+|-------|---------------|----------|
+| Primary bottleneck | Model capacity | Data/objective alignment |
+| First intervention | Increase d_model | Better measurement + tail weighting |
+
+### **Unique Insights Per Expert**
+
+| Expert | Unique Contribution |
+|--------|---------------------|
+| **Expert 1** | Specific intervention: "Sampled Softmax Reformulation" with expected outcomes |
+| **Expert 2** | Most emphatic about d_model=256 bottleneck; suggests 512/768 as decisive test |
+| **Expert 3** | Identifies logging artifact (val_loss=0.0) and suggests fixing measurement first |
+| **Expert 4** | Most complete tier breakdown; suggests hierarchical CCS/CCSR supervision |
+
+---
+
+## Part 3: My Independent Diagnosis
+
+### **What the Evidence Actually Shows**
+
+1. **The plateau is real and reproducible**: All three optimized experiments (exp1_opt, exp2, exp6) plateau at R@10≈0.82-0.83, μR@10≈0.46-0.48, despite:
+   - Dense vs Flash vs MoE architectures
+   - 25M vs 35M parameters
+   - 1 epoch vs 2× data
+
+2. **The learning dynamics are identical**:
+   ```
+   Loss: 0.80 → 0.005 (step ~2000) → 0.003 (step ~10000)
+   R@10: 0.00 → 0.60 (step ~2000) → 0.83 (step ~10000)
+   ```
+   The model learns 72% of its final R@10 performance in the first 18% of training.
+
+3. **Tail performance is catastrophic**: 
+   ```
+   Common: 82-83% accuracy
+   Medium: 4-5% accuracy  
+   Rare: 0% accuracy
+   Tail: 0% accuracy
+   ```
+   This is the clearest signal—the model has learned nothing for 5000+ codes.
+
+4. **MoE router is unstable**: The exp6 logs show simultaneous "EXPLODING" and "VANISHING" gradient warnings with 2-3 collapsed experts. This indicates the MoE capacity isn't being utilized.
+
+5. **The doubled data experiment is misinterpreted**: 
+   - Round 5: 1.4M samples → 10,960 steps
+   - Round 6: 3.1M samples → 24,273 steps
+   - Result: +0.6% R@10, +3.2% μRecall, +3.5% NDCG
+   
+   This is NOT "zero improvement"—it's diminishing returns, which suggests **the model can still learn from more data, but the marginal return is low**.
+
+### **My Primary Hypothesis: Gradient Starvation of the Long Tail**
+
+The evidence most strongly supports a **gradient starvation** diagnosis rather than capacity limits:
+
+1. **The pos_weight_max=50 is insufficient**: With ~6297 codes where code frequencies follow a power law, the rarest codes may have frequency ratios of 10,000:1. Capping at 50× leaves the bottom 80% of codes effectively invisible to SGD.
+
+2. **BCE loss structure mathematically favors common codes**: For BCE:
+   ```
+   ∂L/∂θ ∝ Σᵢ (σ(fᵢ) - yᵢ) × ∂fᵢ/∂θ
+   ```
+   When 95% of positives come from 500 common codes, the gradient is dominated by those codes. Rare codes contribute near-zero gradient even with 50× weighting.
+
+3. **The evidence against capacity limits**:
+   - exp1_opt (dense, 26M params, batch=64, 2× updates) ≈ exp2 (flash, 25M params, batch=128)
+   - Adding 10M parameters via MoE gives identical performance
+   - μRecall at 0.46-0.48 suggests the model CAN distinguish mid-frequency codes somewhat
+
+4. **The MoE failure is consistent with this**: MoE specialization requires gradient signal to route tokens to appropriate experts. If all gradients come from common codes, all experts learn the same thing → collapse.
+
+### **Key Missing Analysis**
+
+None of the experts performed this critical analysis:
+
+**Gradient contribution by code tier**: We need to measure what fraction of the gradient norm comes from each tier (common/medium/rare/tail). If >90% comes from common codes, this confirms gradient starvation.
+
+---
+
+## Part 4: Recommended Decisive Experiments
+
+### **Experiment A: Gradient Contribution Analysis (Diagnostic, 1 hour)**
+
+```python
+# In training loop, add:
+per_code_grad = {}
+for batch in sample_batches:
+    loss.backward(retain_graph=True)
+    for code_idx in range(6297):
+        per_code_grad[code_idx] = model.decoder_cd.weight.grad[code_idx].norm().item()
+# Aggregate by tier
+```
+
+**If common codes dominate gradient** → confirms gradient starvation → Experiment B
+**If gradient is balanced** → contradicts starvation → suggests capacity limit → Expert 2's d_model test
+
+### **Experiment B: Aggressive Tail Reweighting (1 epoch, 4 hours)**
+
+```python
+# Modify pos_weight computation:
+pos_weight_max = 500  # Instead of 50
+# AND add floor for tail codes:
+pos_weight[tail_codes] = max(pos_weight[tail_codes], 200)
+```
+
+**Expected outcome**: 
+- If rare_top10_acc improves from 0% to >5%, gradient starvation is confirmed
+- If no improvement, the bottleneck is elsewhere
+
+### **Experiment C: Sampled Softmax Objective (1 epoch, 4 hours)**
+
+Replace BCE with a ranking-aware objective. For each sample:
+1. Take the 2-10 positive codes
+2. Sample 100-200 negatives (stratified: 50 common, 50 medium, 50 rare)
+3. Compute softmax loss over this subset
+
+**This directly optimizes ranking** rather than calibration.
+
+### **Experiment D: d_model=512 (Only if B and C fail)**
+
+Double model width. This is the most expensive experiment and should only be run if the gradient-focused interventions fail.
+
+---
+
+## Part 5: Key Critiques of Expert Recommendations
+
+### **What I Disagree With:**
+
+1. **Expert 2's insistence on d_model=512 as "first experiment"**: This is a 4× compute increase with no guarantee of improvement. The evidence (MoE adding 10M params with no gain) suggests capacity isn't the bottleneck.
+
+2. **Expert 4's "multi-epoch training" as quick win**: With 6297 output codes and only ~2400 samples per code on average, multi-epoch risks overfitting to common codes. The generalization gap (train loss 0.003 vs val loss 0.003) is already small.
+
+3. **All experts underestimate the pos_weight cap problem**: A cap of 50 is extremely conservative for a 6000+ code vocabulary. Medical coding literature (e.g., MIMIC-III studies) uses uncapped inverse frequency weighting or focal loss.
+
+### **What I Agree With:**
+
+1. **Expert 3's emphasis on better measurement**: The val_loss=0.0 logging issue needs fixing. We need per-tier metrics tracked throughout training.
+
+2. **Expert 1's sampled softmax suggestion**: This is the most theoretically sound intervention for ranking-focused objectives.
+
+3. **Expert 4's CCS/CCSR hierarchy suggestion**: Hierarchical supervision could provide signal for rare codes via their parent categories.
+
+---
+
+## Executive Summary
+
+**The learning plateau is most likely caused by gradient starvation of rare/tail codes**, not model capacity limits. Evidence:
+- All architectural changes (Flash, MoE, +40% params) give identical performance
+- Tail code accuracy is 0% across all experiments  
+- Doubling data improves μRecall by 3.2%, showing the model CAN still learn
+- MoE experts collapse because they all learn the same common-code patterns
+
+**First action**: Implement gradient contribution analysis to confirm diagnosis (1 hour of compute).
+
+**Second action**: If confirmed, run aggressive tail reweighting (pos_weight_max=500, tail floor=200) or sampled softmax objective.
+
+**Do NOT start with**: Increasing d_model to 512. This is the highest-cost, lowest-evidence intervention.
+
+# Expert 5: Adjudicator: Self-reflection 
+
+## Step 1: What Do I ACTUALLY Know? (Undisputable Facts Only)
+
+| Fact | Source |
+|------|--------|
+| Loss: 0.8 → 0.003 (plateaus at ~step 5000) | Training logs |
+| R@10: 0.001 → 0.83 (plateaus at ~step 8000) | Training logs |
+| μR@10 ≈ 0.46-0.48 across all experiments | Results files |
+| Rare/tail tier accuracy: 0% | Results files |
+| Common tier accuracy: 82-83% | Results files |
+| 2× data: R@10 +0.7%, μR@10 +3.2% | Round 6 results |
+| MoE vs Dense: identical metrics | Exp6 vs Exp2 results |
+| pos_weight_max = 50, log_scaled | Config files |
+| ~6297 target codes | Config files |
+
+## Step 2: What Are My Hypotheses? (Not Facts)
+
+| Hypothesis | Status |
+|------------|--------|
+| "Gradient saturation" | **Unverified** - I claimed gradients are near-zero, but haven't measured |
+| "Gradient dilution" | **Unverified** - I claimed rare code signals are drowned out, but haven't measured |
+| "BCE optimum excludes rare codes" | **Plausible** - math supports it, but not empirically confirmed |
+| "pos_weight_max=50 is the bottleneck" | **Plausible** - logical, but not tested |
+| "Model capacity is NOT the issue" | **Supported** - MoE didn't help |
+
+## Step 3: Where I've Been Inconsistent
+
+| My Statement | When I Said It | Problem |
+|--------------|----------------|---------|
+| "Gradient saturation" | Initial analysis | Used term imprecisely |
+| "Gradient dilution" | Second revision | Changed terminology without new evidence |
+| "BCE optimum" | Third revision | Changed frame again without new evidence |
+| "Gradient analysis is valuable" | First version | Then flip-flopped |
+| "Gradient analysis is low value" | Later revision | Then flip-flopped again |
+| "Increase pos_weight is the fix" | Latest revision | Presented as certain when it's untested |
+
+**The core problem**: I kept changing my DIAGNOSIS without new EVIDENCE. Each revision was just a different interpretation of the same facts.
+
+---
+
+## Step 4: What Can I Actually Defend?
+
+### I CAN Defend:
+
+**1. The plateau is real and architecture-agnostic**
+- Evidence: All experiments (exp1_opt, exp2, exp6) hit the same ceiling
+- Evidence: Adding MoE parameters didn't help
+
+**2. Rare codes are not being learned**
+- Evidence: 0% accuracy for rare/tail tiers in all experiments
+- Evidence: μR@10 (0.46) << R@10 (0.83) shows per-code performance varies
+
+**3. More data provides diminishing returns**
+- Evidence: 2× data → +3.2% μR@10 (not 2× improvement)
+
+**4. The problem is NOT model capacity**
+- Evidence: Dense (25M) ≈ MoE (35M) in performance
+
+### I CANNOT Defend:
+
+**1. The exact mechanism (saturation vs dilution vs BCE optimum)**
+- I've been claiming different mechanisms without measuring gradients
+- This requires empirical verification
+
+**2. That increasing pos_weight_max will fix the problem**
+- I haven't seen evidence that different values were tested
+- It's a hypothesis, not a verified solution
+
+**3. That gradient analysis is either "essential" or "low value"**
+- I've argued both sides without a clear basis for either
+
+---
+
+## Step 5: What Is The Honest Truth?
+
+**I don't actually know what's causing the plateau.**
+
+I have plausible hypotheses:
+- pos_weight cap might be insufficient
+- BCE objective might be misaligned with ranking goal
+- Rare codes might have too few positive examples
+
+But I haven't verified any of these empirically. I've been reasoning from first principles without ground truth.
+
+---
+
+## Step 6: What Should I Actually Recommend?
+
+Given that I DON'T KNOW the root cause, the correct approach is:
+
+### Priority 1: Diagnostic Experiments (Before ANY Fix)
+
+**A. Gradient Tier Analysis** (the thing I kept flip-flopping on)
+- Measure actual gradient contribution per tier
+- This directly tests the "gradient starvation/dilution" hypothesis
+- ~1 hour of training with logging added
+
+**B. Per-Code Prediction Analysis**
+- For rare codes with target=1, what does the model predict?
+- If pred≈0 consistently → model learned "always predict 0"
+- If pred varies → model is trying but failing
+
+**C. pos_weight Ablation**
+- Test pos_weight_max = 100, 200, 500
+- See if any changes rare code recall
+- This directly tests the "pos_weight cap" hypothesis
+
+### Priority 2: Only AFTER Diagnostics Confirm a Hypothesis
+
+If gradient analysis shows common codes dominate:
+- Focal loss or sampled softmax (changes gradient distribution)
+
+If pos_weight ablation shows improvement:
+- Set pos_weight_max appropriately
+
+If prediction analysis shows model "always predicts 0":
+- Need stronger incentive (higher weight or different loss)
+
+---
+
+## Step 7: My Stable, Final Position
+
+**Diagnosis**: I genuinely don't know the exact mechanism. I have hypotheses but no empirical confirmation.
+
+**First action**: Run gradient tier analysis to get empirical data on gradient distribution.
+
+**Second action**: Run pos_weight ablation (50, 100, 200, 500) to test the cap hypothesis.
+
+**Third action**: Based on diagnostic results, choose intervention:
+- If gradients heavily skewed → focal loss or sampled softmax
+- If pos_weight increase helps → keep that setting
+- If neither helps → reconsider d_model/architecture changes
+
+**What I will NOT claim**:
+- Any single "root cause" without evidence
+- Any intervention as "definitely the solution"
+- That I know the exact mechanism
+
+---
+
+## Why I Keep Changing My Mind
+
+The honest answer: **I've been reasoning in circles from the same evidence.**
+
+Each "self-reflection" just reinterpreted the same facts differently. I wasn't getting new information—I was just finding new ways to frame old information.
+
+The ONLY way to break this cycle is **empirical measurement**:
+1. Measure gradient distribution (is it skewed?)
+2. Measure the effect of pos_weight changes (does it help?)
+3. Let the DATA tell us the answer
+
+---
+
+## What I Now Commit To
+
+1. **Gradient tier analysis IS worth doing** - it provides data I don't have
+2. **pos_weight ablation IS worth doing** - it tests a key hypothesis
+3. **I cannot claim to know the root cause** - I have hypotheses only
+4. **Any intervention is a TEST, not a fix** - until we have diagnostic data
+
+This is my stable position. I will not change it again based on more reasoning—only based on new empirical evidence.
