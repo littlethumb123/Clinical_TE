@@ -1,9 +1,3 @@
-[8 tools called]
-
-Now I have all the details. Here's the complete, in-depth picture of what's inside each temporal layer:
-
----
-
 # 🔬 Inside a Temporal Layer: Complete Architecture
 
 ## 📦 Layer Structure Overview
@@ -349,3 +343,331 @@ cd = residual + cd_ffn                          # Residual connection
 | **MoE Router** | "Which expert should handle this clinical pattern?" |
 | **Experts** | Specialized pattern processing (e.g., cardiac, diabetes, etc.) |
 | **Residual Connections** | Identity shortcuts for gradient flow |
+
+
+
+
+# Deep Dive: LayerNorm, Dropout, GELU, and SwiGLU
+## 1. Layer Normalization (LayerNorm)
+
+### What It Does
+LayerNorm normalizes the activations **across the feature dimension** for each sample independently, stabilizing training and enabling faster convergence.
+
+### Mathematical Formulation
+
+For an input vector $\mathbf{x} = [x_1, x_2, ..., x_d]$ where $d$ is the feature dimension (256 in this model):
+
+$$\text{LayerNorm}(\mathbf{x}) = \gamma \odot \frac{\mathbf{x} - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta$$
+
+Where:
+- **Mean**: $\mu = \frac{1}{d} \sum_{i=1}^{d} x_i$
+- **Variance**: $\sigma^2 = \frac{1}{d} \sum_{i=1}^{d} (x_i - \mu)^2$
+- $\gamma, \beta \in \mathbb{R}^d$ are **learnable** scale and shift parameters
+- $\epsilon \approx 10^{-5}$ prevents division by zero
+- $\odot$ denotes element-wise multiplication
+
+### Step-by-Step Example
+
+```
+Input: x = [2.0, 4.0, 6.0, 8.0]  (d=4)
+
+Step 1: Compute mean
+μ = (2 + 4 + 6 + 8) / 4 = 5.0
+
+Step 2: Compute variance
+σ² = [(2-5)² + (4-5)² + (6-5)² + (8-5)²] / 4
+   = [9 + 1 + 1 + 9] / 4 = 5.0
+
+Step 3: Normalize
+x_norm = (x - μ) / √(σ² + ε)
+       = [-3, -1, 1, 3] / √5.0
+       = [-1.34, -0.45, 0.45, 1.34]
+
+Step 4: Scale and shift (learned γ=1, β=0 initially)
+output = γ * x_norm + β = [-1.34, -0.45, 0.45, 1.34]
+```
+
+### Why Use LayerNorm?
+
+| Benefit | Explanation |
+|---------|-------------|
+| **Stable Gradients** | Prevents activations from exploding or vanishing |
+| **Faster Convergence** | Normalized inputs allow larger learning rates |
+| **Batch-Size Independent** | Works with any batch size (unlike BatchNorm) |
+| **Sequence-Friendly** | Each position normalized independently |
+
+### In This Model
+
+```python
+# Pre-norm architecture (GPT-style)
+x_norm = self.norm1(x)      # Normalize BEFORE attention
+attn_out = attention(x_norm)
+x = x + attn_out            # Residual with unnormalized x
+```
+
+---
+
+## 2. Dropout
+
+### What It Does
+Dropout **randomly zeros out** a fraction of neurons during training, preventing co-adaptation and acting as regularization.
+
+### Mathematical Formulation
+
+During **training** with dropout probability $p$:
+
+$$\text{Dropout}(\mathbf{x})_i = \begin{cases} 
+0 & \text{with probability } p \\
+\frac{x_i}{1-p} & \text{with probability } 1-p
+\end{cases}$$
+
+The scaling by $\frac{1}{1-p}$ ensures expected value remains unchanged:
+
+$$\mathbb{E}[\text{Dropout}(\mathbf{x})] = \mathbf{x}$$
+
+During **inference**: Dropout is disabled, output = input.
+
+### Step-by-Step Example
+
+```
+Training with p = 0.1 (10% dropout):
+
+Input:  x = [0.5, 0.8, 0.3, 0.6, 0.9]
+
+Step 1: Generate random mask (Bernoulli sampling)
+mask = [1, 0, 1, 1, 1]  (0 = drop, 1 = keep)
+
+Step 2: Apply mask and scale
+scale = 1 / (1 - 0.1) = 1.111
+
+output = x * mask * scale
+       = [0.5×1×1.111, 0.8×0×1.111, 0.3×1×1.111, 0.6×1×1.111, 0.9×1×1.111]
+       = [0.556, 0.0, 0.333, 0.667, 1.0]
+```
+
+### Why Use Dropout?
+
+| Benefit | Explanation |
+|---------|-------------|
+| **Prevents Overfitting** | Forces network to learn redundant representations |
+| **Ensemble Effect** | Training samples different "sub-networks" |
+| **Reduces Co-adaptation** | Neurons can't rely on specific other neurons |
+
+### In This Model
+
+```python
+self.dropout = nn.Dropout(0.1)  # 10% dropout
+
+# Applied after attention and FFN
+attn_output = self.out_proj(attn_output)
+attn_output = self.dropout(attn_output)  # ← Here
+x = x + attn_output
+```
+
+---
+
+## 3. GELU (Gaussian Error Linear Unit)
+
+### What It Does
+GELU is a **smooth, non-monotonic activation function** that applies a probabilistic gating based on the Gaussian distribution.
+
+### Mathematical Formulation
+
+**Exact form:**
+
+$$\text{GELU}(x) = x \cdot \Phi(x) = x \cdot \frac{1}{2}\left[1 + \text{erf}\left(\frac{x}{\sqrt{2}}\right)\right]$$
+
+Where $\Phi(x)$ is the CDF of standard normal distribution.
+
+**Fast approximation (used in practice):**
+
+$$\text{GELU}(x) \approx 0.5x\left(1 + \tanh\left[\sqrt{\frac{2}{\pi}}\left(x + 0.044715x^3\right)\right]\right)$$
+
+### Intuition
+
+GELU can be interpreted as:
+- **Probabilistic gating**: Each input has a probability of being "passed through"
+- **Smooth ReLU**: Unlike ReLU's hard cutoff at 0, GELU transitions smoothly
+- **Non-monotonic**: Can suppress small positive values (unlike ReLU)
+
+### Comparison with Other Activations
+
+| x value | ReLU | GELU | Interpretation |
+|---------|------|------|----------------|
+| -2.0 | 0.0 | -0.045 | GELU slightly negative |
+| -1.0 | 0.0 | -0.159 | GELU more negative |
+| 0.0 | 0.0 | 0.0 | Same at origin |
+| 0.5 | 0.5 | 0.345 | GELU suppresses small positives |
+| 1.0 | 1.0 | 0.841 | GELU slightly less |
+| 2.0 | 2.0 | 1.955 | Nearly linear for large x |
+
+### Visualization
+
+```
+        GELU vs ReLU
+  y │
+  2 │                    ╱ ReLU
+    │                  ╱
+  1 │              ╱ ╱ GELU
+    │          ╱ ╱
+  0 │─────────●───────────────
+    │      ╱   ╲
+ -1 │    ╱      ╲ (GELU dips below 0)
+    └──────────────────────── x
+     -2  -1   0   1   2
+```
+
+### Why GELU Over ReLU?
+
+| Property | ReLU | GELU |
+|----------|------|------|
+| Smooth | ❌ No (sharp corner at 0) | ✅ Yes (infinitely differentiable) |
+| Non-monotonic | ❌ No | ✅ Yes (can suppress small values) |
+| Gradient at 0 | Undefined | 0.5 |
+| "Dead neurons" | ❌ Yes (x<0 → gradient=0) | ✅ No (always has gradient) |
+
+GELU has shown empirically better performance in transformers (BERT, GPT).
+
+---
+
+## 4. SwiGLU (Swish-Gated Linear Unit)
+
+### What It Does
+SwiGLU is a **gated activation** that uses two parallel linear projections with element-wise gating, providing richer feature interactions.
+
+### Mathematical Formulation
+
+For input $\mathbf{x} \in \mathbb{R}^{d}$:
+
+$$\text{SwiGLU}(\mathbf{x}) = \text{Swish}(\mathbf{W}_{\text{gate}}\mathbf{x}) \odot (\mathbf{W}_{\text{up}}\mathbf{x})$$
+
+$$\text{Output} = \mathbf{W}_{\text{down}}[\text{SwiGLU}(\mathbf{x})]$$
+
+Where:
+- **Swish** (also called SiLU): $\text{Swish}(x) = x \cdot \sigma(x) = \frac{x}{1 + e^{-x}}$
+- $\mathbf{W}_{\text{gate}} \in \mathbb{R}^{d' \times d}$ — gate projection
+- $\mathbf{W}_{\text{up}} \in \mathbb{R}^{d' \times d}$ — value projection  
+- $\mathbf{W}_{\text{down}} \in \mathbb{R}^{d \times d'}$ — output projection
+- $\odot$ — element-wise multiplication (gating)
+
+### Step-by-Step Example
+
+```
+Input: x = [1.0, 2.0]  (d=2)
+Hidden: d' = 3
+
+W_gate = [[0.5, 0.3],    W_up = [[0.4, 0.2],
+          [0.2, 0.6],            [0.3, 0.5],
+          [0.4, 0.1]]            [0.1, 0.4]]
+
+Step 1: Gate projection
+gate_linear = W_gate @ x = [0.5×1+0.3×2, 0.2×1+0.6×2, 0.4×1+0.1×2]
+            = [1.1, 1.4, 0.6]
+
+Step 2: Apply Swish to gate
+Swish(1.1) = 1.1 × σ(1.1) = 1.1 × 0.75 = 0.825
+Swish(1.4) = 1.4 × σ(1.4) = 1.4 × 0.80 = 1.12
+Swish(0.6) = 0.6 × σ(0.6) = 0.6 × 0.65 = 0.39
+
+gate = [0.825, 1.12, 0.39]
+
+Step 3: Value projection
+up = W_up @ x = [0.4×1+0.2×2, 0.3×1+0.5×2, 0.1×1+0.4×2]
+   = [0.8, 1.3, 0.9]
+
+Step 4: Element-wise gating
+hidden = gate ⊙ up = [0.825×0.8, 1.12×1.3, 0.39×0.9]
+       = [0.66, 1.456, 0.351]
+
+Step 5: Down projection
+output = W_down @ hidden  (back to d=2)
+```
+
+### Code Implementation
+
+```python
+class SwiGLU(nn.Module):
+    def __init__(self, d_model, d_ff, dropout=0.0):
+        # Adjust for parameter equivalence with standard FFN
+        d_ff_adjusted = int((2 * d_ff) / 3)  # 512 → 341
+        
+        self.w_gate = nn.Linear(d_model, d_ff_adjusted, bias=False)
+        self.w_up = nn.Linear(d_model, d_ff_adjusted, bias=False)
+        self.w_down = nn.Linear(d_ff_adjusted, d_model, bias=False)
+    
+    def forward(self, x):
+        gate = F.silu(self.w_gate(x))  # Swish activation
+        up = self.w_up(x)
+        hidden = gate * up              # Element-wise gating
+        return self.w_down(hidden)
+```
+
+---
+
+## 5. GELU vs SwiGLU: Detailed Comparison
+
+### Architecture Difference
+
+```
+STANDARD FFN (with GELU):
+─────────────────────────
+x ──→ Linear(256→512) ──→ GELU ──→ Linear(512→256) ──→ output
+         W₁                           W₂
+
+SWIGLU FFN:
+───────────
+       ┌──→ Linear(256→341) ──→ Swish ──┐
+x ──→──┤                                 ├──→ ⊙ ──→ Linear(341→256) ──→ output
+       └──→ Linear(256→341) ─────────────┘
+            W_gate            W_up               W_down
+```
+
+### Mathematical Comparison
+
+| Aspect | Standard FFN + GELU | SwiGLU |
+|--------|---------------------|--------|
+| **Formula** | $\text{GELU}(\mathbf{W}_1\mathbf{x})\mathbf{W}_2$ | $\text{Swish}(\mathbf{W}_g\mathbf{x}) \odot (\mathbf{W}_u\mathbf{x})\mathbf{W}_d$ |
+| **Activation** | GELU (probabilistic gate) | Swish (smooth gate) |
+| **Gating** | Implicit (activation only) | Explicit (two projections) |
+| **Parameters** | $2 \times d \times d_{ff}$ | $3 \times d \times d'_{ff}$ |
+| **With equivalence** | $2 \times 256 \times 512 = 262k$ | $3 \times 256 \times 341 = 262k$ |
+
+### Why SwiGLU is Better
+
+1. **Richer Feature Interactions**
+   - Two separate projections learn different aspects
+   - Gating allows selective information flow
+   
+2. **Better Gradient Flow**
+   - Swish is smooth everywhere (unlike ReLU)
+   - Gating provides multiplicative gradients
+
+3. **Empirical Results** (from LLaMA, PaLM papers)
+   - 1-2% improvement in language modeling perplexity
+   - Better transfer learning performance
+
+### Gradient Comparison
+
+**GELU gradient:**
+$$\frac{\partial \text{GELU}}{\partial x} = \Phi(x) + x \cdot \phi(x)$$
+
+where $\phi(x)$ is the standard normal PDF.
+
+**Swish gradient:**
+$$\frac{\partial \text{Swish}}{\partial x} = \sigma(x) + x \cdot \sigma(x)(1 - \sigma(x)) = \sigma(x)(1 + x(1 - \sigma(x)))$$
+
+**SwiGLU gradient** (for the gating path):
+$$\frac{\partial}{\partial x}[\text{Swish}(g) \cdot u] = \text{Swish}'(g) \cdot u \cdot \frac{\partial g}{\partial x} + \text{Swish}(g) \cdot \frac{\partial u}{\partial x}$$
+
+The multiplicative term in SwiGLU provides **richer gradient signals**.
+
+---
+
+## 6. Summary Table
+
+| Component | Purpose | Key Equation | In This Model |
+|-----------|---------|--------------|---------------|
+| **LayerNorm** | Normalize activations | $\gamma \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta$ | Pre-norm at each sub-block |
+| **Dropout** | Regularization | $x_i \cdot \text{Bernoulli}(1-p) / (1-p)$ | 10% after attention & FFN |
+| **GELU** | Smooth activation | $x \cdot \Phi(x)$ | Standard FFN option |
+| **SwiGLU** | Gated activation | $\text{Swish}(W_g x) \odot (W_u x)$ | Advanced FFN option |
