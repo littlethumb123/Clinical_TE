@@ -1,7 +1,4 @@
-You are right to hate blind tuning. The goal is to turn “turn knobs and pray” into a disciplined workflow where every change is (a) motivated by a hypothesis about training dynamics, (b) validated with targeted measurements, and (c) reproducible.
-
-Below is a “zero-to-hero” handbook for transformer training and optimization. It is written to (1) teach the mental model (“why”), (2) give you the instrumentation and experiments (“how”), and (3) directly address your plateau pattern for a ~27M dense transformer with millions of training examples and ranking-style metrics.
-
+Jan 19, 2026
 ---
 
 # 1) The three-budget model: why plateaus happen at all

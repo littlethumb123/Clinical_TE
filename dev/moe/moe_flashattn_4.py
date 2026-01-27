@@ -347,7 +347,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[76]:
+# In[58]:
 
 
 @dataclass
@@ -504,7 +504,7 @@ class OptimizeConfig:
     
     # Tiered weighting configuration (when pos_weight_method='tiered')
     tier_weights: dict = None  # Will use default if None
-    
+    enable_gradient_tier_analysis: bool = False
     # Effective Number of Samples (when pos_weight_method='ens') optional, need tune on beta
     ens_beta: float = 0.9999              # Higher = more aggressive reweighting
     
@@ -533,7 +533,7 @@ class OptimizeConfig:
     
 
 
-# In[52]:
+# In[59]:
 
 
 def get_legacy_optimize_config() -> OptimizeConfig:
@@ -569,7 +569,7 @@ def get_legacy_optimize_config() -> OptimizeConfig:
     )
 
 
-# In[77]:
+# In[60]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -1016,7 +1016,7 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
 
 # ### Data parellelism
 
-# In[54]:
+# In[7]:
 
 
 class DataParallelWrapper(nn.Module):
@@ -1271,7 +1271,7 @@ print(f"Predictions shape: {extras['predictions'].shape}")
 
 # ### RPE and Swiglu
 
-# In[55]:
+# In[8]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -4945,9 +4945,283 @@ def create_optimizer(
     return optimizer, desc
 
 
+# #### Gradient tier inspection
+
+# In[77]:
+
+
+# ============================================================
+# GRADIENT TIER ANALYSIS
+# Follows same pattern as MoE metrics and router gradient logging
+# ============================================================
+class GradientTierAnalyzer:
+    """
+    Analyzes gradient contribution per code frequency tier.
+    
+    Purpose: Diagnose if rare/tail codes receive insufficient gradient signal
+    
+    Follows the same pattern as MoE metrics and router gradient tracking:
+    - log_batch() returns metrics dict (added to batch_entry)
+    - aggregate_epoch() returns summary (added to epoch_metrics)
+    - get_summary_for_results() returns data for final_results.json
+    
+    Usage in train_epoch:
+        analyzer = GradientTierAnalyzer(code_frequencies, device)
+        # After backward():
+        tier_metrics = analyzer.log_batch(model, batch_idx)
+        batch_entry.update(tier_metrics)  # Goes to batch_metrics.json
+        # At epoch end:
+        epoch_metrics.update(analyzer.aggregate_epoch())
+    """
+    
+    def __init__(
+        self,
+        code_frequencies: np.ndarray,
+        device: torch.device,
+        log_interval: int = 500
+    ):
+        self.device = device
+        self.log_interval = log_interval
+        self.num_codes = len(code_frequencies)
+        
+        # Build tier indices (same logic as compute_stratified_metrics)
+        freq_nz = code_frequencies[code_frequencies > 0]
+        if len(freq_nz) == 0:
+            raise ValueError("No non-zero frequencies found")
+        
+        percentiles = np.percentile(freq_nz, [20, 50, 80])
+        
+        # Create tier masks
+        self.tier_indices = {}
+        self.tier_sizes = {}
+        
+        # Common: above 80th percentile
+        common_mask = code_frequencies > percentiles[2]
+        self.tier_indices['common'] = torch.tensor(
+            np.where(common_mask)[0], dtype=torch.long
+        )
+        self.tier_sizes['common'] = int(common_mask.sum())
+        
+        # Medium: 50th to 80th percentile
+        medium_mask = (code_frequencies <= percentiles[2]) & (code_frequencies > percentiles[1])
+        self.tier_indices['medium'] = torch.tensor(
+            np.where(medium_mask)[0], dtype=torch.long
+        )
+        self.tier_sizes['medium'] = int(medium_mask.sum())
+        
+        # Rare: 20th to 50th percentile
+        rare_mask = (code_frequencies <= percentiles[1]) & (code_frequencies > percentiles[0])
+        self.tier_indices['rare'] = torch.tensor(
+            np.where(rare_mask)[0], dtype=torch.long
+        )
+        self.tier_sizes['rare'] = int(rare_mask.sum())
+        
+        # Tail: below 20th percentile (but > 0)
+        tail_mask = (code_frequencies <= percentiles[0]) & (code_frequencies > 0)
+        self.tier_indices['tail'] = torch.tensor(
+            np.where(tail_mask)[0], dtype=torch.long
+        )
+        self.tier_sizes['tail'] = int(tail_mask.sum())
+        
+        # Buffer for epoch aggregation (same pattern as moe_metrics_buffer)
+        self.batch_buffer = []
+        self.epoch_summaries = []
+        
+        print(f"  GradientTierAnalyzer initialized:")
+        print(f"    Common: {self.tier_sizes['common']} codes")
+        print(f"    Medium: {self.tier_sizes['medium']} codes")
+        print(f"    Rare:   {self.tier_sizes['rare']} codes")
+        print(f"    Tail:   {self.tier_sizes['tail']} codes")
+    
+    def _get_decoder_gradients(self, model: nn.Module) -> Optional[torch.Tensor]:
+        """Extract decoder_cd.weight gradients, handling DataParallel wrapping."""
+        actual_model = model
+        
+        # Unwrap DataParallel
+        if isinstance(model, nn.DataParallel):
+            actual_model = model.module
+        # Unwrap DataParallelWrapper
+        if hasattr(actual_model, 'model'):
+            actual_model = actual_model.model
+        
+        # Find decoder_cd
+        decoder = None
+        if hasattr(actual_model, 'decoder_cd'):
+            decoder = actual_model.decoder_cd
+        else:
+            for name, module in actual_model.named_modules():
+                if 'decoder_cd' in name and isinstance(module, nn.Linear):
+                    decoder = module
+                    break
+        
+        if decoder is None or decoder.weight.grad is None:
+            return None
+        
+        return decoder.weight.grad.detach()
+    
+    def log_batch(
+        self,
+        model: nn.Module,
+        batch_idx: int
+    ) -> Dict[str, float]:
+        """
+        Compute and return gradient tier metrics for this batch.
+        
+        Call AFTER backward() but BEFORE optimizer.step().
+        Returns dict with keys like 'grad_tier_common_frac', etc.
+        These can be added to batch_entry for batch_metrics.json.
+        
+        Returns empty dict if not at log interval or no gradients available.
+        """
+        if batch_idx % self.log_interval != 0:
+            return {}
+        
+        grad = self._get_decoder_gradients(model)
+        if grad is None:
+            return {}
+        
+        # Move to CPU for computation
+        grad_cpu = grad.cpu()
+        
+        # Per-code gradient norms: [num_codes]
+        per_code_norm = torch.norm(grad_cpu, dim=1)
+        total_norm = per_code_norm.sum().item()
+        
+        if total_norm < 1e-12:
+            return {}
+        
+        # Compute per-tier statistics
+        metrics = {}
+        for tier_name, indices in self.tier_indices.items():
+            if len(indices) == 0:
+                metrics[f'grad_tier_{tier_name}_frac'] = 0.0
+                metrics[f'grad_tier_{tier_name}_norm'] = 0.0
+                continue
+            
+            tier_norms = per_code_norm[indices]
+            tier_total = tier_norms.sum().item()
+            
+            metrics[f'grad_tier_{tier_name}_frac'] = tier_total / total_norm
+            metrics[f'grad_tier_{tier_name}_norm'] = tier_norms.mean().item()
+        
+        metrics['grad_tier_total_norm'] = total_norm
+        
+        # Add to buffer for epoch aggregation
+        self.batch_buffer.append(metrics)
+        
+        return metrics
+    
+    def aggregate_epoch(self) -> Dict[str, float]:
+        """
+        Aggregate batch metrics into epoch-level summary.
+        Call at end of epoch, returns dict for epoch_metrics.
+        Same pattern as MoE/router gradient aggregation.
+        """
+        if not self.batch_buffer:
+            return {}
+        
+        epoch_summary = {
+            'train_grad_tier_samples': len(self.batch_buffer)
+        }
+        
+        # Aggregate all numeric metrics
+        for key in self.batch_buffer[0].keys():
+            values = [m[key] for m in self.batch_buffer]
+            epoch_summary[f'train_{key}'] = np.mean(values)
+            epoch_summary[f'train_{key}_std'] = np.std(values)
+        
+        # Store for final results
+        self.epoch_summaries.append(epoch_summary)
+        
+        return epoch_summary
+    
+    def get_diagnosis(self) -> Dict[str, Any]:
+        """
+        Generate diagnosis dict for comprehensive_evaluation results.
+        """
+        if not self.epoch_summaries:
+            return {}
+        
+        latest = self.epoch_summaries[-1]
+        common_frac = latest.get('train_grad_tier_common_frac', 0.0)
+        tail_frac = latest.get('train_grad_tier_tail_frac', 0.0)
+        
+        diagnosis = {
+            'tier_sizes': self.tier_sizes,
+            'final_epoch_summary': latest,
+            'all_epoch_summaries': self.epoch_summaries,
+            'gradient_imbalance_ratio': common_frac / max(tail_frac, 1e-8),
+            'diagnosis': 'balanced'
+        }
+        
+        if common_frac > 0.8:
+            diagnosis['diagnosis'] = 'severe_starvation'
+            diagnosis['recommendation'] = 'Increase pos_weight_max significantly (200-500)'
+        elif common_frac > 0.6:
+            diagnosis['diagnosis'] = 'moderate_imbalance'
+            diagnosis['recommendation'] = 'Consider increasing pos_weight_max or using focal loss'
+        else:
+            diagnosis['diagnosis'] = 'balanced'
+            diagnosis['recommendation'] = 'Gradient distribution is healthy'
+        
+        return diagnosis
+    
+    def reset_epoch(self):
+        """Clear batch buffer for new epoch."""
+        self.batch_buffer = []
+    
+    def print_summary(self, epoch: int = 0, logger: Optional[logging.Logger] = None):
+        """Print formatted summary (same pattern as MoE health logging)."""
+        if not self.batch_buffer:
+            return
+        
+        # Compute current averages
+        common_frac = np.mean([m.get('grad_tier_common_frac', 0) for m in self.batch_buffer])
+        medium_frac = np.mean([m.get('grad_tier_medium_frac', 0) for m in self.batch_buffer])
+        rare_frac = np.mean([m.get('grad_tier_rare_frac', 0) for m in self.batch_buffer])
+        tail_frac = np.mean([m.get('grad_tier_tail_frac', 0) for m in self.batch_buffer])
+
+        zero_frac = 1.0 - (common_frac + medium_frac + rare_frac + tail_frac)
+        zero_codes = self.num_codes - sum(self.tier_sizes.values())        
+        
+        summary_msg = (
+            f"\n  📊 GRADIENT TIER ANALYSIS (Epoch {epoch + 1})\n"
+            f"  {'─' * 60}\n"
+            f"  {'Tier':<12} {'Codes':>8} {'Gradient Fraction':>20}\n"
+            f"  {'─' * 60}\n"
+            f"  {'Common':<12} {self.tier_sizes['common']:>8} {common_frac * 100:>19.1f}%\n"
+            f"  {'Medium':<12} {self.tier_sizes['medium']:>8} {medium_frac * 100:>19.1f}%\n"
+            f"  {'Rare':<12} {self.tier_sizes['rare']:>8} {rare_frac * 100:>19.1f}%\n"
+            f"  {'Tail':<12} {self.tier_sizes['tail']:>8} {tail_frac * 100:>19.1f}%\n"
+            f"  {'Zero-freq':<12} {zero_codes:>8} {zero_frac * 100:>19.1f}%\n"
+            f"  {'─' * 60}\n"
+            f"  {'TOTAL':<12} {self.num_codes:>8} {'100.0%':>20}\n"
+        )
+        
+        # Diagnosis
+        positive_frac = common_frac + medium_frac + rare_frac + tail_frac
+        common_of_positive = common_frac / max(positive_frac, 1e-8)
+
+        if zero_frac > 0.5:
+            summary_msg += f"\n  ⚠️  WARNING: {zero_frac*100:.1f}% of gradient goes to ZERO-FREQUENCY codes\n"
+            summary_msg += f"       These are codes that never appear in training - consider reducing target vocabulary\n"
+
+        if common_of_positive > 0.6:
+            summary_msg += f"  ⚠️  Among POSITIVE codes: Common receives {common_of_positive*100:.1f}% of positive-tier gradient\n"
+            summary_msg += f"       Tail receives only {tail_frac/max(positive_frac, 1e-8)*100:.1f}% - gradient starvation likely\n"
+        elif common_of_positive > 0.4:
+            summary_msg += f"  ⚡ MODERATE IMBALANCE among positive codes\n"
+        else:
+            summary_msg += f"  ✅ Gradient distribution among positive codes appears balanced\n"
+
+        print(summary_msg)
+        if logger:
+            logger.info(summary_msg)
+
+
 # #### Train epoch
 
-# In[24]:
+# In[78]:
 
 
 def _model_has_moe(model):
@@ -4980,7 +5254,8 @@ def train_epoch(
     track_gpu_memory: bool = True,
     metrics_logger: Optional['MetricsLogger'] = None,  # Batch-metrics logger
     logger: Optional[logging.Logger] = None,           # General training logger
-    optimize_config: Optional['OptimizeConfig'] = None 
+    optimize_config: Optional['OptimizeConfig'] = None,
+    gradient_tier_analyzer: Optional['GradientTierAnalyzer'] = None
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -5010,6 +5285,7 @@ def train_epoch(
     batch_metrics_buffer = []  
     moe_metrics_buffer = []
     router_grad_metrics_buffer = [] # track routing gradients stability
+    gradient_tier_buffer = []
     
     if loss_tracker is None:
         loss_tracker = LossTracker()    
@@ -5123,9 +5399,21 @@ def train_epoch(
         if should_track:
             gpu_tracker.record("3_after_backward")
 
+        # ============================================================
+        # STEP 5.1 GRADIENT TIER ANALYSIS (after backward, before optimizer step)
+        # Same pattern as router gradient monitoring
+        # ============================================================
+        if gradient_tier_analyzer is not None and is_main and batch_idx % log_interval == 0:
+            tier_metrics = gradient_tier_analyzer.log_batch(model, batch_idx)
+            if tier_metrics:
+                gradient_tier_buffer.append(tier_metrics)
+                # Keep buffer bounded (same as router_grad_metrics_buffer)
+                if len(gradient_tier_buffer) > 100:
+                    gradient_tier_buffer = gradient_tier_buffer[-100:]
+            
             
         # ============================================================
-        # ROUTER GRADIENT MONITORING (before optimizer.step)
+        # STEP 5.2 ROUTER GRADIENT MONITORING (before optimizer.step)
         # ============================================================
         if is_main and moe_config is not None and batch_idx % log_interval == 0:
             router_grad_metrics = compute_router_gradient_metrics(
@@ -5297,6 +5585,28 @@ def train_epoch(
                     if moe_batch_metrics['num_collapsed_experts'] > 0:
                         print(f" {moe_batch_metrics['num_collapsed_experts']} experts collapsed!")
                     del moe_losses_detached
+                    
+                # Gradient tier metrics (if available)
+                if gradient_tier_buffer:
+                    latest_tier = gradient_tier_buffer[-1]
+                    batch_entry.update({
+                        'grad_tier_common_frac': latest_tier.get('grad_tier_common_frac', 0.0),
+                        'grad_tier_medium_frac': latest_tier.get('grad_tier_medium_frac', 0.0),
+                        'grad_tier_rare_frac': latest_tier.get('grad_tier_rare_frac', 0.0),
+                        'grad_tier_tail_frac': latest_tier.get('grad_tier_tail_frac', 0.0),
+                        'grad_tier_total_norm': latest_tier.get('grad_tier_total_norm', 0.0),
+                    })
+                    
+                    # Log to console (compact format, same pattern as MoE logging)
+                    tier_log_msg = (
+                        f"    [GradTier] Common: {latest_tier.get('grad_tier_common_frac', 0)*100:.1f}% | "
+                        f"Tail: {latest_tier.get('grad_tier_tail_frac', 0)*100:.1f}%"
+                    )
+                    print(tier_log_msg)
+                    if logger:
+                        logger.debug(tier_log_msg)                    
+                    
+                    
                 if metrics_logger:
                     metrics_logger.log_batch(epoch=epoch, batch=batch_idx, metrics=batch_entry)
                     
@@ -5365,7 +5675,8 @@ def train_epoch(
         # Store final expert usage for comprehensive evaluation
         if 'expert_usage' in moe_losses:
             epoch_metrics['expert_usage'] = moe_losses['expert_usage']
-
+    
+    # Router gradients
     if router_grad_metrics_buffer:
         for key in router_grad_metrics_buffer[0].keys():
             if isinstance(router_grad_metrics_buffer[0][key], (int, float)):
@@ -5377,11 +5688,31 @@ def train_epoch(
             m.get('router_layers_healthy', 0) / max(m.get('router_layers_total', 1), 1) 
             for m in router_grad_metrics_buffer
         ])
-            
+    
+    # Aggregate gradient tier metrics
+    if gradient_tier_buffer:
+        for key in gradient_tier_buffer[0].keys():
+            if isinstance(gradient_tier_buffer[0][key], (int, float)):
+                epoch_metrics[f'train_{key}'] = np.mean([m[key] for m in gradient_tier_buffer])
+        
+        # Store summary for comprehensive evaluation
+        epoch_metrics['gradient_tier_common_frac_final'] = gradient_tier_buffer[-1].get('grad_tier_common_frac', 0)
+        epoch_metrics['gradient_tier_tail_frac_final'] = gradient_tier_buffer[-1].get('grad_tier_tail_frac', 0)
+    
+    # Print gradient tier summary if analyzer provided
+    if gradient_tier_analyzer is not None and is_main:
+        gradient_tier_analyzer.print_summary(epoch, logger)
+        
     # add global step 
     epoch_metrics['global_step'] = global_step
         
     return epoch_metrics
+
+
+# #### Bucketing batch sampler
+
+# In[66]:
+
 
 class BucketingBatchSampler:
     """
@@ -5499,7 +5830,7 @@ def create_bucketing_dataloader(
 
 # #### Validate
 
-# In[33]:
+# In[67]:
 
 
 def evaluate(
@@ -5826,7 +6157,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[26]:
+# In[28]:
 
 
 def save_checkpoint(
@@ -6391,7 +6722,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[27]:
+# In[29]:
 
 
 class MetricsLogger:
@@ -6521,7 +6852,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[28]:
+# In[30]:
 
 
 def compute_batch_metrics_lightweight(
@@ -6985,7 +7316,7 @@ def compute_router_gradient_metrics(
 
 # #### Resource metrics
 
-# In[29]:
+# In[31]:
 
 
 def compute_moe_performance_metrics(
@@ -7403,7 +7734,7 @@ def compute_training_time_metrics(
 
 # #### Primary functional metrics
 
-# In[30]:
+# In[32]:
 
 
 """
@@ -8035,7 +8366,7 @@ def compute_ablation_metrics(
 
 # #### Comprehensive evaluation metrics
 
-# In[31]:
+# In[43]:
 
 
 def comprehensive_evaluation(
@@ -8298,6 +8629,15 @@ def comprehensive_evaluation(
                 router_probs_history=[],
                 num_experts=moe_config.num_experts - moe_config.num_shared_experts
             )
+            
+    if current_train_metrics is not None:
+        grad_tier_data = {
+            'common_frac': current_train_metrics.get('gradient_tier_common_frac_final', None),
+            'tail_frac': current_train_metrics.get('gradient_tier_tail_frac_final', None),
+        }
+        if grad_tier_data['common_frac'] is not None:
+            evaluation['gradient_tier'] = grad_tier_data
+            
     # Final cleanup
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -8308,7 +8648,7 @@ def comprehensive_evaluation(
 
 # #### Streaming Metrics for evaluation
 
-# In[32]:
+# In[34]:
 
 
 from dataclasses import dataclass, field
@@ -8757,7 +9097,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Extract embedding for each member
 
-# In[34]:
+# In[36]:
 
 
 # ============================================================================
@@ -10194,7 +10534,7 @@ test_downstream_evaluator_with_real_data()
 
 # ### Save and load trained TE
 
-# In[35]:
+# In[73]:
 
 
 def generate_model_name(
@@ -10471,7 +10811,7 @@ def compute_code_frequencies(
 
 # #### Experiment run utils
 
-# In[36]:
+# In[44]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -10535,7 +10875,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[37]:
+# In[45]:
 
 
 # ============================================================================
@@ -11039,7 +11379,7 @@ def _build_final_results(
 
 # #### Run experimentation
 
-# In[38]:
+# In[79]:
 
 
 def run_single_experiment(
@@ -11277,7 +11617,19 @@ def run_single_experiment(
         start_epoch, global_step, best_val_loss = _resume_from_checkpoint(
             resume_from, model, optimizer, scheduler, scaler, device, logger
         )
-    
+
+    # ============================================================
+    # GRADIENT TIER ANALYSIS (optional diagnostic)
+    # ============================================================
+    gradient_tier_analyzer = None
+    if optimize_config and getattr(optimize_config, 'enable_gradient_tier_analysis', False):
+        gradient_tier_analyzer = GradientTierAnalyzer(
+            code_frequencies=code_frequencies,
+            device=device,
+            log_interval=log_metrics_every
+        )
+        logger.info("📊 Gradient Tier Analysis ENABLED")
+        
     # ============================================================
     # 6. TRAINING LOOP
     # ============================================================
@@ -11312,7 +11664,8 @@ def run_single_experiment(
             accumulation_steps=1,  # no gradient accumulation with DataParallel
             metrics_logger = metrics_logger,
             logger = logger,
-            optimize_config=optimize_config
+            optimize_config=optimize_config,
+            gradient_tier_analyzer=gradient_tier_analyzer
         )
         global_step = train_metrics['global_step']
         
@@ -11341,6 +11694,11 @@ def run_single_experiment(
                 'mrr': train_metrics.get('train_mrr', 0.0),
                 'positive_brier': train_metrics.get('train_positive_brier', 0.0),
             }
+        
+        # Reset gradient tier analyzer for next epoch
+        if gradient_tier_analyzer is not None:
+            gradient_tier_analyzer.aggregate_epoch()  # Store epoch summary
+            gradient_tier_analyzer.reset_epoch()
         
         # if this is the final epoch; then directly compute the omprehensive evaluation
         if epoch == epochs - 1:
@@ -11773,7 +12131,7 @@ test_run_single_experiment_with_downstream()
 
 # ### GPU usage tracking
 
-# In[39]:
+# In[40]:
 
 
 class GPUMemoryTracker:
@@ -11863,7 +12221,7 @@ class GPUMemoryTracker:
 
 # ### Memory management
 
-# In[40]:
+# In[41]:
 
 
 import torch
@@ -12162,7 +12520,7 @@ def cleanup_checkpoints_after_training(
 
 # ### Time and cost estimation
 
-# In[41]:
+# In[42]:
 
 
 import numpy as np
@@ -12342,6 +12700,8 @@ for n in [1, 2, 4]:
     print("Baseline", n, "GPU", h100_time_cost(12_000_000, 1, "flash_moe", n))
     print("Flash+MoE", n, "GPU:", h100_time_cost(12_000_000, 1, "flash_moe", n))
 
+
+# #### Test
 
 # In[28]:
 
@@ -14030,7 +14390,7 @@ results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-m
 
 # ### 3LOB training
 
-# In[62]:
+# In[49]:
 
 
 import google.auth
@@ -14438,17 +14798,17 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_20pct_sam
 input_data = client.query(input_sql).to_dataframe() 
 
 
-# In[42]:
+# In[51]:
 
 
 input_sql2 = """
 select * from
 edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sample
 """
-input_data2 = client.query(input_sql2).to_dataframe() 
+input_data = client.query(input_sql2).to_dataframe() 
 
 
-# In[64]:
+# In[52]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -14458,7 +14818,7 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[71]:
+# In[53]:
 
 
 ## Split training and validation dataset
@@ -14480,7 +14840,7 @@ train_df, val_df = train_test_split(
 df_unique.shape
 
 
-# In[84]:
+# In[54]:
 
 
 print(f"""1.5M d_cnt > 10 and 10% of the entire pop:
@@ -14493,24 +14853,24 @@ for lob in df_unique['lob'].unique():
     print(f"{lob:<15} {total_n:>11.2f} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
 
 
-# In[66]:
-
-
-print(f"{'LOB':<15} {'Total':>12} {'Original %':>12} {'Train %':>12} {'Val %':>12}")
-for lob in df_unique['lob'].unique():
-    total_n = (df_unique['lob'] == lob).sum()
-    orig_pct = (df_unique['lob'] == lob).mean() * 100
-    train_pct = (train_df['lob'] == lob).mean() * 100
-    val_pct = (val_df['lob'] == lob).mean() * 100
-    print(f"{lob:<15} {total_n:>11.2f} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
-
-
-# In[45]:
+# In[81]:
 
 
 data_prepared_1p5M = prepare_data_once(
     train_data=train_df,
     val_data=val_df,
+    device=device
+)
+
+
+# In[71]:
+
+
+train_df_sample = train_df.sample(640)
+val_df_sample = val_df.sample(320)
+data_prepared_1p5M_mini = prepare_data_once(
+    train_data=train_df_sample,
+    val_data=val_df_sample,
     device=device
 )
 
@@ -14621,12 +14981,11 @@ dense_baseline_results = run_single_experiment(
 
 # ##### Exp2 flash dense model
 
-# In[78]:
+# In[56]:
 
 
 # Get predefined experiment configs
 all_configs = get_experiment_configs()
-
 # Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
 EXP_NAME = 'exp2b_flash_learned_pool'
 moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
@@ -14634,10 +14993,10 @@ moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
 EPOCHS = 1  # Start small for testing
 EMBEDDING_SIZE = 256  # 256, 384, or 512
 # "exp_round5_1-5M_3lobs_pretrain_multi_gpu_test_v2"
-EXPERIMENT_ROUND = "exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
+EXPERIMENT_ROUND = "exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
 
 
-# In[79]:
+# In[70]:
 
 
 optimize_config = OptimizeConfig(
@@ -14649,10 +15008,11 @@ optimize_config = OptimizeConfig(
     min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
     use_pos_weight=True,            # Enable weighted BCE
     pos_weight_method='log_scaled',     # or 'log_scaled', 'ens', 'inverse'
-    pos_weight_max=35,   # Change from 50 to 35 to stablize the training
+    pos_weight_max=200,   # Change from 50 to 35 to stablize the training; in v3 change to 200 to increase neg weights
     use_focal_loss=False,
     focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
     focal_alpha=0.25,
+    enable_gradient_tier_analysis=True
 )
 
 
@@ -14662,7 +15022,7 @@ optimize_config = OptimizeConfig(
 # Remember to change batchsize back to 32 for flashattention 
 
 
-# In[80]:
+# In[82]:
 
 
 # cleanup_gpu_memory_hard()
@@ -14671,7 +15031,7 @@ exp2b_baseline_results = run_single_experiment(
     exp_name=EXP_NAME,
     moe_config=moe_config,
     use_learnt_att_pool=use_learnt_att_pool,
-    prepared_data = data_prepared,
+    prepared_data = data_prepared_1p5M,
     train_data=train_df,
     val_data=val_df,
     device=device,
@@ -14688,7 +15048,7 @@ exp2b_baseline_results = run_single_experiment(
 # In[ ]:
 
 
-
+v
 
 
 # ##### Exp2: Resuming comprehensive evaluation and model saving (legacy for exp2b_flash_learned_pool_fragile_v1)
