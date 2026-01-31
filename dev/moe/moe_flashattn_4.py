@@ -207,7 +207,7 @@ import pandas as pd
 df_train.columns
 
 
-# In[1]:
+# In[3]:
 
 
 """
@@ -254,7 +254,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[2]:
+# In[4]:
 
 
 # import for downstream evaluation
@@ -280,7 +280,7 @@ from datetime import datetime
 
 # ### Configurations
 
-# In[3]:
+# In[10]:
 
 
 # ============================================================================
@@ -347,7 +347,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[58]:
+# In[53]:
 
 
 @dataclass
@@ -530,10 +530,19 @@ class OptimizeConfig:
     override_weight_decay: Optional[float] = None # Override weight_decay (0 for legacy SGD)
     override_gradient_clip: Optional[float] = None # Override gradient clip (0.25 for legacy)    
     
+    # ============================================================
+    # TIER-AWARE BATCHING (NEW)
+    # Purpose: Guarantee minimum medium/rare/tail samples per batch
+    # to prevent gradient starvation for rare codes.
+    # ============================================================
+    use_tier_aware_batching: bool = False   # Enable tier-aware batch sampler
+    tier_medium_quota: int = 0              # Min members with medium codes per batch
+    tier_rare_quota: int = 8                # Min members with rare codes per batch
+    tier_tail_quota: int = 10               # Min members with tail codes per batch    
     
 
 
-# In[59]:
+# In[12]:
 
 
 def get_legacy_optimize_config() -> OptimizeConfig:
@@ -569,7 +578,7 @@ def get_legacy_optimize_config() -> OptimizeConfig:
     )
 
 
-# In[60]:
+# In[13]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -1016,7 +1025,7 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
 
 # ### Data parellelism
 
-# In[7]:
+# In[14]:
 
 
 class DataParallelWrapper(nn.Module):
@@ -1271,7 +1280,7 @@ print(f"Predictions shape: {extras['predictions'].shape}")
 
 # ### RPE and Swiglu
 
-# In[8]:
+# In[15]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -1429,7 +1438,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[9]:
+# In[16]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1695,7 +1704,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[10]:
+# In[17]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1796,7 +1805,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[11]:
+# In[18]:
 
 
 # ============================================================================
@@ -2243,7 +2252,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[12]:
+# In[19]:
 
 
 # ============================================================================
@@ -2424,7 +2433,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[13]:
+# In[20]:
 
 
 # ============================================================================
@@ -2647,7 +2656,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[14]:
+# In[21]:
 
 
 # ============================================================================
@@ -3127,7 +3136,7 @@ test_model_forward_with_lob()
 
 # #### Preprocess data with data loader
 
-# In[15]:
+# In[22]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -3218,7 +3227,7 @@ class PreparedData:
                 f"code_frequencies_shape={self.code_frequencies.shape})")
 
 
-# In[16]:
+# In[23]:
 
 
 from functools import partial
@@ -3355,7 +3364,7 @@ print(f"dt_cnt type: {type(batch['dt_cnt'])}")  # Should be torch.Tensor
 
 # #### Data preparation
 
-# In[17]:
+# In[24]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -3632,7 +3641,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function (Legacy, used only in test)
 
-# In[18]:
+# In[25]:
 
 
 def compute_loss(
@@ -4269,7 +4278,7 @@ class FocalLoss(nn.Module):
 
 # #### Weighted loss function(weighted + Focal loss)
 
-# In[19]:
+# In[26]:
 
 
 # ============================================================
@@ -4535,7 +4544,7 @@ def create_criterion(
 
 # #### Loss logger
 
-# In[20]:
+# In[27]:
 
 
 class LossTracker:
@@ -4659,7 +4668,7 @@ class LossTracker:
         return recent_worse
 
 
-# In[21]:
+# In[28]:
 
 
 class ValidationTracker:
@@ -4695,7 +4704,7 @@ class ValidationTracker:
 
 # #### Optimizer
 
-# In[22]:
+# In[29]:
 
 
 import math
@@ -4872,7 +4881,7 @@ def create_scheduler(
     return scheduler, desc
 
 
-# In[23]:
+# In[30]:
 
 
 def create_optimizer(
@@ -4947,7 +4956,7 @@ def create_optimizer(
 
 # #### Gradient tier inspection
 
-# In[77]:
+# In[31]:
 
 
 # ============================================================
@@ -5221,7 +5230,7 @@ class GradientTierAnalyzer:
 
 # #### Train epoch
 
-# In[78]:
+# In[32]:
 
 
 def _model_has_moe(model):
@@ -5709,9 +5718,584 @@ def train_epoch(
     return epoch_metrics
 
 
+# #### Tier-aware batch sampler
+
+# In[34]:
+
+
+from torch.utils.data import Sampler, Dataset, DataLoader
+from typing import Dict, List, Iterator, Optional, Tuple, Union, Any
+from collections import defaultdict
+import random
+class TierAwareBatchSampler(Sampler):
+    """
+    Batch sampler that guarantees minimum representation of medium/rare/tail codes.
+    
+    Strategy (member-level sampling with code-tier awareness):
+    1. Pre-compute which MEMBERS (samples) contain medium/rare/tail positive codes
+    2. Each batch draws MEMBERS from tier-specific pools:
+       - `medium_quota` members that have at least one medium-tier code
+       - `rare_quota` members that have at least one rare-tier code
+       - `tail_quota` members that have at least one tail-tier code
+       - Remaining members from general pool
+    
+    Key insight: The training unit is the member, but we categorize members by the
+    frequency tier of the codes they contain. A member with a tail code guarantees
+    that tail code will receive gradient signal in that batch.
+    
+    This ensures consistent gradient signal for rare/tail codes EVERY batch,
+    preventing the gradient concentration collapse observed in experiments.
+    
+    Compatible with:
+    - BaselineTransformer (exp1)
+    - FlashAttentionTransformer (exp2)
+    - FlashMoETransformer (exp6)
+    
+    Usage:
+        sampler = TierAwareBatchSampler(
+            dataset=train_dataset,
+            code_frequencies=prepared_data.code_frequencies,
+            batch_size=64,
+            medium_quota=4,  # At least 4 members with medium codes per batch
+            rare_quota=8,    # At least 8 members with rare codes per batch
+            tail_quota=10,   # At least 10 members with tail codes per batch
+            shuffle=True
+        )
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=sampler,
+            collate_fn=create_collate_fn(config),
+            num_workers=4
+        )
+    """
+    
+    def __init__(
+        self,
+        dataset: Dataset,
+        code_frequencies: np.ndarray,
+        batch_size: int,
+        medium_quota: int = 0,
+        rare_quota: int = 4,
+        tail_quota: int = 4,
+        shuffle: bool = True,
+        drop_last: bool = True,
+        percentile_boundaries: Tuple[float, float, float] = (20, 50, 80),
+        verbose: bool = True
+    ):
+        """
+        Args:
+            dataset: ClinicalDataset with targets
+            code_frequencies: Array of code occurrence counts
+            batch_size: Total batch size
+            medium_quota: Minimum members with medium code positives per batch
+            rare_quota: Minimum members with rare code positives per batch
+            tail_quota: Minimum members with tail code positives per batch
+            shuffle: Whether to shuffle within each pool
+            drop_last: Whether to drop the last incomplete batch
+            percentile_boundaries: (tail_thresh, rare_thresh, medium_thresh)
+                                   E.g., (20, 50, 80) means:
+                                   - Tail: freq <= 20th percentile
+                                   - Rare: 20th < freq <= 50th percentile
+                                   - Medium: 50th < freq <= 80th percentile
+                                   - Common: freq > 80th percentile
+            verbose: Print initialization statistics
+        """
+        super().__init__(dataset)
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.medium_quota = medium_quota
+        self.rare_quota = rare_quota
+        self.tail_quota = tail_quota
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.num_samples = len(dataset)
+        
+        # Validate quotas
+        total_quota = medium_quota + rare_quota + tail_quota
+        assert total_quota <= batch_size, \
+            f"Combined quotas ({total_quota}) exceed batch_size ({batch_size})"
+        
+        # Build tier code indices
+        self._build_tier_indices(code_frequencies, percentile_boundaries)
+        
+        # Build sample-to-tier mapping (optimized for large datasets)
+        self._build_sample_tier_mapping(verbose)
+        
+        # Calculate number of batches
+        self._calculate_num_batches()
+    
+    def _build_tier_indices(
+        self,
+        code_frequencies: np.ndarray,
+        percentile_boundaries: Tuple[float, float, float]
+    ):
+        """Build tier code index sets based on frequency percentiles."""
+        freq_nz = code_frequencies[code_frequencies > 0]
+        if len(freq_nz) == 0:
+            raise ValueError("No non-zero frequencies found in code_frequencies")
+        
+        percentiles = np.percentile(freq_nz, list(percentile_boundaries))
+        self.tier_code_indices = {}
+        
+        # Common: above 80th percentile
+        self.tier_code_indices['common'] = set(
+            np.where(code_frequencies > percentiles[2])[0]
+        )
+        
+        # Medium: 50th to 80th percentile
+        self.tier_code_indices['medium'] = set(
+            np.where((code_frequencies <= percentiles[2]) & 
+                     (code_frequencies > percentiles[1]))[0]
+        )
+        
+        # Rare: 20th to 50th percentile
+        self.tier_code_indices['rare'] = set(
+            np.where((code_frequencies <= percentiles[1]) & 
+                     (code_frequencies > percentiles[0]))[0]
+        )
+        
+        # Tail: below 20th percentile (but > 0)
+        self.tier_code_indices['tail'] = set(
+            np.where((code_frequencies <= percentiles[0]) & 
+                     (code_frequencies > 0))[0]
+        )
+        
+        self.tier_thresholds = {
+            'tail_upper': percentiles[0],
+            'rare_upper': percentiles[1],
+            'medium_upper': percentiles[2]
+        }
+    
+    def _build_sample_tier_mapping(self, verbose: bool):
+        """
+        Pre-compute which members (samples) contain medium/rare/tail positive codes.
+        
+        This is done ONCE during initialization for efficiency.
+        Optimized to avoid repeated dataset access for large datasets.
+        """
+        # Members that have at least one code from each tier
+        self.samples_with_medium = []
+        self.samples_with_rare = []
+        self.samples_with_tail = []
+        # General pool includes ALL samples (overlaps are OK - handled in __iter__)
+        self.general_samples = list(range(self.num_samples))
+        
+        medium_codes = self.tier_code_indices['medium']
+        rare_codes = self.tier_code_indices['rare']
+        tail_codes = self.tier_code_indices['tail']
+        
+        if verbose:
+            print(f"TierAwareBatchSampler: Building member-tier mapping for {self.num_samples:,} members...")
+            print(f"  Tier code counts: medium={len(medium_codes)}, rare={len(rare_codes)}, tail={len(tail_codes)}")
+        
+        # Access targets directly from dataset for efficiency
+        # ClinicalDataset stores targets as self.targets: List[List[List[int]]]
+        targets_list = self.dataset.targets
+        
+        for idx in range(self.num_samples):
+            if verbose and idx > 0 and idx % 500000 == 0:
+                print(f"    Processed {idx:,}/{self.num_samples:,} members...")
+            
+            # Get target codes for this member
+            # targets is List[List[int]] where each inner list is codes for one day
+            target_list = targets_list[idx]
+            
+            # Flatten all positive codes for this member
+            all_positive_codes = set()
+            for day_codes in target_list:
+                if day_codes:  # Non-empty day
+                    all_positive_codes.update(day_codes)
+            
+            # Check tier membership - a member can be in multiple tier pools
+            if all_positive_codes & medium_codes:
+                self.samples_with_medium.append(idx)
+            if all_positive_codes & rare_codes:
+                self.samples_with_rare.append(idx)
+            if all_positive_codes & tail_codes:
+                self.samples_with_tail.append(idx)
+        
+        if verbose:
+            print(f"  ✅ Members with medium codes: {len(self.samples_with_medium):,} "
+                  f"({len(self.samples_with_medium)/self.num_samples:.1%})")
+            print(f"  ✅ Members with rare codes: {len(self.samples_with_rare):,} "
+                  f"({len(self.samples_with_rare)/self.num_samples:.1%})")
+            print(f"  ✅ Members with tail codes: {len(self.samples_with_tail):,} "
+                  f"({len(self.samples_with_tail)/self.num_samples:.1%})")
+            
+            # Warn if quotas may not be satisfiable
+            if self.medium_quota > 0 and len(self.samples_with_medium) < self.medium_quota * 10:
+                print(f"  ⚠️ Warning: Few members with medium codes. May need to reduce medium_quota.")
+            if len(self.samples_with_rare) < self.rare_quota * 10:
+                print(f"  ⚠️ Warning: Few members with rare codes. May need to reduce rare_quota.")
+            if len(self.samples_with_tail) < self.tail_quota * 10:
+                print(f"  ⚠️ Warning: Few members with tail codes. May need to reduce tail_quota.")
+    
+    def _calculate_num_batches(self):
+        """Calculate number of batches per epoch."""
+        if self.drop_last:
+            self.num_batches = self.num_samples // self.batch_size
+        else:
+            self.num_batches = (self.num_samples + self.batch_size - 1) // self.batch_size
+    
+    def __iter__(self) -> Iterator[List[int]]:
+        """Generate batches with guaranteed tier representation."""
+        # Copy and optionally shuffle pools
+        if self.shuffle:
+            medium_pool = self.samples_with_medium.copy()
+            rare_pool = self.samples_with_rare.copy()
+            tail_pool = self.samples_with_tail.copy()
+            general_pool = self.general_samples.copy()
+            random.shuffle(medium_pool)
+            random.shuffle(rare_pool)
+            random.shuffle(tail_pool)
+            random.shuffle(general_pool)
+        else:
+            medium_pool = self.samples_with_medium.copy()
+            rare_pool = self.samples_with_rare.copy()
+            tail_pool = self.samples_with_tail.copy()
+            general_pool = self.general_samples.copy()
+        
+        # Track used samples to avoid duplicates within epoch
+        used_samples = set()
+        medium_idx = 0
+        rare_idx = 0
+        tail_idx = 0
+        general_idx = 0
+        
+        batches_yielded = 0
+        
+        while batches_yielded < self.num_batches:
+            batch = []
+            
+            # 1. Add medium quota (if > 0)
+            if self.medium_quota > 0:
+                medium_added = 0
+                while medium_added < self.medium_quota and medium_idx < len(medium_pool):
+                    sample_idx = medium_pool[medium_idx]
+                    medium_idx += 1
+                    if sample_idx not in used_samples:
+                        batch.append(sample_idx)
+                        used_samples.add(sample_idx)
+                        medium_added += 1
+            
+            # 2. Add rare quota
+            rare_added = 0
+            while rare_added < self.rare_quota and rare_idx < len(rare_pool):
+                sample_idx = rare_pool[rare_idx]
+                rare_idx += 1
+                if sample_idx not in used_samples:
+                    batch.append(sample_idx)
+                    used_samples.add(sample_idx)
+                    rare_added += 1
+            
+            # 3. Add tail quota
+            tail_added = 0
+            while tail_added < self.tail_quota and tail_idx < len(tail_pool):
+                sample_idx = tail_pool[tail_idx]
+                tail_idx += 1
+                if sample_idx not in used_samples:
+                    batch.append(sample_idx)
+                    used_samples.add(sample_idx)
+                    tail_added += 1
+            
+            # 4. Fill remainder from general pool
+            remaining = self.batch_size - len(batch)
+            while remaining > 0 and general_idx < len(general_pool):
+                sample_idx = general_pool[general_idx]
+                general_idx += 1
+                if sample_idx not in used_samples:
+                    batch.append(sample_idx)
+                    used_samples.add(sample_idx)
+                    remaining -= 1
+            
+            # Handle pool exhaustion - reset with reshuffling
+            if self.medium_quota > 0 and medium_idx >= len(medium_pool):
+                medium_pool = self.samples_with_medium.copy()
+                if self.shuffle:
+                    random.shuffle(medium_pool)
+                medium_idx = 0
+            
+            if rare_idx >= len(rare_pool):
+                rare_pool = self.samples_with_rare.copy()
+                if self.shuffle:
+                    random.shuffle(rare_pool)
+                rare_idx = 0
+            
+            if tail_idx >= len(tail_pool):
+                tail_pool = self.samples_with_tail.copy()
+                if self.shuffle:
+                    random.shuffle(tail_pool)
+                tail_idx = 0
+            
+            if general_idx >= len(general_pool):
+                general_pool = self.general_samples.copy()
+                if self.shuffle:
+                    random.shuffle(general_pool)
+                general_idx = 0
+                # Reset used_samples when general pool exhausted (epoch boundary)
+                used_samples.clear()
+            
+            # Yield batch if it meets size requirements
+            if len(batch) >= self.batch_size or (not self.drop_last and len(batch) > 0):
+                if self.shuffle:
+                    random.shuffle(batch)  # Shuffle within batch to avoid ordering bias
+                yield batch[:self.batch_size]
+                batches_yielded += 1
+    
+    def __len__(self) -> int:
+        return self.num_batches
+
+
+# In[51]:
+
+
+def create_tier_aware_dataloader(
+    dataset: Dataset,
+    code_frequencies: np.ndarray,
+    config,  # BaseConfig or subclass
+    medium_quota: int = 0,
+    rare_quota: int = 4,
+    tail_quota: int = 4,
+    num_workers: Optional[int] = None,
+    collate_fn = None,
+    verbose: bool = True
+) -> DataLoader:
+    """
+    Factory function to create a DataLoader with tier-aware batching.
+    
+    Drop-in replacement for standard DataLoader creation.
+    
+    Args:
+        dataset: ClinicalDataset
+        code_frequencies: From prepared_data.code_frequencies
+        config: Model config with batch_size
+        medium_quota: Min members with medium codes per batch (default 0)
+        rare_quota: Min members with rare codes per batch
+        tail_quota: Min members with tail codes per batch
+        num_workers: Number of data loading workers (default: auto-detect)
+        collate_fn: Custom collate function (create_collate_fn(config))
+        verbose: Print initialization statistics
+    
+    Returns:
+        DataLoader with tier-aware batching
+    
+    Usage:
+        train_loader = create_tier_aware_dataloader(
+            dataset=prepared_data.train_dataset,
+            code_frequencies=prepared_data.code_frequencies,
+            config=config,
+            medium_quota=4,  # Include medium codes if desired
+            rare_quota=8,    # For 3.4M model: aggressive rare quota
+            tail_quota=10,   # For 3.4M model: aggressive tail quota
+            collate_fn=create_collate_fn(config)
+        )
+    """
+    # Import create_collate_fn if needed
+    if collate_fn is None:
+        try:
+            from moe_flashattn_4_core import create_collate_fn
+            collate_fn = create_collate_fn(config)
+        except ImportError:
+            raise ValueError("collate_fn must be provided if moe_flashattn_4_core is not available")
+    
+    # Auto-detect workers matching existing _create_dataloaders pattern
+    if num_workers is None:
+        num_workers = min(4, os.cpu_count() // 4) if os.cpu_count() else 2
+    
+    sampler = TierAwareBatchSampler(
+        dataset=dataset,
+        code_frequencies=code_frequencies,
+        batch_size=config.batch_size,
+        medium_quota=medium_quota,
+        rare_quota=rare_quota,
+        tail_quota=tail_quota,
+        shuffle=True,
+        drop_last=True,
+        verbose=verbose
+    )
+    
+    # Match existing DataLoader configuration from _create_dataloaders
+    loader = DataLoader(
+        dataset,
+        batch_sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=True,
+        collate_fn=collate_fn,
+        persistent_workers=False  # Match moe_flashattn_4.py pattern
+    )
+    
+    if verbose:
+        print(f"\n✅ Created tier-aware DataLoader:")
+        print(f"   Batch size: {config.batch_size}")
+        if medium_quota > 0:
+            print(f"   Medium quota: {medium_quota} members/batch")
+        print(f"   Rare quota: {rare_quota} members/batch")
+        print(f"   Tail quota: {tail_quota} members/batch")
+        print(f"   Total batches: {len(sampler):,}")
+        print(f"   Workers: {num_workers}")
+    
+    return loader
+
+
+# ============================================================
+# INTEGRATION: Modified _create_dataloaders function
+# ============================================================
+# This function extends the existing _create_dataloaders from moe_flashattn_4.py
+# to support tier-aware batching as an additional option.
+
+def _create_dataloaders_with_tier_aware(
+    train_data: Union[pd.DataFrame, Dataset],
+    val_data: Union[pd.DataFrame, Dataset],
+    config,  # BaseConfig or subclass
+    code_frequencies: np.ndarray,
+    use_tier_aware: bool = True,
+    medium_quota: int = 0,
+    rare_quota: int = 4,
+    tail_quota: int = 4,
+    use_bucketing: bool = False,  # Mutually exclusive with tier_aware
+    train_data_df: Optional[pd.DataFrame] = None,
+    world_size: int = 1,
+    logger: Optional[logging.Logger] = None
+) -> Tuple[DataLoader, DataLoader]:
+    """
+    Create train and validation DataLoaders with optional tier-aware batching.
+    
+    This extends the existing _create_dataloaders function from moe_flashattn_4.py
+    to support tier-aware batching as an additional option.
+    
+    Args:
+        train_data: Training dataset (ClinicalDataset or DataFrame)
+        val_data: Validation dataset (ClinicalDataset or DataFrame)
+        config: Model configuration with batch_size
+        code_frequencies: Code frequency array for tier computation
+        use_tier_aware: Whether to use tier-aware batching
+        medium_quota: Min medium members per batch (if tier_aware)
+        rare_quota: Min rare members per batch (if tier_aware)
+        tail_quota: Min tail members per batch (if tier_aware)
+        use_bucketing: Whether to use bucketing (mutually exclusive with tier_aware)
+        train_data_df: Original DataFrame (required for bucketing if train_data is Dataset)
+        world_size: Number of distributed processes (unused, for future DDP support)
+        logger: Optional logger
+    
+    Returns:
+        (train_loader, val_loader)
+    """
+    # Import dependencies - handle both standalone and integrated usage
+    try:
+        from moe_flashattn_4_core import ClinicalDataset, create_collate_fn
+    except ImportError:
+        # Fallback for integrated usage
+        pass
+    
+    # Handle both Dataset and DataFrame inputs for backward compatibility
+    def is_dataset(obj):
+        """Check if object is a Dataset (duck-typing for Jupyter compatibility)."""
+        return hasattr(obj, '__getitem__') and hasattr(obj, '__len__') and not isinstance(obj, pd.DataFrame)
+    
+    if is_dataset(train_data):
+        train_dataset = train_data
+    else:
+        train_dataset = ClinicalDataset(train_data, config)
+        train_data_df = train_data  # Save for bucketing
+    
+    if is_dataset(val_data):
+        val_dataset = val_data
+    else:
+        val_dataset = ClinicalDataset(val_data, config)
+    
+    n_workers = min(4, os.cpu_count() // 4) if os.cpu_count() else 2
+    collate_fn = create_collate_fn(config)
+    
+    # ========================================
+    # TRAINING LOADER
+    # ========================================
+    if use_tier_aware and not use_bucketing:
+        if logger:
+            logger.info(f"Using TIER-AWARE batching (medium={medium_quota}, rare={rare_quota}, tail={tail_quota})")
+        else:
+            print(f"Using TIER-AWARE batching (medium={medium_quota}, rare={rare_quota}, tail={tail_quota})")
+        
+        train_loader = create_tier_aware_dataloader(
+            dataset=train_dataset,
+            code_frequencies=code_frequencies,
+            config=config,
+            medium_quota=medium_quota,
+            rare_quota=rare_quota,
+            tail_quota=tail_quota,
+            num_workers=n_workers,
+            collate_fn=collate_fn,
+            verbose=True
+        )
+    
+    elif use_bucketing and not use_tier_aware:
+        if logger:
+            logger.info("Using BUCKETING batch sampler")
+        
+        if train_data_df is None:
+            raise ValueError("train_data_df is required when use_bucketing=True and train_data is a Dataset")
+        
+        # Import BucketingBatchSampler from the main module
+        try:
+            from moe_flashattn_4 import BucketingBatchSampler
+        except ImportError:
+            raise ImportError("BucketingBatchSampler not available. Use tier-aware batching or provide train_data_df.")
+        
+        train_batch_sampler = BucketingBatchSampler(
+            data=train_data_df,
+            batch_size=config.batch_size,
+            shuffle=True
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_batch_sampler,
+            num_workers=n_workers,
+            pin_memory=True,
+            collate_fn=collate_fn,
+            persistent_workers=False
+        )
+    
+    else:
+        if logger:
+            logger.info("Using STANDARD DataLoader (no special batching)")
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=n_workers,
+            pin_memory=True,
+            drop_last=True,
+            collate_fn=collate_fn,
+            persistent_workers=False
+        )
+    
+    # ========================================
+    # VALIDATION LOADER (always standard)
+    # ========================================
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=n_workers,
+        pin_memory=True,
+        collate_fn=collate_fn
+    )
+    
+    if logger:
+        logger.info(f"Train loader: {len(train_loader):,} batches")
+        logger.info(f"Val loader: {len(val_loader):,} batches")
+        logger.info(f"Using DataLoader with {n_workers} workers.")
+    else:
+        print(f"Train loader: {len(train_loader):,} batches")
+        print(f"Val loader: {len(val_loader):,} batches")
+    
+    return train_loader, val_loader
+
+
 # #### Bucketing batch sampler
 
-# In[66]:
+# In[35]:
 
 
 class BucketingBatchSampler:
@@ -5830,7 +6414,7 @@ def create_bucketing_dataloader(
 
 # #### Validate
 
-# In[67]:
+# In[50]:
 
 
 def evaluate(
@@ -6157,7 +6741,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[28]:
+# In[37]:
 
 
 def save_checkpoint(
@@ -6722,7 +7306,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[29]:
+# In[38]:
 
 
 class MetricsLogger:
@@ -6852,7 +7436,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[30]:
+# In[39]:
 
 
 def compute_batch_metrics_lightweight(
@@ -7316,7 +7900,7 @@ def compute_router_gradient_metrics(
 
 # #### Resource metrics
 
-# In[31]:
+# In[40]:
 
 
 def compute_moe_performance_metrics(
@@ -7734,7 +8318,7 @@ def compute_training_time_metrics(
 
 # #### Primary functional metrics
 
-# In[32]:
+# In[41]:
 
 
 """
@@ -8366,7 +8950,7 @@ def compute_ablation_metrics(
 
 # #### Comprehensive evaluation metrics
 
-# In[43]:
+# In[42]:
 
 
 def comprehensive_evaluation(
@@ -8648,7 +9232,7 @@ def comprehensive_evaluation(
 
 # #### Streaming Metrics for evaluation
 
-# In[34]:
+# In[43]:
 
 
 from dataclasses import dataclass, field
@@ -9097,7 +9681,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Extract embedding for each member
 
-# In[36]:
+# In[44]:
 
 
 # ============================================================================
@@ -9341,7 +9925,7 @@ test_embedding_extractor()
 
 # ### Downstream Evaluation
 
-# In[25]:
+# In[45]:
 
 
 import xgboost as xgb
@@ -9350,7 +9934,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from dataclasses import dataclass, field
 
 
-# In[26]:
+# In[46]:
 
 
 # ============================================================================
@@ -9900,7 +10484,7 @@ class DownstreamEvaluator:
 
 
 
-# In[147]:
+# In[47]:
 
 
 def run_downstream_evaluation(
@@ -10093,7 +10677,7 @@ def run_downstream_evaluation_from_saved_model(
     return results
 
 
-# In[28]:
+# In[48]:
 
 
 @dataclass
@@ -10534,7 +11118,7 @@ test_downstream_evaluator_with_real_data()
 
 # ### Save and load trained TE
 
-# In[73]:
+# In[49]:
 
 
 def generate_model_name(
@@ -10875,7 +11459,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[45]:
+# In[55]:
 
 
 # ============================================================================
@@ -11124,7 +11708,11 @@ def _create_dataloaders(
     use_bucketing: bool,
     train_data_df: Optional[pd.DataFrame] = None,  # Needed for bucketing sampler
     world_size: int = 1,
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    # Add tier_aware batching for imbalance issue
+    optimize_config: Optional[OptimizeConfig] = None,
+    code_frequencies: Optional[np.ndarray] = None
+    
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation dataloaders.
@@ -11137,7 +11725,12 @@ def _create_dataloaders(
         train_data_df: Original DataFrame (required for bucketing if train_data is Dataset)
         world_size: Number of distributed processes
         logger: Optional logger
-    
+        use_tier_aware: Whether to use tier-aware batching
+        code_frequencies: Code frequency array (required if use_tier_aware=True)
+        medium_quota: Min members with medium codes per batch
+        rare_quota: Min members with rare codes per batch
+        tail_quota: Min members with tail codes per batch
+        
     Returns:
         (train_loader, val_loader)
     """
@@ -11160,7 +11753,41 @@ def _create_dataloaders(
     n_workers = min(4, os.cpu_count() // 4)
     collate_fn = create_collate_fn(config)
     
-    if use_bucketing:
+    use_tier_aware = (
+        optimize_config is not None and 
+        optimize_config.use_tier_aware_batching
+    )
+    
+    if use_tier_aware:
+        if code_frequencies is None:
+            raise ValueError("code_frequencies required when use_tier_aware_batching=True")
+        if logger:
+            logger.info(f"Using TIER-AWARE batching "
+                       f"(medium={optimize_config.tier_medium_quota}, "
+                       f"rare={optimize_config.tier_rare_quota}, "
+                       f"tail={optimize_config.tier_tail_quota})")
+        
+        train_batch_sampler = TierAwareBatchSampler(
+            dataset=train_dataset,
+            code_frequencies=code_frequencies,
+            batch_size=config.batch_size,
+            medium_quota=optimize_config.tier_medium_quota,
+            rare_quota=optimize_config.tier_rare_quota,
+            tail_quota=optimize_config.tier_tail_quota,
+            shuffle=True,
+            drop_last=True,
+            verbose=True
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_sampler=train_batch_sampler,
+            num_workers=n_workers,
+            pin_memory=True,
+            collate_fn=collate_fn,
+            persistent_workers=False
+        )
+        
+    elif use_bucketing:
         if train_data_df is None:
             raise ValueError("train_data_df is required when use_bucketing=True and train_data is a Dataset")
         if logger:
@@ -11379,7 +12006,7 @@ def _build_final_results(
 
 # #### Run experimentation
 
-# In[79]:
+# In[56]:
 
 
 def run_single_experiment(
@@ -11580,7 +12207,10 @@ def run_single_experiment(
         config = config, 
         use_bucketing = use_bucketing, 
         train_data_df = train_data_df, 
-        logger=logger
+        logger=logger,
+        use_tier_aware=use_tier_aware,
+        optimize_config=optimize_config,
+        code_frequencies=code_frequencies
     )
     # ============================================================
     # 4. OPTIMIZER SETUP
@@ -14981,6 +15611,11 @@ dense_baseline_results = run_single_experiment(
 
 # ##### Exp2 flash dense model
 
+# - exp2b_flash_learned_pool
+#     - v2: this is the standard exp2b model for the round 5 for downstream evaluation
+#     - v3: this is a version trained with pos_weight_max = 200 to address learning plateau issues, with gradient analyssi done (Jan 21)
+#     - v4: this is a version trained only for getting v2 gradient analysis to be baseline. (Jan 24)
+
 # In[56]:
 
 
@@ -14996,7 +15631,7 @@ EMBEDDING_SIZE = 256  # 256, 384, or 512
 EXPERIMENT_ROUND = "exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
 
 
-# In[70]:
+# In[84]:
 
 
 optimize_config = OptimizeConfig(
@@ -15008,7 +15643,7 @@ optimize_config = OptimizeConfig(
     min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
     use_pos_weight=True,            # Enable weighted BCE
     pos_weight_method='log_scaled',     # or 'log_scaled', 'ens', 'inverse'
-    pos_weight_max=200,   # Change from 50 to 35 to stablize the training; in v3 change to 200 to increase neg weights
+    pos_weight_max=35,   # Change from 50 to 35 to stablize the training; in v3 change to 200 to increase neg weights
     use_focal_loss=False,
     focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
     focal_alpha=0.25,
@@ -15022,7 +15657,7 @@ optimize_config = OptimizeConfig(
 # Remember to change batchsize back to 32 for flashattention 
 
 
-# In[82]:
+# In[85]:
 
 
 # cleanup_gpu_memory_hard()

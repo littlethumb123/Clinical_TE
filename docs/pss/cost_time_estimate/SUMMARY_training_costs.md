@@ -1,203 +1,128 @@
 # Training Cost & Time Summary - Quick Reference
 
-**Document Version**: November 4, 2025  
+**Document Version**: January 27, 2026  
 **Model**: Hierarchical Clinical Transformer (BEHRT-style)  
-**Architecture**: Daily encoder (1 layer) + Temporal encoder (6 layers) with Flash Attention + MoE
+**Target**: 15M members, 4 epochs, 96-hour flexibility buffer
 
 ---
 
-## Hardware Specifications
+## Hardware Specifications (Official NVIDIA)
 
-| GPU Type | Count | Total VRAM | Peak TFLOPs | Hourly Cost | Best For |
-|----------|-------|------------|-------------|-------------|----------|
-| **T4** | 4 | 64 GB | 260 | $2.992 | Budget-constrained |
-| **L4** | 4 | 96 GB | 484 | $3.304 | Middle ground |
-| **A100** | 4 | 160 GB | 1,248 | $11.992 | Reliable production |
-| **H100** | 4 | 320 GB | 3,956 | $36.384 | **Best value** ⭐ |
+| GPU | FP16 TFLOPS | Memory | Bandwidth | TDP | GCP Hourly |
+|-----|-------------|--------|-----------|-----|------------|
+| **T4** | 65 | 16 GB GDDR6 | 320 GB/s | 70W | $2.99 (4×) |
+| **L4** | 242 | 24 GB GDDR6 | 300 GB/s | 72W | $4.00 (4×) |
+| **A100** | 312 | 80 GB HBM2e | 1,935 GB/s | 300W | $14.69 (4×) |
+| **H100** | 1,979 | 80 GB HBM3 | 3,350 GB/s | 700W | $88.49 (8×) |
+
+**Source**: NVIDIA Official Specifications (user-provided)  
+**Pricing**: GCP us-central1 On-Demand (user-provided)
 
 ---
 
-## Flash+MoE Training Estimates (Recommended Configuration)
+## Training Time Summary (Excluding 96h Buffer)
 
-### 1M Members, 1 Epoch (Development Testing)
+| Configuration | exp1_dense | exp2b_flash | exp6_moe |
+|---------------|------------|-------------|----------|
+| **4×T4** | 424.8h (17.7d) | 193.1h (8.0d) | 217.8h (9.1d) |
+| **4×L4** ⭐ | 205.2h (8.6d) | 93.3h (3.9d) | 105.2h (4.4d) |
+| **8×L4** | 106.2h (4.4d) | 48.3h (2.0d) | 54.5h (2.3d) |
+| **4×A100** | 80.9h (3.4d) | 36.8h (1.5d) | 41.5h (1.7d) |
+| **8×A100** | 44.7h (1.9d) | 20.3h (0.8d) | 22.9h (1.0d) |
+| **8×H100** | 44.7h (1.9d) | 20.3h (0.8d) | 22.9h (1.0d) |
 
-| Hardware | Batch | MFU | Time | Cost | Throughput |
-|----------|-------|-----|------|------|------------|
-| 4× T4 | 128 | 16% | 18.2h | $54 | 15 samples/sec |
-| 4× L4 | 256 | 23% | 6.8h | $22 | 41 samples/sec |
-| 4× A100 | 512 | 45% | 1.3h | $16 | 214 samples/sec |
-| **4× H100** | **4,096** | **46%** | **0.4h** | **$15** | **694 samples/sec** ⭐ |
+## Total Time Including Buffer
 
-### 1.2M Members, 10 Epochs (10% Sample - Recommended for Development)
+| Configuration | exp1_dense | exp2b_flash | exp6_moe |
+|---------------|------------|-------------|----------|
+| **4×T4** | 520.8h (21.7d) | 289.1h (12.0d) | 313.8h (13.1d) |
+| **4×L4** ⭐ | 301.2h (12.6d) | 189.3h (7.9d) | 201.2h (8.4d) |
+| **8×L4** | 202.2h (8.4d) | 144.3h (6.0d) | 150.5h (6.3d) |
+| **4×A100** | 176.9h (7.4d) | 132.8h (5.5d) | 137.5h (5.7d) |
+| **8×A100** | 140.7h (5.9d) | 116.3h (4.8d) | 118.9h (5.0d) |
 
-| Hardware | Time | Cost | Iterations (20×) | Timeline |
-|----------|------|------|------------------|----------|
-| 4× T4 | 9 days | $652 | $13,040 | 6 months |
-| 4× L4 | 3.4 days | $270 | $5,400 | 2 months |
-| 4× A100 | 15.6h | $187 | $3,740 | 13 days |
-| **4× H100** | **4.9h** | **$179** | **$3,580** | **4 days** ⭐ |
+---
 
-### 12M Members, 10 Epochs (Full Dataset - Production)
+## Cost Summary (Including 96h Buffer)
 
-| Hardware | Time | Cost | Speedup vs T4 | Cost Efficiency |
-|----------|------|------|---------------|-----------------|
-| 4× T4 | 91 days | $6,535 | 1.0× | Baseline |
-| 4× L4 | 34 days | $2,696 | 2.7× | 2.4× better |
-| 4× A100 | 6.5 days | $1,869 | 14× | 3.5× better |
-| **4× H100** | **2.05 days** | **$1,790** | **44×** | **3.7× better** ⭐ |
+| Configuration | exp1_dense | exp2b_flash | exp6_moe | Speedup |
+|---------------|------------|-------------|----------|---------|
+| **4×T4** | $1,557 | $864 | $938 | 1.0× |
+| **4×L4** ⭐ | $1,205 | **$757** | **$805** | 2.07× |
+| **8×L4** | $1,618 | $1,154 | $1,204 | 4.0× |
+| **2×A100** | $1,859 | $1,230 | $1,297 | 2.7× |
+| **4×A100** | $2,600 | $1,951 | $2,020 | 5.25× |
+| **8×A100** | $4,134 | $3,417 | $3,493 | 9.5× |
+| **8×H100** | $12,451 | $10,291 | $10,521 | 9.5× |
 
 ---
 
 ## Model Specifications
 
-### Baseline Transformer
-- **Parameters**: 27.7M
-- **Architecture**: Dense FFN layers throughout
-- **Output vocab**: 8,100 codes (after mapping)
-- **Memory**: 13.8 GB peak (batch=64 on T4)
+| Experiment | Parameters | Baseline (4×T4) | Peak Memory |
+|------------|------------|-----------------|-------------|
+| **exp1_dense** | 26.46M | 12.04h (0.5d) | 20.6 GB |
+| **exp2b_flash** ⭐ | 25.33M | 5.47h (0.2d) | 11.1 GB |
+| **exp6_moe** | 35.42M | 6.17h (0.3d) | 13.4 GB |
 
-### Flash Attention + MoE
-- **Parameters**: 34.8M (+26% vs baseline)
-- **Architecture**: MoE in layers 2-5 (4 out of 6 temporal layers)
-- **MoE Config**: 8 experts, top-2 routing
-- **Memory**: 4.1 GB peak (batch=128 on T4, batch=4,096 on H100)
-- **Performance**: Same accuracy, 2× faster, 50% cost reduction
-
----
-
-## Project Cost Breakdown
-
-### Scenario A: H100 Path (Recommended) ⭐
-
-```
-Development (20 experiments on 1.2M):
-  - Time: 4 days of GPU time
-  - Cost: $3,580
-  
-Production (1 training on 12M):
-  - Time: 2 days
-  - Cost: $1,790
-  
-Total to Deployment: $5,370 in 1 week
-```
-
-### Scenario B: A100 Path (If H100 Unavailable)
-
-```
-Development (20 experiments on 1.2M):
-  - Time: 13 days
-  - Cost: $7,980
-  
-Production (1 training on 12M):
-  - Time: 6.5 days
-  - Cost: $1,869
-  
-Total to Deployment: $9,849 in 1 month
-```
-
-### Scenario C: T4 Path (Budget Constrained)
-
-```
-Development (6 experiments on 1.2M):
-  - Time: 54 days
-  - Cost: $3,912
-  
-Production (1 training on 12M):
-  - Time: 91 days
-  - Cost: $6,535
-  
-Total to Deployment: $10,447 in 5 months
-```
-
----
-
-## ROI Analysis
-
-### H100 vs Alternatives
-
-| Comparison | Time Advantage | Cost Advantage | Total Savings |
-|------------|----------------|----------------|---------------|
-| H100 vs T4 | 45× faster | Same total cost | $5,077 |
-| H100 vs L4 | 17× faster | 32% cheaper | $2,486 |
-| H100 vs A100 | 3.2× faster | 45% cheaper | $4,479 |
-
-**Break-even**: H100 is cheaper for ANY project requiring >2 training runs.
+*Baseline = 1.7M members, 1 epoch on 4×T4*
 
 ---
 
 ## Key Recommendations
 
-1. ✅ **Always use Flash Attention + MoE** - 2× speedup, 50% cost reduction
-2. ✅ **Prefer 4× H100 if available** - Fastest AND cheapest despite high hourly rate
-3. ✅ **Start with 10% sample (1.2M)** - Achieves 93% of full-model performance
-4. ✅ **Use large batches** - H100 enables batch=4,096 (16× larger than T4)
-5. ✅ **Expect 1 week to production** with H100 vs 1 month with A100 vs 5 months with T4
+1. ✅ **Use 4×L4 for best value**: 12% cheaper than 4×T4, 2.07× faster
+2. ✅ **Use exp2b_flash_learned_pool**: Fastest training, lowest cost
+3. ✅ **8×L4 if time-constrained**: 48% faster for 52% more cost
+4. ⚠️ **A100/H100**: Higher cost, diminishing returns for this model size
 
 ---
 
 ## Decision Matrix
 
 ```
-Question: Which hardware should I use?
+Budget < $1,000?
+  └─ 4×L4 + exp2b ($757) → 93.3h (3.9d) training, 189.3h (7.9d) total
 
-├─ Have H100 access?
-│   └─ YES → Always use 4× H100 Flash+MoE ($5.4K total, 1 week)
-│
-└─ NO → Check budget
-    ├─ Budget > $10K?
-    │   └─ YES → Use 4× A100 ($9.8K total, 1 month)
-    │
-    ├─ Budget $5K-$10K?
-    │   └─ YES → Use 4× L4 ($7.9K total, 2 months)
-    │
-    └─ Budget < $5K?
-        └─ Use 4× T4 ($10.4K total, 5 months)
+Need results in < 1 week?
+  └─ 8×L4 ($1,154) → 48.3h (2.0d) training, 144.3h (6.0d) total
+
+Running exp1_dense (no Flash)?
+  └─ 4×L4 ($1,205) → still 23% cheaper than 4×T4
+
+Have H100 credits?
+  └─ 8×H100 has same training time as 8×A100 but 3× cost
 ```
 
 ---
 
-## Python Estimation Function
+## Speedup Rationale
 
-See Appendix C.9 in `training_sample_time_cost_estimate.md` for complete implementation.
+| GPU | FP16 TFLOPS | Memory BW | Effective Speedup |
+|-----|-------------|-----------|-------------------|
+| T4 | 65 | 320 GB/s | 1.0× (baseline) |
+| L4 | 242 (3.72×) | 300 GB/s (0.94×) | **2.07×** |
+| A100 | 312 (4.80×) | 1,935 GB/s (6.05×) | **5.25× (4 GPU)** |
+| H100 | 1,979 (30×) | 3,350 GB/s (10×) | **9.5× (8 GPU)** |
 
-**Quick Usage**:
-```python
-from utils import estimate_training_time_cost
-
-# Estimate 1M members, 1 epoch on H100
-result = estimate_training_time_cost(
-    num_members=1_000_000,
-    epochs=1,
-    model_type='flash_moe',
-    hardware='H100x4',
-    verbose=True
-)
-
-# Output:
-# {
-#   'hours': 0.41,
-#   'days': 0.02,
-#   'cost_usd': 15,
-#   'samples_per_sec': 694.4,
-#   'batch_size': 4096,
-#   'mfu_percent': 46.0,
-#   'steps_per_epoch': 244
-# }
-```
+**Why L4 is 2.07× not 3.72×?**
+- L4 has 6% LOWER memory bandwidth than T4
+- ~30% of transformer compute is memory-bound (embeddings)
+- Weighted speedup: 0.30×0.94 + 0.70×3.72×0.70 = 2.07×
 
 ---
 
-## Validation Metrics
+## Uncertainty Notes
 
-All estimates validated against:
-- **BEHRT** (1.6M patients, V100): "several days" ✓
-- **PaLM** (540B params, TPU): 46-57% MFU ✓
-- **GPT-3** (175B params, A100): 42-50% MFU ✓
-
-**Confidence**: ±15% for actual training time (conservative estimate)
+| Item | Confidence | Note |
+|------|------------|------|
+| Baseline times | ✓ Measured | From actual exp_round5 results |
+| L4 speedup (2.07×) | High | Similar architecture to T4 |
+| A100 speedup (5.25×) | Medium | Based on NVLink efficiency |
+| H100 speedup (9.5×) | **Low** | Model may not saturate H100 |
 
 ---
 
-**For full methodology**: See Section 8 of `training_sample_time_cost_estimate.md`  
-**For detailed calculations**: See Appendices B (A100) and C (H100)
-
+**For full calculations**: See `training_cost_estimates_15M_4epochs.md`  
+**For GPU specs**: See `gpu_specifications_reference.md`  
+**For methodology**: See `training_sample_time_cost_estimate.md`
