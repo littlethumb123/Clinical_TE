@@ -1,0 +1,146 @@
+{
+  "embedding_analysis": {
+    "common": {
+      "norm_mean": 1.4170401096343994,
+      "norm_std": 0.2748984396457672,
+      "norm_min": 0.8004799485206604,
+      "norm_max": 2.208003044128418,
+      "norm_median": 1.3931490182876587,
+      "num_near_zero": 0,
+      "num_codes": 1169
+    },
+    "medium": {
+      "norm_mean": 1.4867910146713257,
+      "norm_std": 0.14647337794303894,
+      "norm_min": 1.0940964221954346,
+      "norm_max": 2.1705963611602783,
+      "norm_median": 1.4717977046966553,
+      "num_near_zero": 0,
+      "num_codes": 1754
+    },
+    "rare": {
+      "norm_mean": 1.4084587097167969,
+      "norm_std": 0.04964670538902283,
+      "norm_min": 1.256920337677002,
+      "norm_max": 1.677620530128479,
+      "norm_median": 1.4078565835952759,
+      "num_near_zero": 0,
+      "num_codes": 1748
+    },
+    "tail": {
+      "norm_mean": 1.4570622444152832,
+      "norm_std": 0.02594023011624813,
+      "norm_min": 1.3461025953292847,
+      "norm_max": 1.5356297492980957,
+      "norm_median": 1.458305835723877,
+      "num_near_zero": 0,
+      "num_codes": 1175
+    },
+    "zero": {
+      "norm_mean": 1.4747695922851562,
+      "norm_std": 0.025249265134334564,
+      "norm_min": 1.086209774017334,
+      "norm_max": 1.5447590351104736,
+      "norm_median": 1.475074052810669,
+      "num_near_zero": 0,
+      "num_codes": 451
+    }
+  },
+  "logit_analysis": {
+    "common": {
+      "num_positive_samples": 530594,
+      "num_negative_samples": 1000000,
+      "logit_pos_mean": -2.2609844577063893,
+      "logit_pos_std": 2.5203208452654975,
+      "logit_pos_min": -14.15625,
+      "logit_pos_max": 5.89453125,
+      "logit_pos_median": -2.169921875,
+      "pct_pos_above_zero": 0.20058085843413231,
+      "pct_pos_above_minus1": 0.335216757068493,
+      "logit_pos_25pct": -4.05078125,
+      "logit_pos_75pct": -0.37841796875,
+      "logit_neg_mean": -8.70023032982123,
+      "logit_neg_std": 2.6133715530426898,
+      "logit_neg_median": -8.6015625,
+      "margin_pos_neg": 6.4392458721148405
+    },
+    "medium": {
+      "num_positive_samples": 10460,
+      "num_negative_samples": 1000000,
+      "logit_pos_mean": -6.393089466842593,
+      "logit_pos_std": 3.0328978751843345,
+      "logit_pos_min": -16.28125,
+      "logit_pos_max": 3.771484375,
+      "logit_pos_median": -6.4453125,
+      "pct_pos_above_zero": 0.023326959847036328,
+      "pct_pos_above_minus1": 0.04254302103250478,
+      "logit_pos_25pct": -8.5859375,
+      "logit_pos_75pct": -4.3740234375,
+      "logit_neg_mean": -12.620188733398438,
+      "logit_neg_std": 2.1894824058772584,
+      "logit_neg_median": -12.6484375,
+      "margin_pos_neg": 6.227099266555845
+    },
+    "rare": {
+      "num_positive_samples": 365,
+      "num_negative_samples": 1000000,
+      "logit_pos_mean": -9.675652825342466,
+      "logit_pos_std": 2.877247103021221,
+      "logit_pos_min": -15.875,
+      "logit_pos_max": -2.2578125,
+      "logit_pos_median": -9.90625,
+      "pct_pos_above_zero": 0.0,
+      "pct_pos_above_minus1": 0.0,
+      "logit_pos_25pct": -11.7734375,
+      "logit_pos_75pct": -7.6328125,
+      "logit_neg_mean": -15.01188796875,
+      "logit_neg_std": 1.7082244246014506,
+      "logit_neg_median": -15.125,
+      "margin_pos_neg": 5.336235143407535
+    },
+    "tail": {
+      "num_positive_samples": 17,
+      "num_negative_samples": 1000000,
+      "logit_pos_mean": -14.690716911764707,
+      "logit_pos_std": 1.878558317087188,
+      "logit_pos_min": -18.6875,
+      "logit_pos_max": -11.2890625,
+      "logit_pos_median": -14.8828125,
+      "pct_pos_above_zero": 0.0,
+      "pct_pos_above_minus1": 0.0,
+      "logit_pos_25pct": -15.6015625,
+      "logit_pos_75pct": -14.125,
+      "logit_neg_mean": -16.4470464296875,
+      "logit_neg_std": 1.4903162581187046,
+      "logit_neg_median": -16.609375,
+      "margin_pos_neg": 1.7563295179227936
+    },
+    "zero": {
+      "num_positive_samples": 54464,
+      "num_negative_samples": 1000000,
+      "logit_pos_mean": 4.757181744878077,
+      "logit_pos_std": 1.7163880328800982,
+      "logit_pos_min": -1.689453125,
+      "logit_pos_max": 10.0546875,
+      "logit_pos_median": 4.56640625,
+      "pct_pos_above_zero": 0.9983291715628673,
+      "pct_pos_above_minus1": 0.9997796709753232,
+      "logit_pos_25pct": 3.564453125,
+      "logit_pos_75pct": 5.875,
+      "logit_neg_mean": -16.736333943642617,
+      "logit_neg_std": 1.6226842660486267,
+      "logit_neg_median": -16.953125,
+      "margin_pos_neg": 21.493515688520695
+    }
+  },
+  "diagnosis": {
+    "embedding_collapse_detected": false,
+    "weak_signal_detected": true,
+    "ranking_problem_detected": false,
+    "recommendations": [
+      "RARE: Weak positive signal (mean logit=-9.68). Rare codes may be under-represented.",
+      "TAIL: Weak positive signal (mean logit=-14.69). Rare codes may be under-represented.",
+      "TIER GAP: Common codes have 12.43 higher mean logits than tail. This suggests gradient starvation - implement tier-aware batching."
+    ]
+  }
+}

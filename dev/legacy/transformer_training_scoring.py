@@ -446,3 +446,4 @@ if __name__ == '__main__':
     print(f'Number of layers: {nlayers}')
     print(f'Dropout: {ndropout}')
 
+

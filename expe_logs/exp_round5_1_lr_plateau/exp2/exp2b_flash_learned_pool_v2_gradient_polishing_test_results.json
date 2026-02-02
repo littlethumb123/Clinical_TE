@@ -1,0 +1,131 @@
+{
+  "checkpoint_path": "logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool_v2_gradient/saved_models/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260125_105212_final.pt",
+  "polishing_lr": 4e-06,
+  "polishing_steps": 2000,
+  "before_metrics": {
+    "val_loss": 0.0033623541205683974,
+    "recall@1": 0.01163750923344517,
+    "recall@5": 0.7063419755458737,
+    "recall@10": 0.8246289649528703,
+    "recall@20": 0.8944292975465689,
+    "micro_recall@1": 0.002420161677441953,
+    "micro_recall@5": 0.3126474244508092,
+    "micro_recall@10": 0.45823495062098696,
+    "micro_recall@20": 0.5728533517386694,
+    "precision@1": 0.01163750923344517,
+    "precision@5": 0.3006772154526886,
+    "precision@10": 0.22034534399344996,
+    "precision@20": 0.13773018496574418,
+    "ndcg@1": 0.01163750923344517,
+    "ndcg@5": 0.35709278940610123,
+    "ndcg@10": 0.398601007769883,
+    "ndcg@20": 0.43319489689609453,
+    "mrr": 0.33641430705134967,
+    "positive_brier": 0.6813917556347271,
+    "num_samples": 7644763,
+    "num_batches": 1371
+  },
+  "before_stratified": {
+    "common_top10_acc": 0.8247692784806065,
+    "medium_top10_acc": 0.030531897798489475,
+    "rare_top10_acc": 0.0,
+    "tail_top10_acc": 0.0,
+    "tail_code_coverage": 0.0,
+    "balanced_top10_acc": 0.21382529406977402
+  },
+  "after_metrics": {
+    "val_loss": 0.0033776463688039416,
+    "recall@1": 0.004631929073537008,
+    "recall@5": 0.7078949340875578,
+    "recall@10": 0.8257944687101484,
+    "recall@20": 0.8947625976109397,
+    "micro_recall@1": 0.0009632660229550564,
+    "micro_recall@5": 0.31264462251914116,
+    "micro_recall@10": 0.45854212938210553,
+    "micro_recall@20": 0.5730236438963564,
+    "precision@1": 0.004631929073537008,
+    "precision@5": 0.3006745200502424,
+    "precision@10": 0.22049305325945898,
+    "precision@20": 0.13777112801105895,
+    "ndcg@1": 0.004631929073537008,
+    "ndcg@5": 0.35581284075985353,
+    "ndcg@10": 0.3974001817249712,
+    "ndcg@20": 0.4317364178611656,
+    "mrr": 0.33313436520727185,
+    "positive_brier": 0.6870129648415677,
+    "num_samples": 7644763,
+    "num_batches": 1371
+  },
+  "after_stratified": {
+    "common_top10_acc": 0.82600264496512,
+    "medium_top10_acc": 0.03154962772510579,
+    "rare_top10_acc": 0.0,
+    "tail_top10_acc": 0.0,
+    "tail_code_coverage": 0.0,
+    "balanced_top10_acc": 0.21438806817255646
+  },
+  "step_by_step_metrics": [
+    {
+      "step": 200,
+      "train_loss": 0.0012731317745056003,
+      "val_loss": 0.003602124785538763,
+      "recall@10": 0.788283566712357
+    },
+    {
+      "step": 400,
+      "train_loss": 0.0007746346332714892,
+      "val_loss": 0.0035766268963925542,
+      "recall@10": 0.7984787808745666
+    },
+    {
+      "step": 600,
+      "train_loss": 0.0007268327378551476,
+      "val_loss": 0.0035335807711817323,
+      "recall@10": 0.8084679406204925
+    },
+    {
+      "step": 800,
+      "train_loss": 0.0007093445368809625,
+      "val_loss": 0.0035075386869721113,
+      "recall@10": 0.8147302030979834
+    },
+    {
+      "step": 1000,
+      "train_loss": 0.0006964358405093662,
+      "val_loss": 0.0034892291179858146,
+      "recall@10": 0.8182241692871413
+    },
+    {
+      "step": 1200,
+      "train_loss": 0.0007006022965651937,
+      "val_loss": 0.0034764528623782097,
+      "recall@10": 0.8198726046174107
+    },
+    {
+      "step": 1400,
+      "train_loss": 0.0006993575653177686,
+      "val_loss": 0.0034665292943827806,
+      "recall@10": 0.8204818089785972
+    },
+    {
+      "step": 1600,
+      "train_loss": 0.000698472496587783,
+      "val_loss": 0.003459784807637334,
+      "recall@10": 0.8207147400578744
+    },
+    {
+      "step": 1800,
+      "train_loss": 0.0006947227596538142,
+      "val_loss": 0.0034535844344645737,
+      "recall@10": 0.8212164377670869
+    },
+    {
+      "step": 2000,
+      "train_loss": 0.0006840111932251603,
+      "val_loss": 0.0034490681951865553,
+      "recall@10": 0.82134186219439
+    }
+  ],
+  "diagnosis": "STRUCTURAL_BOTTLENECK",
+  "timestamp": "2026-02-01T10:26:37.538358"
+}
