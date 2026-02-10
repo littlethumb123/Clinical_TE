@@ -25,13 +25,209 @@ Original Model Reference:
 - CatBoost 1% Lift: ~19-20x
 - Optimal undersampling ratio: 0.2 (CatBoost)
 
-Data Sources (BigQuery):
-- Features: anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_non_embedding_features
-- Embeddings: anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_embeddings
-- Outcomes: anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_outcome_ip
+Data Sources (BigQuery - HELDOUT tables for downstream eval):
+- Features: edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_non_embedding_features
+- Outcomes: edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_outcome_ip
+- TE Input: edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_te_inference_input
+
+Note: Heldout members are those NOT in the 10% TE pretraining sample, ensuring
+no data leakage between pretraining and downstream evaluation.
 
 Author: Adapted from Eric Ma's Medicaid IP Model Refresh
 """
+
+"""
+-- ============================================================================
+-- CREATE TE INFERENCE INPUT TABLE FOR HELDOUT MEDICAID IP MEMBERS
+-- ============================================================================
+-- Purpose: Extract raw TE input sequences (cd, gender_cd, age_in_months) for 
+--          heldout members to generate new embeddings via transformer inference.
+--
+-- ============================================================================
+-- CRITICAL: ID MATCHING CAVEAT FOR MEDICAID
+-- ============================================================================
+-- 
+-- PROBLEM: Medicaid uses TWO different ID formats that must NOT be confused:
+--
+--   1. asdb_member_key (8-9 digits): The primary key in downstream feature tables
+--      (a964286_medicaid_ip_*). This is the ID we use to join features + outcomes.
+--
+--   2. individual_id in TE sequence tables (10-16 digits): A TRANSFORMED identifier
+--      used internally by the TE pipeline (a834793_Medicaid_o3_train_ending).
+--      This ID does NOT directly match asdb_member_key.
+--
+-- The 10% pretraining sample (a834793_Combined_All_LOB_o3_train_10pct_sample) 
+-- uses individual_id that EQUALS asdb_member_key (8-9 digit format), which is
+-- DIFFERENT from the transformed individual_id in member_train_ending.
+--
+-- SOLUTION: Use member_train_ending as a crosswalk table that maps between:
+--   - member_id (= asdb_member_key, 8-9 digit format)
+--   - individual_id (transformed 10-16 digit format used in TE sequences)
+--
+-- Without this crosswalk, direct matching yields <1% match rate. With the 
+-- crosswalk, we achieve proper matching for downstream evaluation.
+--
+-- ID Mapping Chain (how the join works):
+--   heldout.asdb_member_key 
+--   → member_train_ending.member_id (= asdb_member_key, 8-9 digit)
+--   → member_train_ending.individual_id (transformed, 10-16 digit)
+--   → o3_train_ending.individual_id (TE sequences with same transformed ID)
+--
+-- NOTE: Commercial IP does NOT have this complexity because its individual_id
+-- format is consistent across all tables. Medicaid requires extra care.
+-- ============================================================================
+
+DROP TABLE IF EXISTS `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_te_inference_input`;
+
+CREATE TABLE `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_te_inference_input`
+OPTIONS (
+    labels = [("owner", "zhaopeng_xing_aetna_com"), ("cost_center", "13070")],
+    description = "TE inference input for Medicaid IP heldout members (3.35M) - use to generate embeddings",
+    expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+) AS
+SELECT 
+    -- Join key back to Medicaid IP features
+    CAST(m.member_id AS INT64) AS asdb_member_key,
+    
+    -- TE identifiers
+    o.individual_id,
+    o.index_dt,
+    
+    -- TE input sequences (required for transformer inference)
+    o.gender_cd,       -- "*"-separated gender sequence per day
+    o.age_in_months,   -- "*"-separated age sequence per day  
+    o.cd,              -- "*"-separated medical code sequences (input to transformer)
+    o.dt_cnt           -- Number of days in sequence
+    
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Medicaid_o3_train_ending` o
+INNER JOIN `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Medicaid_member_train_ending` m
+    ON CAST(o.individual_id AS STRING) = CAST(m.individual_id AS STRING)
+-- Only include heldout members (not in 10% sample)
+WHERE CAST(m.member_id AS STRING) IN (
+    SELECT CAST(asdb_member_key AS STRING)
+    FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_non_embedding_features`
+);
+
+-- ============================================================================
+-- VERIFY: Check counts and data quality
+-- ============================================================================
+
+SELECT 
+    'te_inference_input' AS table_name,
+    COUNT(*) AS row_count,
+    COUNT(DISTINCT asdb_member_key) AS unique_members,
+    AVG(dt_cnt) AS avg_days_per_member,
+    MIN(dt_cnt) AS min_days,
+    MAX(dt_cnt) AS max_days
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_te_inference_input`;
+
+-- Check for any members in heldout that DON'T have TE sequences
+SELECT 
+    'heldout_without_te_data' AS check_type,
+    COUNT(*) AS members_missing_te_data
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_non_embedding_features` h
+LEFT JOIN `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_te_inference_input` t
+    ON h.asdb_member_key = t.asdb_member_key
+WHERE t.asdb_member_key IS NULL;
+
+"""
+
+
+
+
+"""
+-- ============================================================================
+-- CREATE HELDOUT TABLES (EXCLUDING MEMBERS IN 10% PRETRAINING SAMPLE)
+-- ============================================================================
+-- Purpose: Create feature and outcome tables for members NOT used in TE 
+--          pretraining, ensuring no data leakage in downstream evaluation.
+--
+-- ============================================================================
+-- KEY INSIGHT: 10% Sample Uses asdb_member_key Format
+-- ============================================================================
+-- 
+-- Unlike the o3_train_ending tables which use a transformed 10-16 digit 
+-- individual_id, the 10% pretraining sample (a834793_Combined_All_LOB_o3_train_10pct_sample)
+-- stores individual_id in the SAME format as asdb_member_key (8-9 digits).
+--
+-- This means for HELDOUT EXCLUSION, we can directly match:
+--   feature_table.asdb_member_key = pretrain_sample.individual_id
+--
+-- This is different from the TE INFERENCE INPUT step above, which requires
+-- the member_train_ending crosswalk because o3_train_ending uses transformed IDs.
+--
+-- Summary of when to use which matching:
+--   - Excluding pretrain members: Direct match (asdb_member_key = individual_id)
+--   - Linking to TE sequences: Use member_train_ending crosswalk
+-- ============================================================================
+
+-- Step 1: Verify the direct match works (should show ~10% of members)
+SELECT 
+    'Direct_Match_Test' AS test,
+    COUNT(DISTINCT f.asdb_member_key) AS ip_members,
+    COUNT(DISTINCT s.individual_id) AS matched_in_10pct
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_final_dataset_4_te_experiment_2023_non_embedding_features` f
+INNER JOIN `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sample` s
+    ON CAST(f.asdb_member_key AS STRING) = CAST(s.individual_id AS STRING)
+WHERE s.lob = 'Medicaid';
+
+-- ============================================================================
+-- Step 2: Create heldout non-embedding features (excluding pretrain members)
+-- ============================================================================
+
+DROP TABLE IF EXISTS `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_non_embedding_features`;
+
+CREATE TABLE `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_non_embedding_features`
+OPTIONS (
+    labels = [("owner", "zhaopeng_xing_aetna_com"), ("cost_center", "13070")],
+    expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+) AS
+SELECT f.*
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_final_dataset_4_te_experiment_2023_non_embedding_features` f
+WHERE CAST(f.asdb_member_key AS STRING) NOT IN (
+    -- Match directly: 10% sample individual_id = asdb_member_key
+    SELECT CAST(individual_id AS STRING)
+    FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sample`
+    WHERE lob = 'Medicaid'
+);
+
+-- ============================================================================
+-- Step 3: Create CORRECTED heldout outcome table
+-- ============================================================================
+
+DROP TABLE IF EXISTS `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_outcome_ip`;
+
+CREATE TABLE `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_outcome_ip`
+OPTIONS (
+    labels = [("owner", "zhaopeng_xing_aetna_com"), ("cost_center", "13070")],
+    expiration_timestamp = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+) AS
+SELECT o.*
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_final_dataset_4_te_experiment_2023_outcome_ip` o
+WHERE CAST(o.asdb_member_key AS STRING) NOT IN (
+    SELECT CAST(individual_id AS STRING)
+    FROM `edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sample`
+    WHERE lob = 'Medicaid'
+);
+
+-- ============================================================================
+-- Step 4: Verify counts
+-- ============================================================================
+
+SELECT 'heldout_features' AS table_name, COUNT(*) AS row_count, COUNT(DISTINCT asdb_member_key) AS unique_members
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_non_embedding_features`
+UNION ALL
+SELECT 'heldout_outcome', COUNT(*), COUNT(DISTINCT asdb_member_key)
+FROM `edp-prod-storage.edp_ent_sdoheir_cns.a964286_medicaid_ip_heldout_outcome_ip`;
+
+"""
+
+
+
+
+
+
+
 
 # =============================================================================
 # IMPORTS
@@ -40,11 +236,14 @@ import os
 import sys
 import glob
 import time
+import copy
 import warnings
+import threading
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import numpy as np
@@ -73,24 +272,107 @@ from catboost import CatBoostClassifier, Pool
 import google.auth
 from google.cloud import bigquery
 
+# PyTorch imports (for embedding generation)
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+# =============================================================================
+# IMPORT EMBEDDING GENERATION UTILITIES FROM COMMERCIAL MODULE
+# =============================================================================
+# These functions are shared between Commercial and Medicaid downstream pipelines.
+# We import from the commercial module to avoid code duplication.
+# See moe_flashattn_3_commercial_downstream.py for full implementation details.
+
+try:
+    from moe_flashattn_3_core import (
+        # Configurations
+        BaseConfig,
+        FlashAttentionConfig,
+        MoEConfig,
+        
+        # Models
+        BaselineTransformer,
+        FlashAttentionTransformer,
+        FlashMoETransformer,
+        
+        # Data utilities
+        create_collate_fn,
+        conv_cd,
+        conv_age_gender,
+        conv_lob,
+        conv_target,
+        
+        # Embedding extraction
+        EmbeddingExtractor,
+        
+        # GPU utilities
+        cleanup_gpu_memory,
+    )
+    CORE_MODULE_AVAILABLE = True
+except ImportError:
+    CORE_MODULE_AVAILABLE = False
+    print("⚠️  Warning: moe_flashattn_3_core not found. Embedding generation will not be available.")
+    print("   To use embedding generation, ensure moe_flashattn_3_core.py is in the same directory.")
+
+# Import embedding generation functions from commercial module
+# These are generic and can be reused for Medicaid with minor adaptations
+try:
+    from moe_flashattn_3_commercial_downstream import (
+        load_model_from_checkpoint,
+        LazyClinicalDataset,
+        save_embeddings,
+        save_embeddings_to_bigquery,
+    )
+    COMMERCIAL_MODULE_AVAILABLE = True
+except ImportError:
+    COMMERCIAL_MODULE_AVAILABLE = False
+    print("⚠️  Warning: moe_flashattn_3_commercial_downstream not found.")
+    print("   Embedding generation functions will be defined locally.")
+
 
 # =============================================================================
 # CONFIGURATION - MEDICAID IP MODEL PARAMETERS
 # =============================================================================
 # These parameters replicate the original Medicaid IP model exactly
 
-# BigQuery Tables
-PROJECT_ID = "anbc-hcb-dev"
-DATASET_ID = "cm_medicaid_hcb_dev"
+# BigQuery Tables - CORRECTED
+PROJECT_ID = "edp-prod-storage"
+DATASET_ID = "edp_ent_sdoheir_cns"
 
-# Original table names from Eric Ma's pipeline
-FEATURES_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a534354_IP_2024_non_embedding_features"
-EMBEDDINGS_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a534354_IP_2024_embeddings"
-OUTCOME_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a534354_IP_2024_outcome_ip"
+# =============================================================================
+# HELDOUT TABLES (members NOT in TE pretraining 10% sample)
+# These are used for downstream evaluation to avoid data leakage
+# =============================================================================
+HELDOUT_FEATURES_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a964286_medicaid_ip_heldout_non_embedding_features"
+HELDOUT_OUTCOME_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a964286_medicaid_ip_heldout_outcome_ip"
+HELDOUT_TE_INPUT_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a964286_medicaid_ip_heldout_te_inference_input"
 
-# Data filtering (from original pipeline)
-EXCLUDED_PLAN_KEYS = [33, 54]  # Plans to exclude
-MIN_POST_MONTHS = 6  # Minimum post-observation months required
+# =============================================================================
+# FULL DATASET TABLES (all members, including those in pretrain)
+# Only use these for reference/comparison, NOT for downstream evaluation
+# =============================================================================
+FULL_FEATURES_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a964286_medicaid_ip_final_dataset_4_te_experiment_2023_non_embedding_features"
+FULL_OUTCOME_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a964286_medicaid_ip_final_dataset_4_te_experiment_2023_outcome_ip"
+
+# =============================================================================
+# TE CROSSWALK TABLES (for ID mapping between formats)
+# =============================================================================
+MEMBER_CROSSWALK_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a834793_Medicaid_member_train_ending"
+TE_SEQUENCE_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a834793_Medicaid_o3_train_ending"
+PRETRAIN_10PCT_TABLE = f"{PROJECT_ID}.{DATASET_ID}.a834793_Combined_All_LOB_o3_train_10pct_sample"
+
+# Legacy table references (from Eric Ma's original pipeline - for reference only)
+# These are from the anbc-hcb-dev project, not used in current downstream eval
+# LEGACY_FEATURES_TABLE = "anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_non_embedding_features"
+# LEGACY_EMBEDDINGS_TABLE = "anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_embeddings"
+# LEGACY_OUTCOME_TABLE = "anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_outcome_ip"
+
+# Default to HELDOUT tables for downstream evaluation
+FEATURES_TABLE = HELDOUT_FEATURES_TABLE
+OUTCOME_TABLE = HELDOUT_OUTCOME_TABLE
+
+# Note: Embeddings will come from transformer inference on HELDOUT_TE_INPUT_TABLE
+# No pre-computed embeddings table for heldout - we generate them fresh
 
 # Target variable
 TARGET_COLUMN = "acute_ip_flag"
@@ -98,8 +380,10 @@ TARGET_COLUMN = "acute_ip_flag"
 # Member ID column (primary key for joining)
 MEMBER_KEY = "asdb_member_key"
 
-# Random seed for reproducibility (matches original)
-RANDOM_STATE = 35
+# Random seeds for reproducibility (matches original Eric Ma pipeline)
+RANDOM_STATE = 35  # For train/test split (matches Eric's train_test_split random_state)
+UNDERSAMPLE_RANDOM_STATE = 53  # For undersampling (Eric uses 53 for RandomUnderSampler)
+CATBOOST_RANDOM_SEED = 53  # For CatBoost model (Eric uses 53 for random_seed)
 
 # Class imbalance handling
 # Original finding: CatBoost works better with 0.2 undersampling ratio
@@ -112,23 +396,41 @@ VAL_SIZE = 0.1
 TEST_SIZE = 0.1
 
 # =============================================================================
+# OUT-OF-TIME (OOT) VALIDATION CONFIGURATION
+# =============================================================================
+# For time-based train/test split similar to commercial IP:
+# - Data before cutoff: used for train/val/test (stratified random split)
+# - Data after cutoff: used for OOT (out-of-time) validation
+# This tests temporal generalization of the model.
+#
+# Note: Commercial IP uses ind_id_last_digit for deterministic splitting.
+# Medicaid doesn't have this column, so we use stratified random split
+# for train/val/test, matching Eric's original Medicaid IP pipeline.
+OOT_CUTOFF_DATE = "2023-10-16"  # Same as commercial IP for consistency
+
+# Sampling fraction for efficient embedding generation (optional)
+# Set to None to use full data, or 0.3 for 30% sample like commercial
+EMBEDDING_SAMPLE_FRAC = None  # Use full data for Medicaid heldout (already ~90% of total)
+
+# =============================================================================
 # CATBOOST TUNED HYPERPARAMETERS
 # =============================================================================
 # From Optuna optimization in original pipeline (optuna_results_catboost.csv)
-# Best trial: AUC = 0.8737
+# Best trial 42: AUC = 0.8737 (from optuna_catboost.log)
+# Note: Eric's final model uses params from lines 513-521 of catboost.py
 CATBOOST_TUNED_PARAMS = {
     'learning_rate': 0.015742881221129403,
     'iterations': 2665,
     'l2_leaf_reg': 0.222046549398224,
     'depth': 7,
-    'random_seed': RANDOM_STATE,
+    'random_seed': CATBOOST_RANDOM_SEED,  # Eric uses 53 for CatBoost
     'verbose': 0,
-    'thread_count': -1,
+    'thread_count': -1,  # Use all available threads (-1), Eric used 15
     'use_best_model': True,
-    'auto_class_weights': 'Balanced',  # Additional class weighting
+    # Note: Original didn't use auto_class_weights, relied on undersampling instead
 }
 
-# Alternative: Balanced class weights model
+# Alternative: Balanced class weights model (without undersampling)
 CATBOOST_BALANCED_PARAMS = {
     'iterations': 2500,
     'depth': 7,
@@ -137,7 +439,7 @@ CATBOOST_BALANCED_PARAMS = {
     'auto_class_weights': 'Balanced',
     'od_wait': 80,
     'use_best_model': True,
-    'random_seed': RANDOM_STATE,
+    'random_seed': CATBOOST_RANDOM_SEED,  # Use same seed as tuned params
     'verbose': 0,
     'thread_count': -1,
 }
@@ -395,22 +697,23 @@ def compute_split_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, f
 # DATA LOADING AND PREPROCESSING
 # =============================================================================
 
-def load_medicaid_data_from_bigquery(
+def load_medicaid_heldout_data(
     sample_frac: Optional[float] = None,
     random_state: int = RANDOM_STATE,
     verbose: bool = True
 ) -> pd.DataFrame:
     """
-    Load Medicaid IP data from BigQuery, replicating original data pipeline.
+    Load HELDOUT Medicaid IP data from BigQuery for downstream evaluation.
     
-    This function:
-    1. Loads non-embedding features from FEATURES_TABLE
-    2. Loads embeddings from EMBEDDINGS_TABLE
-    3. Loads outcomes from OUTCOME_TABLE
-    4. Applies the same filters as the original pipeline:
-       - Excludes plan keys 33, 54
-       - Requires post_mnths >= 6
-    5. Merges all tables on asdb_member_key
+    This function loads from the HELDOUT tables which contain members
+    NOT in the TE pretraining 10% sample, ensuring no data leakage.
+    
+    Tables loaded:
+    - HELDOUT_FEATURES_TABLE: Non-embedding features (already filtered)
+    - HELDOUT_OUTCOME_TABLE: Target variable (acute_ip_flag)
+    
+    Note: Embeddings are NOT loaded here - they must be generated via
+    transformer inference on HELDOUT_TE_INPUT_TABLE and merged separately.
     
     Args:
         sample_frac: Optional sampling fraction for testing (e.g., 0.1 for 10%)
@@ -418,73 +721,39 @@ def load_medicaid_data_from_bigquery(
         verbose: Print progress information
         
     Returns:
-        Merged DataFrame with features, embeddings, and outcome
+        DataFrame with features and outcome (no embeddings)
     """
     client = bigquery.Client()
     
     if verbose:
         print(f"\n{'='*70}")
-        print("LOADING MEDICAID IP DATA FROM BIGQUERY")
+        print("LOADING MEDICAID IP HELDOUT DATA FROM BIGQUERY")
         print(f"{'='*70}")
+        print(f"Features table: {HELDOUT_FEATURES_TABLE}")
+        print(f"Outcome table: {HELDOUT_OUTCOME_TABLE}")
     
-    # Step 1: Load non-embedding features with filters
+    # Step 1: Load heldout non-embedding features (already filtered)
     if verbose:
-        print("\n[Step 1/4] Loading non-embedding features...")
+        print("\n[Step 1/3] Loading heldout non-embedding features...")
     
     features_sql = f"""
-    SELECT
-        f.* EXCEPT (asdb_plan_key, post_mnths, first_prv_dt, last_prv_dt, index_dt)
-    FROM 
-        `{FEATURES_TABLE}` AS f
-    WHERE 1=1
-        AND NOT asdb_plan_key IN ({','.join(map(str, EXCLUDED_PLAN_KEYS))})
-        AND post_mnths >= {MIN_POST_MONTHS}
+    SELECT *
+    FROM `{HELDOUT_FEATURES_TABLE}`
     """
     
     df_features = client.query(features_sql).to_dataframe()
     if verbose:
         print(f"  Features loaded: {len(df_features):,} rows, {len(df_features.columns)} columns")
     
-    # Step 2: Load embeddings
+    # Step 2: Load heldout outcomes
     if verbose:
-        print("\n[Step 2/4] Loading embeddings...")
-    
-    embeddings_sql = f"""
-    SELECT
-        e.*
-    FROM 
-        `{EMBEDDINGS_TABLE}` AS e
-    WHERE e.individual_id IN (
-        SELECT asdb_member_key 
-        FROM `{FEATURES_TABLE}` 
-        WHERE NOT asdb_plan_key IN ({','.join(map(str, EXCLUDED_PLAN_KEYS))})
-            AND post_mnths >= {MIN_POST_MONTHS}
-    )
-    """
-    
-    df_embeddings = client.query(embeddings_sql).to_dataframe()
-    # Rename ID column to match features table
-    df_embeddings = df_embeddings.rename(columns={'individual_id': MEMBER_KEY})
-    if verbose:
-        print(f"  Embeddings loaded: {len(df_embeddings):,} rows, {len(df_embeddings.columns)} columns")
-    
-    # Step 3: Load outcomes
-    if verbose:
-        print("\n[Step 3/4] Loading outcomes...")
+        print("\n[Step 2/3] Loading heldout outcomes...")
     
     outcomes_sql = f"""
     SELECT
         asdb_member_key,
         acute_ip_flag
-    FROM 
-        `{OUTCOME_TABLE}` AS o
-    WHERE 1=1 
-        AND o.asdb_member_key IN (
-            SELECT asdb_member_key 
-            FROM `{FEATURES_TABLE}` 
-            WHERE NOT asdb_plan_key IN ({','.join(map(str, EXCLUDED_PLAN_KEYS))})
-                AND post_mnths >= {MIN_POST_MONTHS}
-        )
+    FROM `{HELDOUT_OUTCOME_TABLE}`
     """
     
     df_outcomes = client.query(outcomes_sql).to_dataframe()
@@ -492,18 +761,14 @@ def load_medicaid_data_from_bigquery(
         print(f"  Outcomes loaded: {len(df_outcomes):,} rows")
         print(f"  Positive rate: {df_outcomes[TARGET_COLUMN].mean()*100:.2f}%")
     
-    # Step 4: Merge all tables
+    # Step 3: Merge features with outcomes
     if verbose:
-        print("\n[Step 4/4] Merging tables...")
+        print("\n[Step 3/3] Merging features and outcomes...")
     
     df_features = df_features.set_index(MEMBER_KEY)
-    df_embeddings = df_embeddings.set_index(MEMBER_KEY)
     df_outcomes = df_outcomes.set_index(MEMBER_KEY)
     
-    # Merge features with embeddings
-    df_merged = df_features.merge(df_embeddings, left_index=True, right_index=True, how='inner')
-    # Merge with outcomes
-    df_merged = df_merged.merge(df_outcomes, left_index=True, right_index=True, how='inner')
+    df_merged = df_features.merge(df_outcomes, left_index=True, right_index=True, how='inner')
     df_merged = df_merged.reset_index()
     
     if verbose:
@@ -521,9 +786,83 @@ def load_medicaid_data_from_bigquery(
         print(f"\n✅ Data loading complete!")
         print(f"   Final shape: {df_merged.shape}")
         print(f"   Positive rate: {df_merged[TARGET_COLUMN].mean()*100:.2f}%")
+        print(f"   ⚠️  Note: Embeddings NOT included - merge from NPZ after inference")
         print(f"{'='*70}\n")
     
     return df_merged
+
+
+def load_te_inference_input(
+    sample_frac: Optional[float] = None,
+    random_state: int = RANDOM_STATE,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Load TE inference input data for generating embeddings for heldout members.
+    
+    This table contains the raw TE sequences (cd, gender_cd, age_in_months)
+    needed to run transformer inference and generate embeddings.
+    
+    Returns:
+        DataFrame with columns: asdb_member_key, individual_id, index_dt,
+        gender_cd, age_in_months, cd, dt_cnt
+    """
+    client = bigquery.Client()
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print("LOADING TE INFERENCE INPUT FOR HELDOUT MEMBERS")
+        print(f"{'='*70}")
+        print(f"Table: {HELDOUT_TE_INPUT_TABLE}")
+    
+    sql = f"""
+    SELECT *
+    FROM `{HELDOUT_TE_INPUT_TABLE}`
+    """
+    
+    df = client.query(sql).to_dataframe()
+    
+    if verbose:
+        print(f"  Loaded: {len(df):,} rows")
+        print(f"  Unique members: {df[MEMBER_KEY].nunique():,}")
+        print(f"  Avg sequence days: {df['dt_cnt'].mean():.1f}")
+    
+    # Optional sampling
+    if sample_frac is not None:
+        if verbose:
+            print(f"\n  Sampling {sample_frac*100:.0f}% of data...")
+        df = df.sample(frac=sample_frac, random_state=random_state)
+        if verbose:
+            print(f"  Sampled: {len(df):,} rows")
+    
+    if verbose:
+        print(f"{'='*70}\n")
+    
+    return df
+
+
+# Legacy function for backward compatibility with original Eric Ma pipeline
+def load_medicaid_data_from_bigquery(
+    sample_frac: Optional[float] = None,
+    random_state: int = RANDOM_STATE,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    DEPRECATED: Use load_medicaid_heldout_data() for downstream evaluation.
+    
+    This function is kept for backward compatibility but now loads from
+    heldout tables. For the full pipeline, use load_medicaid_heldout_data()
+    and merge embeddings separately.
+    """
+    if verbose:
+        print("⚠️  Note: load_medicaid_data_from_bigquery() now loads from HELDOUT tables")
+        print("   For new embeddings, use load_medicaid_heldout_data() + merge_new_embeddings_with_features()")
+    
+    return load_medicaid_heldout_data(
+        sample_frac=sample_frac,
+        random_state=random_state,
+        verbose=verbose
+    )
 
 
 def preprocess_features(
@@ -604,7 +943,7 @@ def downsample_negatives(
     X: pd.DataFrame,
     y: pd.Series,
     ratio: float = CATBOOST_UNDERSAMPLE_RATIO,
-    random_state: int = RANDOM_STATE
+    random_state: int = UNDERSAMPLE_RANDOM_STATE  # Eric uses 53 for undersampling
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Downsample negative class to achieve target ratio.
@@ -752,7 +1091,8 @@ def prepare_medicaid_evaluation_data(
     feature_set: str = 'hybrid',
     apply_downsampling: bool = True,
     downsample_ratio: float = CATBOOST_UNDERSAMPLE_RATIO,
-    random_state: int = RANDOM_STATE,
+    split_random_state: int = RANDOM_STATE,
+    undersample_random_state: int = UNDERSAMPLE_RANDOM_STATE,
     verbose: bool = True
 ) -> MedicaidPreparedData:
     """
@@ -770,7 +1110,8 @@ def prepare_medicaid_evaluation_data(
         feature_set: One of 'embedding_only', 'tabular_only', 'hybrid'
         apply_downsampling: Whether to downsample training set
         downsample_ratio: Undersampling ratio (default 0.2 for CatBoost)
-        random_state: Random seed
+        split_random_state: Random seed for train/test split (default 35, Eric's)
+        undersample_random_state: Random seed for undersampling (default 53, Eric's)
         verbose: Print progress
         
     Returns:
@@ -795,10 +1136,10 @@ def prepare_medicaid_evaluation_data(
         print("\n[Step 1/4] Preprocessing features...")
     df_processed = preprocess_features(df, verbose=verbose)
     
-    # Step 2: Split data
+    # Step 2: Split data (using split_random_state=35 to match Eric's train_test_split)
     if verbose:
         print("\n[Step 2/4] Creating train/val/test splits...")
-    splits = create_train_val_test_split(df_processed, random_state=random_state, verbose=verbose)
+    splits = create_train_val_test_split(df_processed, random_state=split_random_state, verbose=verbose)
     
     # Step 3: Select features based on feature_set
     if verbose:
@@ -832,7 +1173,7 @@ def prepare_medicaid_evaluation_data(
     
     original_train_size = len(X_train)
     
-    # Step 4: Apply downsampling to training set
+    # Step 4: Apply downsampling to training set (using undersample_random_state=53 to match Eric's)
     downsampled = False
     if apply_downsampling:
         if verbose:
@@ -840,7 +1181,7 @@ def prepare_medicaid_evaluation_data(
         X_train, y_train = downsample_negatives(
             X_train, y_train, 
             ratio=downsample_ratio, 
-            random_state=random_state
+            random_state=undersample_random_state  # Eric uses 53 for undersampling
         )
         downsampled = True
     else:
@@ -1090,6 +1431,939 @@ def merge_new_embeddings_with_features(
 
 
 # =============================================================================
+# EMBEDDING GENERATION FOR MEDICAID
+# =============================================================================
+# These functions generate embeddings from trained transformer models.
+# They reuse code from moe_flashattn_3_commercial_downstream.py with
+# Medicaid-specific adaptations for ID columns and LOB handling.
+
+# If commercial module is not available, define LazyClinicalDataset locally
+if not COMMERCIAL_MODULE_AVAILABLE:
+    class LazyClinicalDataset(Dataset):
+        """
+        Memory-efficient dataset that parses data on-the-fly.
+        
+        Medicaid Adaptation:
+        - Adds 'lob'='Medicaid' if not present in the DataFrame
+        - Uses asdb_member_key as the primary ID for Medicaid data
+        
+        Note: This is a fallback if commercial module is not available.
+        Prefer importing from moe_flashattn_3_commercial_downstream.
+        """
+        
+        def __init__(self, df: pd.DataFrame, config: 'BaseConfig'):
+            if not CORE_MODULE_AVAILABLE:
+                raise ImportError("Core module required for LazyClinicalDataset. "
+                                "Ensure moe_flashattn_3_core.py is in the same directory.")
+            
+            self.config = config
+            self.df = df.reset_index(drop=True)
+            
+            # Pre-extract columns as lists for faster access
+            self.age_strs = self.df['age_in_months'].tolist()
+            self.gender_strs = self.df['gender_cd'].tolist()
+            self.cd_strs = self.df['cd'].tolist()
+            
+            # Medicaid-specific: Add 'lob' column if not present
+            if 'lob' in self.df.columns:
+                self.lob_strs = self.df['lob'].tolist()
+            else:
+                self.lob_strs = ['Medicaid'] * len(self.df)
+                
+            self.dt_cnt = self.df['dt_cnt'].tolist()
+            self.target_strs = self.df['target'].tolist() if 'target' in self.df.columns else None
+            
+            print(f"LazyClinicalDataset initialized with {len(self.df):,} samples (lazy loading)")
+        
+        def __len__(self):
+            return len(self.df)
+        
+        def __getitem__(self, idx):
+            age_list = conv_age_gender(self.age_strs[idx], self.config.len_dy)
+            gender_list = conv_age_gender(self.gender_strs[idx], self.config.len_dy, max_val=3)
+            cd_list = conv_cd(self.cd_strs[idx], self.config.len_dy, self.config.len_cd)
+            lob_list = conv_lob(self.lob_strs[idx], self.config.len_dy)
+            
+            age = torch.tensor(age_list, dtype=torch.long)
+            gender = torch.tensor(gender_list, dtype=torch.long)
+            codes = torch.tensor(cd_list, dtype=torch.long)
+            lob = torch.tensor(lob_list, dtype=torch.long)
+            
+            if self.target_strs is not None:
+                target_list = conv_target(self.target_strs[idx], self.config.len_dy, self.config.target_cd_cnt)
+            else:
+                target_list = [[0] for _ in range(self.config.len_dy)]
+            
+            return {
+                'age': age,
+                'gender': gender,
+                'lob': lob,
+                'codes': codes,
+                'dt_cnt': self.dt_cnt[idx],
+                'target': target_list
+            }
+    
+    def load_model_from_checkpoint(
+        model_path: str,
+        device: torch.device,
+        verbose: bool = True
+    ) -> Tuple[torch.nn.Module, 'BaseConfig', Optional['MoEConfig'], bool, str]:
+        """
+        Load a pretrained model from a checkpoint file.
+        
+        Note: This is a fallback if commercial module is not available.
+        """
+        if not CORE_MODULE_AVAILABLE:
+            raise ImportError("Core module required for model loading.")
+        
+        if verbose:
+            print(f"\n{'='*70}")
+            print(f"Loading model from: {model_path}")
+        
+        checkpoint_data = torch.load(model_path, map_location=device, weights_only=False)
+        
+        model_type = checkpoint_data.get('model_type', 'Unknown')
+        config_dict = checkpoint_data.get('config', {})
+        moe_config_dict = checkpoint_data.get('moe_config', None)
+        state_dict = checkpoint_data['model_state_dict']
+        
+        if verbose:
+            print(f"  Model type: {model_type}")
+            print(f"  Embedding size: {config_dict.get('embedding_size', 256)}")
+        
+        use_learnt_att_pool_inferred = 'daily_pooling.query' in state_dict
+        
+        inferred_d_ff = None
+        if 'FlashMoE' in model_type:
+            for key in state_dict.keys():
+                if 'experts.0.ffn.w_gate.weight' in key:
+                    weight_shape = state_dict[key].shape
+                    d_ff_adjusted = weight_shape[0]
+                    inferred_d_ff = (d_ff_adjusted * 3 + 1) // 2
+                    break
+            if inferred_d_ff is None:
+                inferred_d_ff = config_dict.get('nhid', 512)
+        
+        moe_config = None
+        
+        if 'FlashMoE' in model_type:
+            config = FlashAttentionConfig(
+                embedding_size=config_dict.get('embedding_size', 256),
+                nhid=config_dict.get('nhid', 512),
+                nhead=config_dict.get('nhead', 8),
+                nlayers=config_dict.get('nlayers', 6),
+                dropout=config_dict.get('dropout', 0.1),
+                use_learnt_att_pool=use_learnt_att_pool_inferred,
+                use_swiglu=config_dict.get('use_swiglu', True),
+                use_rope=config_dict.get('use_rope', True),
+                use_flash=config_dict.get('use_flash', True),
+            )
+            
+            if moe_config_dict:
+                d_ff_to_use = inferred_d_ff or config_dict.get('nhid', 512)
+                moe_config = MoEConfig(
+                    d_model=moe_config_dict.get('d_model', config.embedding_size),
+                    d_ff=d_ff_to_use,
+                    num_experts=moe_config_dict.get('num_experts', 8),
+                    num_shared_experts=moe_config_dict.get('num_shared_experts', 1),
+                    top_k=moe_config_dict.get('top_k', 2),
+                    expert_dropout=moe_config_dict.get('expert_dropout', 0.1),
+                    load_balance_strategy=moe_config_dict.get('load_balance_strategy', 'deepseek'),
+                    aux_loss_weight=moe_config_dict.get('aux_loss_weight', 0.001),
+                    use_moe_from_layer=moe_config_dict.get('use_moe_from_layer', 2),
+                    use_swiglu_experts=moe_config_dict.get('use_swiglu_experts', True),
+                    router_warmup_steps=moe_config_dict.get('router_warmup_steps', 0),
+                    z_loss_weight=moe_config_dict.get('z_loss_weight', 0.005),
+                    bias_lr=moe_config_dict.get('bias_lr', 1e-3),
+                    bias_momentum=moe_config_dict.get('bias_momentum', 0.6),
+                )
+            else:
+                moe_config = MoEConfig(d_model=config.embedding_size, d_ff=config.nhid)
+            
+            model = FlashMoETransformer(config, moe_config)
+            use_mixed_precision = True
+            
+        elif 'FlashAttention' in model_type:
+            config = FlashAttentionConfig(
+                embedding_size=config_dict.get('embedding_size', 256),
+                nhid=config_dict.get('nhid', 512),
+                nhead=config_dict.get('nhead', 8),
+                nlayers=config_dict.get('nlayers', 6),
+                dropout=config_dict.get('dropout', 0.1),
+                use_learnt_att_pool=config_dict.get('use_learnt_att_pool', True),
+                use_swiglu=config_dict.get('use_swiglu', True),
+                use_rope=config_dict.get('use_rope', True),
+                use_flash=config_dict.get('use_flash', True),
+            )
+            model = FlashAttentionTransformer(config)
+            use_mixed_precision = True
+            
+        else:
+            config = BaseConfig(
+                embedding_size=config_dict.get('embedding_size', 256),
+                nhid=config_dict.get('nhid', 512),
+                nlayers=config_dict.get('nlayers', 6),
+                dropout=config_dict.get('dropout', 0.1),
+            )
+            model = BaselineTransformer(config)
+            use_mixed_precision = False
+        
+        model.load_state_dict(checkpoint_data['model_state_dict'])
+        model = model.to(device)
+        model.eval()
+        
+        if verbose:
+            total_params = sum(p.numel() for p in model.parameters())
+            print(f"✅ Model loaded: {total_params:,} parameters")
+            print(f"{'='*70}\n")
+        
+        return model, config, moe_config, use_mixed_precision, model_type
+
+
+def generate_medicaid_embeddings(
+    model: torch.nn.Module,
+    config: 'BaseConfig',
+    data: pd.DataFrame,
+    device: torch.device,
+    batch_size: int = 64,
+    num_workers: int = 4,
+    use_mixed_precision: bool = True,
+    verbose: bool = True,
+    multi_gpu: bool = False,
+    moe_config: Optional['MoEConfig'] = None,
+) -> Tuple[np.ndarray, List[str], List[str]]:
+    """
+    Generate embeddings for Medicaid heldout members.
+    
+    This function adapts the commercial embedding generation for Medicaid:
+    1. Uses asdb_member_key as the primary ID (not individual_id)
+    2. Handles the Medicaid lob column (adds 'Medicaid' if missing)
+    3. Returns asdb_member_key for joining with downstream features
+    
+    Args:
+        model: Loaded model in eval mode
+        config: Model configuration
+        data: DataFrame from load_te_inference_input() with columns:
+              asdb_member_key, individual_id, index_dt, gender_cd,
+              age_in_months, cd, dt_cnt
+        device: Primary device
+        batch_size: Batch size per GPU
+        num_workers: DataLoader workers
+        use_mixed_precision: Use FP16 for Flash models
+        verbose: Print progress
+        multi_gpu: Enable multi-GPU processing
+        moe_config: MoE config (required for multi-GPU with MoE models)
+        
+    Returns:
+        embeddings: np.ndarray [num_members, embedding_size]
+        member_keys: List of asdb_member_key values (for joining with features)
+        index_dts: List of index dates
+    """
+    if not CORE_MODULE_AVAILABLE:
+        raise ImportError("Core module required for embedding generation")
+    
+    start_time = time.time()
+    n_samples = len(data)
+    embedding_dim = config.embedding_size
+    
+    # Detect model type
+    has_moe = (hasattr(model, 'forward') and 
+               'return_moe_losses' in model.forward.__code__.co_varnames)
+    
+    n_gpus = torch.cuda.device_count() if multi_gpu else 1
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"MEDICAID EMBEDDING GENERATION")
+        print(f"{'='*70}")
+        print(f"Samples: {n_samples:,} | Batch: {batch_size} | GPUs: {n_gpus}")
+        print(f"Workers: {num_workers} | Mixed precision: {use_mixed_precision}")
+    
+    # Ensure 'lob' column exists (required by LazyClinicalDataset)
+    if 'lob' not in data.columns:
+        data = data.copy()
+        data['lob'] = 'Medicaid'
+        if verbose:
+            print("  Added 'lob'='Medicaid' column")
+    
+    # Pre-allocate pinned memory output
+    embeddings_output = torch.empty(
+        (n_samples, embedding_dim),
+        dtype=torch.float32,
+        pin_memory=True
+    )
+    
+    # Extract IDs - use asdb_member_key for Medicaid (primary key for downstream)
+    if MEMBER_KEY in data.columns:
+        member_keys = data[MEMBER_KEY].astype(str).tolist()
+    else:
+        # Fallback to individual_id if asdb_member_key not present
+        member_keys = data['individual_id'].astype(str).tolist()
+    
+    index_dts = data['index_dt'].astype(str).tolist()
+    
+    if n_gpus > 1 and multi_gpu:
+        # Multi-GPU path
+        return _generate_embeddings_multi_gpu_medicaid(
+            model=model,
+            config=config,
+            data=data,
+            embeddings_output=embeddings_output,
+            member_keys=member_keys,
+            index_dts=index_dts,
+            n_gpus=n_gpus,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            use_mixed_precision=use_mixed_precision,
+            has_moe=has_moe,
+            moe_config=moe_config,
+            verbose=verbose,
+            start_time=start_time,
+        )
+    else:
+        # Single GPU path
+        return _generate_embeddings_single_gpu_medicaid(
+            model=model,
+            config=config,
+            data=data,
+            device=device,
+            embeddings_output=embeddings_output,
+            member_keys=member_keys,
+            index_dts=index_dts,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            use_mixed_precision=use_mixed_precision,
+            has_moe=has_moe,
+            verbose=verbose,
+            start_time=start_time,
+        )
+
+
+def _generate_embeddings_single_gpu_medicaid(
+    model, config, data, device, embeddings_output,
+    member_keys, index_dts, batch_size, num_workers,
+    use_mixed_precision, has_moe, verbose, start_time
+) -> Tuple[np.ndarray, List[str], List[str]]:
+    """Single GPU optimized path for Medicaid embeddings."""
+    
+    n_samples = len(data)
+    model.eval()
+    
+    dataset = LazyClinicalDataset(data, config)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=create_collate_fn(config),
+        num_workers=num_workers,
+        pin_memory=True,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=num_workers > 0,
+    )
+    
+    current_idx = 0
+    pbar = tqdm(dataloader, desc="Generating Medicaid embeddings", disable=not verbose)
+    
+    with torch.inference_mode():
+        with EmbeddingExtractor(model) as extractor:
+            for batch in pbar:
+                batch_size_actual = batch['age'].shape[0]
+                batch_start = current_idx
+                batch_end = batch_start + batch_size_actual
+                
+                x = torch.cat([
+                    batch['age'].unsqueeze(-1),
+                    batch['gender'].unsqueeze(-1),
+                    batch['lob'].unsqueeze(-1),
+                    batch['codes']
+                ], dim=-1).to(device, non_blocking=True)
+                
+                dt_cnt = batch['dt_cnt']
+                
+                if use_mixed_precision:
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
+                        if has_moe:
+                            _ = model(x, return_moe_losses=False)
+                        else:
+                            _ = model(x)
+                else:
+                    if has_moe:
+                        _ = model(x, return_moe_losses=False)
+                    else:
+                        _ = model(x)
+                
+                dt_cnt_list = dt_cnt.tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
+                patient_embs = extractor.get_patient_embedding(dt_cnt_list)
+                
+                embeddings_output[batch_start:batch_end].copy_(
+                    patient_embs.float(),
+                    non_blocking=True
+                )
+                
+                current_idx = batch_end
+                
+                elapsed = time.time() - start_time
+                speed = batch_end / elapsed
+                eta = (n_samples - batch_end) / speed if speed > 0 else 0
+                pbar.set_postfix({
+                    'speed': f'{speed:.0f}/s',
+                    'ETA': f'{eta:.0f}s'
+                })
+    
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    
+    embeddings = embeddings_output.numpy()
+    
+    elapsed = time.time() - start_time
+    if verbose:
+        print(f"\n✅ Complete! Time: {elapsed:.1f}s | Speed: {n_samples/elapsed:,.0f} samples/s")
+        print(f"   Output: {embeddings.shape}")
+    
+    return embeddings, member_keys, index_dts
+
+
+def _generate_embeddings_multi_gpu_medicaid(
+    model, config, data, embeddings_output, member_keys, index_dts,
+    n_gpus, batch_size, num_workers, use_mixed_precision, has_moe,
+    moe_config, verbose, start_time
+) -> Tuple[np.ndarray, List[str], List[str]]:
+    """
+    Multi-GPU path for Medicaid embeddings with true parallelism.
+    
+    Strategy:
+    - Split data into N chunks (one per GPU)
+    - Each GPU processes its chunk independently
+    - Write to non-overlapping regions of shared output tensor
+    """
+    n_samples = len(data)
+    
+    if verbose:
+        print(f"Multi-GPU mode: {n_gpus} GPUs")
+    
+    # Clone model to each GPU
+    models = []
+    for gpu_id in range(n_gpus):
+        if verbose:
+            print(f"  Cloning model to GPU {gpu_id}...")
+        
+        with torch.cuda.device(gpu_id):
+            model_copy = copy.deepcopy(model)
+            model_copy = model_copy.to(f'cuda:{gpu_id}')
+            model_copy.eval()
+            models.append(model_copy)
+    
+    # Split data into chunks
+    chunk_size = (n_samples + n_gpus - 1) // n_gpus
+    data_chunks = []
+    start_indices = []
+    
+    for i in range(n_gpus):
+        start_idx = i * chunk_size
+        end_idx = min((i + 1) * chunk_size, n_samples)
+        data_chunks.append(data.iloc[start_idx:end_idx].reset_index(drop=True))
+        start_indices.append(start_idx)
+        
+        if verbose:
+            print(f"  GPU {i}: samples {start_idx:,} to {end_idx:,} ({end_idx - start_idx:,} samples)")
+    
+    progress_lock = threading.Lock()
+    total_processed = [0]
+    errors = []
+    
+    def process_chunk(gpu_id: int, data_chunk: pd.DataFrame, start_idx: int):
+        """Process a data chunk on a specific GPU."""
+        if len(data_chunk) == 0:
+            return
+        
+        try:
+            gpu_device = torch.device(f'cuda:{gpu_id}')
+            gpu_model = models[gpu_id]
+            
+            dataset = LazyClinicalDataset(data_chunk, config)
+            dataloader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                collate_fn=create_collate_fn(config),
+                num_workers=max(1, num_workers // n_gpus),
+                pin_memory=True,
+            )
+            
+            local_idx = start_idx
+            
+            with torch.inference_mode():
+                with EmbeddingExtractor(gpu_model) as extractor:
+                    for batch in dataloader:
+                        batch_size_actual = batch['age'].shape[0]
+                        
+                        x = torch.cat([
+                            batch['age'].unsqueeze(-1),
+                            batch['gender'].unsqueeze(-1),
+                            batch['lob'].unsqueeze(-1),
+                            batch['codes']
+                        ], dim=-1).to(gpu_device, non_blocking=True)
+                        
+                        dt_cnt = batch['dt_cnt']
+                        
+                        if use_mixed_precision:
+                            with torch.cuda.amp.autocast(dtype=torch.float16):
+                                if has_moe:
+                                    _ = gpu_model(x, return_moe_losses=False)
+                                else:
+                                    _ = gpu_model(x)
+                        else:
+                            if has_moe:
+                                _ = gpu_model(x, return_moe_losses=False)
+                            else:
+                                _ = gpu_model(x)
+                        
+                        dt_cnt_list = dt_cnt.tolist() if isinstance(dt_cnt, torch.Tensor) else dt_cnt
+                        patient_embs = extractor.get_patient_embedding(dt_cnt_list)
+                        
+                        embeddings_output[local_idx:local_idx + batch_size_actual].copy_(
+                            patient_embs.float(),
+                            non_blocking=True
+                        )
+                        
+                        local_idx += batch_size_actual
+                        
+                        with progress_lock:
+                            total_processed[0] += batch_size_actual
+            
+            torch.cuda.synchronize(gpu_device)
+            
+        except Exception as e:
+            errors.append((gpu_id, str(e)))
+    
+    # Launch parallel processing
+    if verbose:
+        pbar = tqdm(total=n_samples, desc=f"Multi-GPU ({n_gpus} GPUs)")
+    
+    with ThreadPoolExecutor(max_workers=n_gpus) as executor:
+        futures = [
+            executor.submit(process_chunk, gpu_id, data_chunks[gpu_id], start_indices[gpu_id])
+            for gpu_id in range(n_gpus)
+        ]
+        
+        last_count = 0
+        while not all(f.done() for f in futures):
+            with progress_lock:
+                current = total_processed[0]
+            if verbose:
+                pbar.update(current - last_count)
+            last_count = current
+            time.sleep(0.1)
+        
+        if verbose:
+            pbar.update(n_samples - last_count)
+            pbar.close()
+        
+        for f in futures:
+            f.result()
+    
+    if errors:
+        raise RuntimeError(f"GPU errors: {errors}")
+    
+    # Cleanup
+    for m in models:
+        del m
+    torch.cuda.empty_cache()
+    
+    embeddings = embeddings_output.numpy()
+    
+    elapsed = time.time() - start_time
+    if verbose:
+        print(f"\n✅ Complete! Time: {elapsed:.1f}s | Speed: {n_samples/elapsed:,.0f} samples/s")
+        print(f"   Effective: {n_samples/elapsed * n_gpus:,.0f} samples/s (across {n_gpus} GPUs)")
+        print(f"   Output: {embeddings.shape}")
+    
+    return embeddings, member_keys, index_dts
+
+
+def save_medicaid_embeddings(
+    embeddings: np.ndarray,
+    member_keys: List[str],
+    index_dts: List[str],
+    output_path: str,
+    model_name: str = "",
+    additional_metadata: Dict = None
+) -> str:
+    """
+    Save Medicaid embeddings to disk in NPZ format.
+    
+    Args:
+        embeddings: [num_members, embedding_dim] array
+        member_keys: List of asdb_member_key values
+        index_dts: List of index dates
+        output_path: Directory to save files
+        model_name: Name of the model for file naming
+        additional_metadata: Optional dict of additional info to save
+        
+    Returns:
+        Path to saved NPZ file
+    """
+    os.makedirs(output_path, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    if model_name:
+        filename_base = f"embeddings_medicaid_{model_name}_{timestamp}"
+    else:
+        filename_base = f"embeddings_medicaid_{timestamp}"
+    
+    # Save NPZ with embeddings and metadata
+    npz_path = os.path.join(output_path, f"{filename_base}.npz")
+    np.savez_compressed(
+        npz_path,
+        embeddings=embeddings,
+        # Note: We save as 'individual_ids' for compatibility with load_embeddings_from_npz
+        # but these are actually asdb_member_keys for Medicaid
+        individual_ids=np.array(member_keys, dtype=object),
+        index_dts=np.array(index_dts, dtype=object),
+        embedding_dim=embeddings.shape[1],
+        num_members=len(member_keys),
+        lob='Medicaid',
+        member_key_type='asdb_member_key',
+        **(additional_metadata or {})
+    )
+    print(f"Embeddings saved to: {npz_path}")
+    
+    # Save CSV for easy lookup
+    csv_path = os.path.join(output_path, f"{filename_base}_ids.csv")
+    pd.DataFrame({
+        MEMBER_KEY: member_keys,
+        'index_dt': index_dts,
+        'embedding_idx': range(len(member_keys))
+    }).to_csv(csv_path, index=False)
+    print(f"ID mapping saved to: {csv_path}")
+    
+    return npz_path
+
+
+def save_medicaid_embeddings_to_bigquery(
+    embeddings: np.ndarray,
+    member_keys: List[str],
+    index_dts: List[str],
+    project_id: str = PROJECT_ID,
+    dataset_id: str = DATASET_ID,
+    table_name: str = "",
+    exp_name: str = "",
+    model_type: str = "",
+    if_exists: str = "replace"
+) -> str:
+    """
+    Save Medicaid embeddings to BigQuery.
+    
+    Args:
+        embeddings: numpy array [num_members, embedding_dim]
+        member_keys: list of asdb_member_key values
+        index_dts: list of index dates
+        project_id: GCP project ID
+        dataset_id: BigQuery dataset ID
+        table_name: Table name to create
+        exp_name: Experiment name for metadata
+        model_type: Model type for metadata
+        if_exists: What to do if table exists ('replace', 'append', 'fail')
+        
+    Returns:
+        Full table path
+    """
+    # Create DataFrame with ID columns
+    df = pd.DataFrame({
+        MEMBER_KEY: member_keys,
+        'index_dt': index_dts,
+    })
+    
+    # Add embedding columns (emb0, emb1, ..., emb255 to match Eric's naming)
+    embedding_dim = embeddings.shape[1]
+    for i in range(embedding_dim):
+        df[f'emb{i}'] = embeddings[:, i].astype(np.float32)
+    
+    # Add metadata columns
+    df['exp_name'] = exp_name
+    df['model_type'] = model_type
+    df['lob'] = 'Medicaid'
+    
+    full_table_id = f"{project_id}.{dataset_id}.{table_name}"
+    
+    print(f"Writing {len(df):,} rows to BigQuery: {full_table_id}")
+    print(f"  Columns: {len(df.columns)} (embedding_dim={embedding_dim})")
+    
+    client = bigquery.Client()
+    
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE if if_exists == "replace" 
+                          else bigquery.WriteDisposition.WRITE_APPEND if if_exists == "append"
+                          else bigquery.WriteDisposition.WRITE_EMPTY,
+    )
+    
+    job = client.load_table_from_dataframe(df, full_table_id, job_config=job_config)
+    job.result()
+    
+    table = client.get_table(full_table_id)
+    print(f"✅ Loaded {table.num_rows:,} rows to {full_table_id}")
+    
+    return full_table_id
+
+
+# =============================================================================
+# TIME-BASED DATA SPLITTING (FOR OOT VALIDATION)
+# =============================================================================
+
+def create_time_based_splits(
+    df: pd.DataFrame,
+    date_column: str = 'index_dt',
+    oot_cutoff_date: str = OOT_CUTOFF_DATE,
+    test_size: float = TEST_SIZE,
+    val_size: float = VAL_SIZE,
+    random_state: int = RANDOM_STATE,
+    verbose: bool = True
+) -> Dict[str, pd.DataFrame]:
+    """
+    Create train/val/test/OOT splits based on time.
+    
+    This replicates the commercial IP splitting strategy with Medicaid adaptations:
+    - Data before OOT cutoff: split into train/val/test (stratified random)
+    - Data after OOT cutoff: used for OOT (out-of-time) validation
+    
+    The OOT split tests temporal generalization - how well the model
+    performs on future time periods not seen during training.
+    
+    Note: Unlike commercial IP which uses ind_id_last_digit for deterministic
+    splitting, Medicaid uses stratified random split (matching Eric's original
+    pipeline). This is because Medicaid doesn't have the ind_id_last_digit column.
+    
+    Args:
+        df: DataFrame with features and target
+        date_column: Column containing dates (typically 'index_dt')
+        oot_cutoff_date: Date string for OOT split cutoff (default: 2023-10-16)
+        test_size: Fraction for test set (from pre-cutoff data)
+        val_size: Fraction for validation set (from pre-cutoff data)
+        random_state: Random seed for stratified split (default: 35, Eric's value)
+        verbose: Print split information
+        
+    Returns:
+        Dict with keys 'train', 'val', 'test', 'oot'
+    """
+    df = df.copy()
+    
+    # Parse dates
+    df['_date_parsed'] = pd.to_datetime(df[date_column])
+    oot_cutoff = pd.to_datetime(oot_cutoff_date)
+    
+    # Split by time
+    df_pre_cutoff = df[df['_date_parsed'] <= oot_cutoff]
+    df_oot = df[df['_date_parsed'] > oot_cutoff]
+    
+    if verbose:
+        print(f"\nTime-based split (cutoff: {oot_cutoff_date}):")
+        print(f"  Pre-cutoff: {len(df_pre_cutoff):,} rows")
+        print(f"  Post-cutoff (OOT): {len(df_oot):,} rows")
+    
+    # For pre-cutoff data, do stratified random split
+    if len(df_pre_cutoff) > 0:
+        # First split: train+val vs test
+        train_val, test = train_test_split(
+            df_pre_cutoff,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=df_pre_cutoff[TARGET_COLUMN]
+        )
+        
+        # Second split: train vs val
+        val_size_adjusted = val_size / (1 - test_size)
+        train, val = train_test_split(
+            train_val,
+            test_size=val_size_adjusted,
+            random_state=random_state,
+            stratify=train_val[TARGET_COLUMN]
+        )
+    else:
+        train, val, test = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    
+    # Remove temp column
+    for split_df in [train, val, test, df_oot]:
+        if '_date_parsed' in split_df.columns:
+            split_df.drop(columns=['_date_parsed'], inplace=True)
+    
+    splits = {
+        'train': train.reset_index(drop=True),
+        'val': val.reset_index(drop=True),
+        'test': test.reset_index(drop=True),
+        'oot': df_oot.reset_index(drop=True),
+    }
+    
+    if verbose:
+        print("\nFinal splits:")
+        for name, split_df in splits.items():
+            if len(split_df) > 0:
+                prevalence = split_df[TARGET_COLUMN].mean() * 100
+                print(f"  {name}: {len(split_df):,} rows, "
+                      f"{int(split_df[TARGET_COLUMN].sum()):,} positives ({prevalence:.2f}%)")
+            else:
+                print(f"  {name}: EMPTY")
+    
+    return splits
+
+
+# =============================================================================
+# MEDICAID EMBEDDING GENERATION WORKFLOW
+# =============================================================================
+
+def run_medicaid_embedding_generation(
+    model_paths: Dict[str, str],
+    output_dir: str,
+    batch_size: int = 64,
+    sample_frac: Optional[float] = EMBEDDING_SAMPLE_FRAC,
+    multi_gpu: bool = True,
+    save_to_bigquery: bool = False,
+    verbose: bool = True
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Generate embeddings for Medicaid heldout members using multiple models.
+    
+    This is the main entry point for embedding generation, designed to
+    run multiple experiments in sequence and save results.
+    
+    Args:
+        model_paths: Dict mapping experiment names to model checkpoint paths
+        output_dir: Base directory for saving embeddings
+        batch_size: Batch size for inference
+        sample_frac: Optional sampling fraction (None = full data)
+        multi_gpu: Use all available GPUs
+        save_to_bigquery: Also save to BigQuery table
+        verbose: Print progress
+        
+    Returns:
+        Dict mapping experiment names to result metadata
+        
+    Example:
+        model_paths = {
+            'exp2b_flash_learned_pool': 'logs/.../model.pt',
+            'exp6_auxiliary_free': 'logs/.../model.pt',
+        }
+        results = run_medicaid_embedding_generation(
+            model_paths=model_paths,
+            output_dir='embedding_output/medicaid/',
+            batch_size=64,
+            multi_gpu=True
+        )
+    """
+    if not CORE_MODULE_AVAILABLE:
+        raise ImportError("Core module required. Ensure moe_flashattn_3_core.py is available.")
+    
+    # Load TE inference input for heldout Medicaid members
+    print("\n" + "="*70)
+    print("MEDICAID EMBEDDING GENERATION WORKFLOW")
+    print("="*70)
+    
+    df_te_input = load_te_inference_input(
+        sample_frac=sample_frac,
+        verbose=verbose
+    )
+    
+    # Show time distribution for OOT planning
+    if 'index_dt' in df_te_input.columns:
+        df_te_input['index_dt'] = pd.to_datetime(df_te_input['index_dt'])
+        df_pre_oot = df_te_input[df_te_input['index_dt'] <= pd.to_datetime(OOT_CUTOFF_DATE)]
+        df_oot = df_te_input[df_te_input['index_dt'] > pd.to_datetime(OOT_CUTOFF_DATE)]
+        
+        if verbose:
+            print(f"\nTime distribution (OOT cutoff: {OOT_CUTOFF_DATE}):")
+            print(f"  Pre-OOT (≤{OOT_CUTOFF_DATE}): {len(df_pre_oot):,} members")
+            print(f"  OOT (>{OOT_CUTOFF_DATE}): {len(df_oot):,} members")
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    results = {}
+    
+    for exp_name, model_path in tqdm(model_paths.items(), desc="Processing models"):
+        print(f"\n{'='*70}")
+        print(f"EXPERIMENT: {exp_name}")
+        print(f"{'='*70}")
+        
+        # Cleanup GPU memory
+        if CORE_MODULE_AVAILABLE and torch.cuda.is_available():
+            cleanup_gpu_memory(verbose=False)
+        
+        # Load model
+        model, config, moe_config, use_mixed_precision, model_type = load_model_from_checkpoint(
+            model_path=model_path,
+            device=device,
+            verbose=verbose
+        )
+        
+        # Generate embeddings
+        inference_start = time.time()
+        embeddings, member_keys, index_dts = generate_medicaid_embeddings(
+            model=model,
+            config=config,
+            data=df_te_input,
+            device=device,
+            batch_size=batch_size,
+            use_mixed_precision=use_mixed_precision,
+            verbose=verbose,
+            multi_gpu=multi_gpu,
+            moe_config=moe_config,
+        )
+        inference_duration = time.time() - inference_start
+        
+        # Save embeddings to NPZ
+        exp_output_dir = os.path.join(output_dir, exp_name)
+        embeddings_path = save_medicaid_embeddings(
+            embeddings=embeddings,
+            member_keys=member_keys,
+            index_dts=index_dts,
+            output_path=exp_output_dir,
+            model_name=exp_name,
+            additional_metadata={
+                'model_path': model_path,
+                'model_type': model_type,
+                'use_mixed_precision': use_mixed_precision,
+                'sample_frac': sample_frac,
+            }
+        )
+        
+        # Optionally save to BigQuery
+        bq_table_path = None
+        if save_to_bigquery:
+            safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
+            table_name = f"a964286_te4exp_{safe_exp_name}_medicaid_heldout_embedding"
+            bq_table_path = save_medicaid_embeddings_to_bigquery(
+                embeddings=embeddings,
+                member_keys=member_keys,
+                index_dts=index_dts,
+                table_name=table_name,
+                exp_name=exp_name,
+                model_type=model_type,
+            )
+        
+        results[exp_name] = {
+            'embeddings_path': embeddings_path,
+            'bq_table_path': bq_table_path,
+            'embedding_shape': embeddings.shape,
+            'model_type': model_type,
+            'model_path': model_path,
+            'inference_duration_sec': inference_duration,
+            'inference_duration_hr': round(inference_duration / 3600, 2),
+            'status': 'success'
+        }
+        
+        # Cleanup
+        del model
+        del embeddings
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    print("\n" + "="*70)
+    print("EMBEDDING GENERATION COMPLETE")
+    print("="*70)
+    for exp_name, result in results.items():
+        print(f"  {exp_name}: {result['embedding_shape']} ({result['inference_duration_hr']:.2f}hr)")
+    
+    return results
+
+
+# =============================================================================
 # HIGH-LEVEL EVALUATION FUNCTIONS
 # =============================================================================
 
@@ -1288,9 +2562,10 @@ if __name__ == "__main__":
     Example usage of the Medicaid IP evaluation pipeline.
     
     This demonstrates how to:
-    1. Run evaluation with original embeddings
+    1. Generate embeddings for heldout Medicaid members
     2. Run evaluation with new transformer embeddings
-    3. Compare results across experiments
+    3. Use time-based (OOT) validation splits
+    4. Compare results across experiments
     """
     
     print("\n" + "="*70)
@@ -1299,28 +2574,127 @@ if __name__ == "__main__":
     print("\nThis pipeline evaluates transformer embeddings on the Medicaid IP")
     print("hospitalization prediction task using the exact same methodology")
     print("as the original model (Eric Ma's internship project).")
-    print("\nSupported feature sets:")
+    print("\n" + "-"*70)
+    print("WORKFLOW OVERVIEW")
+    print("-"*70)
+    print("\nStep 1: EMBEDDING GENERATION")
+    print("  - Load trained transformer model from checkpoint")
+    print("  - Load heldout Medicaid member TE sequences from BigQuery")
+    print("  - Generate embeddings via forward pass")
+    print("  - Save to NPZ (and optionally BigQuery)")
+    print("\nStep 2: DOWNSTREAM EVALUATION")
+    print("  - Load heldout features + outcomes from BigQuery")
+    print("  - Merge with generated embeddings")
+    print("  - Split: Train/Val/Test (pre-cutoff) + OOT (post-cutoff)")
+    print("  - Train CatBoost with tuned hyperparameters")
+    print("  - Evaluate on all splits")
+    print("\n" + "-"*70)
+    print("FEATURE SETS")
+    print("-"*70)
     print("  - embedding_only: 256 transformer embedding features")
     print("  - tabular_only: ~243 hand-crafted features (baseline)")
     print("  - hybrid: Both embeddings + tabular (~499 features)")
-    print("\nKey metrics:")
+    print("\n" + "-"*70)
+    print("KEY METRICS")
+    print("-"*70)
     print("  - ROC-AUC: Overall discrimination")
     print("  - Lift@1%: Business impact metric (20x = 20 times better than random)")
     print("  - PPV@1%: Precision in top 1% of predictions")
     print("\nExpected performance (original CatBoost model):")
     print("  - AUC: ~0.87")
     print("  - Lift@1%: ~19-20x")
+    print("\n" + "-"*70)
+    print("TIME-BASED SPLIT (OOT VALIDATION)")
+    print("-"*70)
+    print(f"  - OOT cutoff date: {OOT_CUTOFF_DATE}")
+    print("  - Pre-cutoff: Train (80%), Val (10%), Test (10%) - stratified random")
+    print("  - Post-cutoff: OOT (out-of-time validation)")
     print("="*70)
     
-    # Example: Run with a sample for testing
-    # Uncomment to run:
+    # =========================================================================
+    # EXAMPLE 1: EMBEDDING GENERATION
+    # =========================================================================
+    # Uncomment to generate embeddings for Medicaid heldout members:
+    #
+    # MODEL_PATHS = {
+    #     'exp2b_flash_learned_pool': 
+    #         'logs/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2/'
+    #         'exp2b_flash_learned_pool/saved_models/'
+    #         'exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_final.pt',
+    #     
+    #     'exp6_auxiliary_free_v3': 
+    #         'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
+    #         'exp6_auxiliary_free_v3/saved_models/'
+    #         'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_final.pt',
+    # }
+    # 
+    # results = run_medicaid_embedding_generation(
+    #     model_paths=MODEL_PATHS,
+    #     output_dir='embedding_output/medicaid_heldout/',
+    #     batch_size=64,
+    #     sample_frac=None,  # Use full data (or 0.3 for testing)
+    #     multi_gpu=True,
+    #     save_to_bigquery=False,  # Set True to also save to BigQuery
+    #     verbose=True
+    # )
+    
+    # =========================================================================
+    # EXAMPLE 2: DOWNSTREAM EVALUATION WITH NEW EMBEDDINGS
+    # =========================================================================
+    # Uncomment to evaluate embeddings on Medicaid IP task:
     #
     # result = run_medicaid_ip_evaluation(
-    #     embedding_path=None,  # Use original embeddings
-    #     feature_set='hybrid',
-    #     sample_frac=0.01,  # 1% sample for quick testing
+    #     embedding_path='embedding_output/medicaid_heldout/exp2b_flash_learned_pool/',
+    #     feature_set='hybrid',  # or 'embedding_only', 'tabular_only'
+    #     sample_frac=None,  # Full data, or 0.01 for testing
+    #     use_tuned_params=True,  # Use Optuna-tuned hyperparameters
+    #     apply_downsampling=True,  # Use 0.2 undersampling ratio
     #     verbose=True
     # )
     # print(f"\nTest AUC: {result['test_auc_roc']:.4f}")
     # print(f"Test Lift@1%: {result['test_lift_1pct']:.2f}x")
+    
+    # =========================================================================
+    # EXAMPLE 3: EVALUATION WITH OOT (OUT-OF-TIME) VALIDATION
+    # =========================================================================
+    # For time-based evaluation that includes OOT:
+    #
+    # # Load data
+    # df = load_medicaid_data_from_bigquery(sample_frac=0.1)
+    # 
+    # # Create time-based splits (includes OOT)
+    # splits = create_time_based_splits(
+    #     df=df,
+    #     oot_cutoff_date=OOT_CUTOFF_DATE,  # 2023-10-16
+    #     verbose=True
+    # )
+    # 
+    # # Evaluate on OOT split
+    # # Note: Train on pre-cutoff, evaluate on all including OOT
+    
+    # =========================================================================
+    # EXAMPLE 4: COMPARE MULTIPLE EMBEDDINGS
+    # =========================================================================
+    # Uncomment to compare multiple embedding experiments:
+    #
+    # embedding_paths = {
+    #     'exp2b_flash': 'embedding_output/medicaid_heldout/exp2b_flash_learned_pool/',
+    #     'exp6_moe': 'embedding_output/medicaid_heldout/exp6_auxiliary_free_v3/',
+    # }
+    # 
+    # results_df = evaluate_multiple_embeddings(
+    #     embedding_paths=embedding_paths,
+    #     feature_sets=['embedding_only', 'tabular_only', 'hybrid'],
+    #     sample_frac=None,
+    #     apply_downsampling=True,
+    #     verbose=True
+    # )
+    # 
+    # # Compare embedding effects
+    # comparison = compare_embedding_effects(results_df)
+    # print("\nEmbedding Contribution Analysis:")
+    # print(comparison.to_string())
+    
+    print("\n⚠️  No code executed. Uncomment examples above to run.")
+    print("    Or import this module and call functions directly.")
 
