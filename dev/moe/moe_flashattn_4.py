@@ -191,7 +191,7 @@
 # ============================================================================
 
 
-# In[1]:
+# In[2]:
 
 
 import pandas as pd
@@ -280,7 +280,7 @@ from datetime import datetime
 
 # ### Configurations
 
-# In[10]:
+# In[63]:
 
 
 # ============================================================================
@@ -347,7 +347,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[53]:
+# In[64]:
 
 
 @dataclass
@@ -531,7 +531,7 @@ class OptimizeConfig:
     override_gradient_clip: Optional[float] = None # Override gradient clip (0.25 for legacy)    
     
     # ============================================================
-    # TIER-AWARE BATCHING (NEW)
+    # TIER-AWARE BATCHING
     # Purpose: Guarantee minimum medium/rare/tail samples per batch
     # to prevent gradient starvation for rare codes.
     # ============================================================
@@ -539,10 +539,32 @@ class OptimizeConfig:
     tier_medium_quota: int = 0              # Min members with medium codes per batch
     tier_rare_quota: int = 8                # Min members with rare codes per batch
     tier_tail_quota: int = 10               # Min members with tail codes per batch    
+
+    # ============================================================
+    # DENSITY-AWARE TIER BATCHING (Priority 1 - Feb 2026)
+    # Replaces binary "has any tail code" with density-based selection.
+    # Members in the tail pool must be in the top-N% by tail occurrence density.
+    # ============================================================
+    use_density_aware_batching: bool = False  # By default do not use density aware batching
+    density_tail_percentile: float = 80.0     # Top 20% of members by tail density
+    density_rare_percentile: float = 70.0     # Top 30% of members by rare density
+    density_medium_percentile: float = 70.0   # Top 30% of members by medium density
+    
+    
+    # ============================================================
+    # ASYMMETRIC LOSS (Priority 2 - Feb 2026)
+    # Ridnik et al. 2021 - different gamma for pos vs neg
+    # Designed for multi-label with long-tail distributions
+    # ============================================================
+    use_asl: bool = False
+    asl_gamma_pos: float = 0.0    # 0 = keep ALL positive gradients
+    asl_gamma_neg: float = 4.0    # 4 = aggressively down-weight easy negatives
+    asl_clip: float = 0.05        # Probability margin for negatives
+    
     
 
 
-# In[12]:
+# In[65]:
 
 
 def get_legacy_optimize_config() -> OptimizeConfig:
@@ -578,7 +600,7 @@ def get_legacy_optimize_config() -> OptimizeConfig:
     )
 
 
-# In[13]:
+# In[66]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -1025,7 +1047,7 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
 
 # ### Data parellelism
 
-# In[14]:
+# In[67]:
 
 
 class DataParallelWrapper(nn.Module):
@@ -1280,7 +1302,7 @@ print(f"Predictions shape: {extras['predictions'].shape}")
 
 # ### RPE and Swiglu
 
-# In[15]:
+# In[68]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -1438,7 +1460,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[16]:
+# In[69]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1704,7 +1726,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[17]:
+# In[70]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1805,7 +1827,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[18]:
+# In[74]:
 
 
 # ============================================================================
@@ -2252,7 +2274,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[19]:
+# In[71]:
 
 
 # ============================================================================
@@ -2433,7 +2455,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[20]:
+# In[72]:
 
 
 # ============================================================================
@@ -2656,7 +2678,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[21]:
+# In[77]:
 
 
 # ============================================================================
@@ -3136,7 +3158,7 @@ test_model_forward_with_lob()
 
 # #### Preprocess data with data loader
 
-# In[22]:
+# In[73]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -3227,7 +3249,7 @@ class PreparedData:
                 f"code_frequencies_shape={self.code_frequencies.shape})")
 
 
-# In[23]:
+# In[74]:
 
 
 from functools import partial
@@ -3364,7 +3386,7 @@ print(f"dt_cnt type: {type(batch['dt_cnt'])}")  # Should be torch.Tensor
 
 # #### Data preparation
 
-# In[24]:
+# In[75]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -3641,7 +3663,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function (Legacy, used only in test)
 
-# In[25]:
+# In[76]:
 
 
 def compute_loss(
@@ -4171,15 +4193,115 @@ def test_conv_lob():
 test_conv_lob()
 
 
-# In[ ]:
+# #### AsymmetricLoss
+
+# In[77]:
 
 
-
+class AsymmetricLoss(nn.Module):
+    """
+    Asymmetric Loss for Multi-Label Classification (Ridnik et al., 2021).
+    
+    Designed specifically for multi-label problems with long-tail distributions.
+    Uses different focusing parameters for positives vs negatives:
+    
+    L_+ = (1 - p)^γ+ × BCE(p, 1)      [positives]
+    L_- = (p_m)^γ-   × BCE(p_m, 0)     [negatives, with margin]
+    
+    where p_m = max(p - m, 0) is the probability shifted by margin m.
+    
+    Key advantages over standard Focal Loss:
+    - γ+ = 0: Preserves ALL positive gradients (critical for tail codes)
+    - γ- = 4: Aggressively down-weights easy negatives (common codes already learned)
+    - Margin m: Hard-thresholds very easy negatives to zero contribution
+    
+    Reference:
+        "Asymmetric Loss For Multi-Label Classification" (Ridnik et al., ICCV 2021)
+    """
+    
+    def __init__(
+        self,
+        gamma_pos: float = 0.0,
+        gamma_neg: float = 4.0,
+        clip: float = 0.05,
+        pos_weight: Optional[torch.Tensor] = None,
+        reduction: str = 'mean'
+    ):
+        """
+        Args:
+            gamma_pos: Focusing parameter for positive examples.
+                0.0 = no down-weighting (preserve all positive gradients)
+                1.0+ = down-weight easy positives
+            gamma_neg: Focusing parameter for negative examples.
+                4.0 = strong down-weighting of easy negatives (recommended)
+                2.0 = moderate
+            clip: Probability margin for negatives. Shifts p down by this amount 
+                before computing loss. Effectively zeros out contribution from 
+                negatives with p < clip. Set 0.0 to disable.
+            pos_weight: Optional per-class weights [num_classes] for additional
+                frequency-based reweighting (can combine with ASL)
+            reduction: 'mean', 'sum', or 'none'
+        """
+        super().__init__()
+        self.gamma_pos = gamma_pos
+        self.gamma_neg = gamma_neg
+        self.clip = clip
+        if pos_weight is not None:
+            self.register_buffer('pos_weight', pos_weight)
+        else:
+            self.pos_weight = None
+        self.reduction = reduction
+    
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Compute asymmetric loss.
+        
+        Args:
+            logits: [batch, ..., num_classes] raw model outputs (before sigmoid)
+            targets: [batch, ..., num_classes] binary targets (0 or 1)
+        
+        Returns:
+            ASL loss (scalar if reduction='mean' or 'sum')
+        """
+        if targets.dtype != logits.dtype:
+            targets = targets.to(logits.dtype)
+        
+        # Compute probabilities
+        p = torch.sigmoid(logits)
+        
+        # Numerically stable BCE per-element (handles float16 safely)
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+        
+        # For negatives: apply probability margin (clipping)
+        p_neg = p
+        if self.clip > 0:
+            p_neg = (p - self.clip).clamp(min=0.0)
+        
+        # Asymmetric focusing weights
+        # Positives: (1-p)^γ+  (when γ+=0, this is 1.0 — no modulation)
+        # Negatives: (p_m)^γ-  (when γ-=4, easy negatives get strongly down-weighted)
+        pos_weight_factor = (1.0 - p) ** self.gamma_pos if self.gamma_pos > 0 else 1.0
+        neg_weight_factor = p_neg ** self.gamma_neg if self.gamma_neg > 0 else 1.0
+        
+        # Combine: apply pos weights where target=1, neg weights where target=0
+        modulation = targets * pos_weight_factor + (1 - targets) * neg_weight_factor
+        
+        loss = modulation * bce
+        
+        # Apply per-class pos_weight if provided
+        if self.pos_weight is not None:
+            loss = loss * self.pos_weight
+        
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
 
 
 # #### Focal loss
 
-# In[19]:
+# In[78]:
 
 
 class FocalLoss(nn.Module):
@@ -4221,7 +4343,10 @@ class FocalLoss(nn.Module):
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
-        self.pos_weight = pos_weight
+        if pos_weight is not None:
+            self.register_buffer('pos_weight', pos_weight)
+        else:
+            self.pos_weight = None
         self.reduction = reduction
         
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -4278,7 +4403,7 @@ class FocalLoss(nn.Module):
 
 # #### Weighted loss function(weighted + Focal loss)
 
-# In[26]:
+# In[79]:
 
 
 # ============================================================
@@ -4492,7 +4617,8 @@ def create_criterion(
         Configured loss criterion (BCEWithLogitsLoss or FocalLoss)
     """
     pos_weight = None
-    
+    if optimize_config.use_asl and optimize_config.use_focal_loss:
+        print("  ⚠️ Warning: Both use_asl and use_focal_loss are True. Using ASL (takes priority).")    
     # Step 1: Compute pos_weight if enabled
     if optimize_config.use_pos_weight:
         method = optimize_config.pos_weight_method
@@ -4520,8 +4646,20 @@ def create_criterion(
                 code_frequencies, device, max_weight=max_weight
             )
     
-    # Step 2: Create criterion (Focal or BCE)
-    if optimize_config.use_focal_loss:
+    # Step 2: Create criterion (ASL > Focal > BCE priority)
+
+    if optimize_config.use_asl:
+        criterion = AsymmetricLoss(
+            gamma_pos=optimize_config.asl_gamma_pos,
+            gamma_neg=optimize_config.asl_gamma_neg,
+            clip=optimize_config.asl_clip,
+            pos_weight=pos_weight,
+            reduction='mean'
+        )
+        loss_name = (f"AsymmetricLoss(γ+={optimize_config.asl_gamma_pos}, "
+                     f"γ-={optimize_config.asl_gamma_neg}, "
+                     f"clip={optimize_config.asl_clip})")
+    elif optimize_config.use_focal_loss:
         criterion = FocalLoss(
             gamma=optimize_config.focal_gamma,
             alpha=optimize_config.focal_alpha,
@@ -4532,7 +4670,7 @@ def create_criterion(
     else:
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         loss_name = "BCEWithLogitsLoss"
-    
+        
     # Log what was created
     if pos_weight is not None:
         print(f"  Created: {loss_name} with pos_weight ({optimize_config.pos_weight_method})")
@@ -4544,7 +4682,7 @@ def create_criterion(
 
 # #### Loss logger
 
-# In[27]:
+# In[80]:
 
 
 class LossTracker:
@@ -4668,7 +4806,7 @@ class LossTracker:
         return recent_worse
 
 
-# In[28]:
+# In[81]:
 
 
 class ValidationTracker:
@@ -4704,7 +4842,7 @@ class ValidationTracker:
 
 # #### Optimizer
 
-# In[29]:
+# In[82]:
 
 
 import math
@@ -4881,7 +5019,7 @@ def create_scheduler(
     return scheduler, desc
 
 
-# In[30]:
+# In[83]:
 
 
 def create_optimizer(
@@ -4956,7 +5094,7 @@ def create_optimizer(
 
 # #### Gradient tier inspection
 
-# In[31]:
+# In[84]:
 
 
 # ============================================================
@@ -5230,7 +5368,7 @@ class GradientTierAnalyzer:
 
 # #### Train epoch
 
-# In[32]:
+# In[85]:
 
 
 def _model_has_moe(model):
@@ -5720,7 +5858,7 @@ def train_epoch(
 
 # #### Tier-aware batch sampler
 
-# In[34]:
+# In[86]:
 
 
 from torch.utils.data import Sampler, Dataset, DataLoader
@@ -6047,7 +6185,7 @@ class TierAwareBatchSampler(Sampler):
         return self.num_batches
 
 
-# In[51]:
+# In[87]:
 
 
 def create_tier_aware_dataloader(
@@ -6293,9 +6431,387 @@ def _create_dataloaders_with_tier_aware(
     return train_loader, val_loader
 
 
+# #### Dense tier aware batch sampler
+
+# In[88]:
+
+
+class DensityTierAwareBatchSampler(Sampler):
+    """
+    Density-aware batch sampler that selects members with HIGH CONCENTRATION
+    of rare/tail codes, not just binary presence.
+    
+    Key difference from TierAwareBatchSampler:
+    - Old: tail_pool = members with >= 1 tail code (83.4% of members)
+    - New: tail_pool = top 20% of members by tail code DENSITY
+    
+    Density = (number of tail code occurrences) / (total code occurrences)
+    
+    This ensures members selected for tail quota actually provide meaningful
+    tail gradient signal (15-20%+ tail codes vs global 5.2%).
+    
+    Evidence basis: Jan 30 code frequency analysis showed 83.4% member-level 
+    coverage but only 5.2% occurrence-level coverage for tail codes.
+    """
+    
+    def __init__(
+        self,
+        dataset: Dataset,
+        code_frequencies: np.ndarray,
+        batch_size: int,
+        medium_quota: int = 0,
+        rare_quota: int = 4,
+        tail_quota: int = 8,
+        shuffle: bool = True,
+        drop_last: bool = True,
+        percentile_boundaries: Tuple[float, float, float] = (20, 50, 80),
+        density_tail_percentile: float = 80.0,
+        density_rare_percentile: float = 70.0,
+        density_medium_percentile: float = 70.0,
+        verbose: bool = True
+    ):
+        """
+        Args:
+            dataset: ClinicalDataset with targets
+            code_frequencies: Array of code occurrence counts
+            batch_size: Total batch size
+            medium_quota: Minimum high-density medium members per batch
+            rare_quota: Minimum high-density rare members per batch
+            tail_quota: Minimum high-density tail members per batch
+            shuffle: Whether to shuffle within each pool
+            drop_last: Whether to drop the last incomplete batch
+            percentile_boundaries: (tail_thresh, rare_thresh, medium_thresh)
+                for defining which CODES belong to which tier
+            density_tail_percentile: Percentile threshold for tail member pool
+                80.0 = only top 20% of members by tail density
+            density_rare_percentile: Percentile threshold for rare member pool
+            density_medium_percentile: Percentile threshold for medium member pool
+            verbose: Print initialization statistics
+        """
+        super().__init__(dataset)
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.medium_quota = medium_quota
+        self.rare_quota = rare_quota
+        self.tail_quota = tail_quota
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.num_samples = len(dataset)
+        self.density_tail_pct = density_tail_percentile
+        self.density_rare_pct = density_rare_percentile
+        self.density_medium_pct = density_medium_percentile
+        
+        total_quota = medium_quota + rare_quota + tail_quota
+        assert total_quota <= batch_size, \
+            f"Combined quotas ({total_quota}) exceed batch_size ({batch_size})"
+        
+        self._build_tier_indices(code_frequencies, percentile_boundaries)
+        self._build_density_pools(verbose)
+        self._calculate_num_batches()
+    
+    def _build_tier_indices(
+        self,
+        code_frequencies: np.ndarray,
+        percentile_boundaries: Tuple[float, float, float]
+    ):
+        """Build tier code index sets based on frequency percentiles."""
+        freq_nz = code_frequencies[code_frequencies > 0]
+        if len(freq_nz) == 0:
+            raise ValueError("No non-zero frequencies found in code_frequencies")
+        
+        percentiles = np.percentile(freq_nz, list(percentile_boundaries))
+        self.tier_code_indices = {}
+        
+        self.tier_code_indices['common'] = set(
+            np.where(code_frequencies > percentiles[2])[0]
+        )
+        self.tier_code_indices['medium'] = set(
+            np.where((code_frequencies <= percentiles[2]) & 
+                     (code_frequencies > percentiles[1]))[0]
+        )
+        self.tier_code_indices['rare'] = set(
+            np.where((code_frequencies <= percentiles[1]) & 
+                     (code_frequencies > percentiles[0]))[0]
+        )
+        self.tier_code_indices['tail'] = set(
+            np.where((code_frequencies <= percentiles[0]) & 
+                     (code_frequencies > 0))[0]
+        )
+        
+        self.tier_thresholds = {
+            'tail_upper': percentiles[0],
+            'rare_upper': percentiles[1],
+            'medium_upper': percentiles[2]
+        }
+    
+    def _build_density_pools(self, verbose: bool):
+        """
+        Compute per-member density scores for each tier and build 
+        high-density pools using percentile thresholds.
+        
+        Density = (occurrences of tier codes across all days) / (total occurrences)
+        """
+        medium_codes = self.tier_code_indices['medium']
+        rare_codes = self.tier_code_indices['rare']
+        tail_codes = self.tier_code_indices['tail']
+        
+        targets_list = self.dataset.targets
+        
+        tail_densities = np.zeros(self.num_samples, dtype=np.float32)
+        rare_densities = np.zeros(self.num_samples, dtype=np.float32)
+        medium_densities = np.zeros(self.num_samples, dtype=np.float32)
+        
+        tail_counts = np.zeros(self.num_samples, dtype=np.int32)
+        rare_counts = np.zeros(self.num_samples, dtype=np.int32)
+        medium_counts = np.zeros(self.num_samples, dtype=np.int32)
+        total_counts = np.zeros(self.num_samples, dtype=np.int32)
+        
+        if verbose:
+            print(f"DensityTierAwareBatchSampler: Computing density scores "
+                  f"for {self.num_samples:,} members...")
+        
+        for idx in range(self.num_samples):
+            if verbose and idx > 0 and idx % 500000 == 0:
+                print(f"    Processed {idx:,}/{self.num_samples:,} members...")
+            
+            target_list = targets_list[idx]
+            member_tail = 0
+            member_rare = 0
+            member_medium = 0
+            member_total = 0
+            
+            for day_codes in target_list:
+                if not day_codes:
+                    continue
+                for code in day_codes:
+                    if code == 0:
+                        continue
+                    member_total += 1
+                    if code in tail_codes:
+                        member_tail += 1
+                    elif code in rare_codes:
+                        member_rare += 1
+                    elif code in medium_codes:
+                        member_medium += 1
+            
+            total_counts[idx] = member_total
+            tail_counts[idx] = member_tail
+            rare_counts[idx] = member_rare
+            medium_counts[idx] = member_medium
+            
+            if member_total > 0:
+                tail_densities[idx] = member_tail / member_total
+                rare_densities[idx] = member_rare / member_total
+                medium_densities[idx] = member_medium / member_total
+        
+        # Build pools using percentile thresholds on density scores
+        # Only consider members with >0 tail occurrences for tail pool percentile
+        tail_mask = tail_counts > 0
+        rare_mask = rare_counts > 0
+        medium_mask = medium_counts > 0
+        
+        # Compute percentile thresholds on members who HAVE codes from each tier
+        if tail_mask.sum() > 0:
+            tail_density_thresh = np.percentile(
+                tail_densities[tail_mask], self.density_tail_pct
+            )
+        else:
+            tail_density_thresh = 0.0
+            
+        if rare_mask.sum() > 0:
+            rare_density_thresh = np.percentile(
+                rare_densities[rare_mask], self.density_rare_pct
+            )
+        else:
+            rare_density_thresh = 0.0
+            
+        if medium_mask.sum() > 0:
+            medium_density_thresh = np.percentile(
+                medium_densities[medium_mask], self.density_medium_pct
+            )
+        else:
+            medium_density_thresh = 0.0
+        
+        # Select high-density members for each pool
+        # Add the mask to ensure only members with actual tail codes qualify
+        self.samples_with_tail = np.where(
+            (tail_densities >= tail_density_thresh) & (tail_counts > 0)
+        )[0].tolist()
+        self.samples_with_rare = np.where(
+            (rare_densities >= rare_density_thresh) & (rare_counts > 0)
+        )[0].tolist()
+        self.samples_with_medium = np.where(
+            (medium_densities >= medium_density_thresh) & (medium_counts > 0)
+        )[0].tolist()
+        self.general_samples = list(range(self.num_samples))
+        
+        if verbose:
+            print(f"\n  Density thresholds:")
+            print(f"    Tail:   density >= {tail_density_thresh:.4f} "
+                  f"(top {100-self.density_tail_pct:.0f}%)")
+            print(f"    Rare:   density >= {rare_density_thresh:.4f} "
+                  f"(top {100-self.density_rare_pct:.0f}%)")
+            print(f"    Medium: density >= {medium_density_thresh:.4f} "
+                  f"(top {100-self.density_medium_pct:.0f}%)")
+            
+            print(f"\n  High-density pools:")
+            print(f"    Tail pool:   {len(self.samples_with_tail):,} members "
+                  f"({len(self.samples_with_tail)/self.num_samples:.1%})")
+            print(f"    Rare pool:   {len(self.samples_with_rare):,} members "
+                  f"({len(self.samples_with_rare)/self.num_samples:.1%})")
+            print(f"    Medium pool: {len(self.samples_with_medium):,} members "
+                  f"({len(self.samples_with_medium)/self.num_samples:.1%})")
+            
+            # Show density statistics for selected pool
+            if len(self.samples_with_tail) > 0:
+                pool_tail_densities = tail_densities[self.samples_with_tail]
+                pool_tail_counts = tail_counts[self.samples_with_tail]
+                pool_total_counts = total_counts[self.samples_with_tail]
+                print(f"\n  Tail pool statistics:")
+                print(f"    Avg tail density:    {pool_tail_densities.mean():.4f} "
+                      f"(vs global {tail_densities[tail_mask].mean():.4f})")
+                print(f"    Avg tail occurrences: {pool_tail_counts.mean():.1f} "
+                      f"(vs global {tail_counts[tail_mask].mean():.1f})")
+                print(f"    Avg total codes:     {pool_total_counts.mean():.1f}")
+                
+                # Estimate per-batch tail occurrence improvement
+                est_tail_per_batch = (
+                    self.tail_quota * pool_tail_counts.mean() +
+                    (self.batch_size - self.tail_quota) * tail_counts.mean()
+                )
+                est_total_per_batch = (
+                    self.tail_quota * pool_total_counts.mean() +
+                    (self.batch_size - self.tail_quota) * total_counts.mean()
+                )
+                est_tail_frac = est_tail_per_batch / max(est_total_per_batch, 1)
+                print(f"    Estimated tail occurrence fraction per batch: "
+                      f"{est_tail_frac:.2%} (target: >5%)")
+        
+        self._density_stats = {
+            'tail_density_threshold': float(tail_density_thresh),
+            'rare_density_threshold': float(rare_density_thresh),
+            'medium_density_threshold': float(medium_density_thresh),
+            'tail_pool_size': len(self.samples_with_tail),
+            'rare_pool_size': len(self.samples_with_rare),
+            'medium_pool_size': len(self.samples_with_medium),
+            'tail_pool_avg_density': float(
+                tail_densities[self.samples_with_tail].mean()
+            ) if len(self.samples_with_tail) > 0 else 0.0,
+        }
+    
+    def _calculate_num_batches(self):
+        if self.drop_last:
+            self.num_batches = self.num_samples // self.batch_size
+        else:
+            self.num_batches = (self.num_samples + self.batch_size - 1) // self.batch_size
+    
+    def __iter__(self) -> Iterator[List[int]]:
+        """Generate batches with guaranteed high-density tier representation."""
+        if self.shuffle:
+            medium_pool = self.samples_with_medium.copy()
+            rare_pool = self.samples_with_rare.copy()
+            tail_pool = self.samples_with_tail.copy()
+            general_pool = self.general_samples.copy()
+            random.shuffle(medium_pool)
+            random.shuffle(rare_pool)
+            random.shuffle(tail_pool)
+            random.shuffle(general_pool)
+        else:
+            medium_pool = self.samples_with_medium.copy()
+            rare_pool = self.samples_with_rare.copy()
+            tail_pool = self.samples_with_tail.copy()
+            general_pool = self.general_samples.copy()
+        
+        used_samples = set()
+        medium_idx = 0
+        rare_idx = 0
+        tail_idx = 0
+        general_idx = 0
+        batches_yielded = 0
+        
+        while batches_yielded < self.num_batches:
+            batch = []
+            
+            if self.medium_quota > 0:
+                medium_added = 0
+                while medium_added < self.medium_quota and medium_idx < len(medium_pool):
+                    sample_idx = medium_pool[medium_idx]
+                    medium_idx += 1
+                    if sample_idx not in used_samples:
+                        batch.append(sample_idx)
+                        used_samples.add(sample_idx)
+                        medium_added += 1
+            
+            rare_added = 0
+            while rare_added < self.rare_quota and rare_idx < len(rare_pool):
+                sample_idx = rare_pool[rare_idx]
+                rare_idx += 1
+                if sample_idx not in used_samples:
+                    batch.append(sample_idx)
+                    used_samples.add(sample_idx)
+                    rare_added += 1
+            
+            tail_added = 0
+            while tail_added < self.tail_quota and tail_idx < len(tail_pool):
+                sample_idx = tail_pool[tail_idx]
+                tail_idx += 1
+                if sample_idx not in used_samples:
+                    batch.append(sample_idx)
+                    used_samples.add(sample_idx)
+                    tail_added += 1
+            
+            remaining = self.batch_size - len(batch)
+            while remaining > 0 and general_idx < len(general_pool):
+                sample_idx = general_pool[general_idx]
+                general_idx += 1
+                if sample_idx not in used_samples:
+                    batch.append(sample_idx)
+                    used_samples.add(sample_idx)
+                    remaining -= 1
+            
+            # Pool exhaustion handling with reshuffle
+            if self.medium_quota > 0 and medium_idx >= len(medium_pool):
+                medium_pool = self.samples_with_medium.copy()
+                if self.shuffle:
+                    random.shuffle(medium_pool)
+                medium_idx = 0
+            
+            if rare_idx >= len(rare_pool):
+                rare_pool = self.samples_with_rare.copy()
+                if self.shuffle:
+                    random.shuffle(rare_pool)
+                rare_idx = 0
+            
+            if tail_idx >= len(tail_pool):
+                tail_pool = self.samples_with_tail.copy()
+                if self.shuffle:
+                    random.shuffle(tail_pool)
+                tail_idx = 0
+            
+            if general_idx >= len(general_pool):
+                general_pool = self.general_samples.copy()
+                if self.shuffle:
+                    random.shuffle(general_pool)
+                general_idx = 0
+                used_samples.clear()
+            
+            if len(batch) >= self.batch_size or (not self.drop_last and len(batch) > 0):
+                if self.shuffle:
+                    random.shuffle(batch)
+                yield batch[:self.batch_size]
+                batches_yielded += 1
+    
+    def __len__(self) -> int:
+        return self.num_batches
+    
+    def get_density_stats(self) -> dict:
+        """Return density statistics for logging/analysis."""
+        return self._density_stats
+
+
 # #### Bucketing batch sampler
 
-# In[35]:
+# In[89]:
 
 
 class BucketingBatchSampler:
@@ -6414,7 +6930,7 @@ def create_bucketing_dataloader(
 
 # #### Validate
 
-# In[50]:
+# In[90]:
 
 
 def evaluate(
@@ -6741,7 +7257,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[37]:
+# In[91]:
 
 
 def save_checkpoint(
@@ -6876,10 +7392,10 @@ def load_checkpoint(
     actual_model.load_state_dict(checkpoint_data['model_state_dict'])
     optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
     
-    if scheduler and checkpoint.get('scheduler_state_dict'):
+    if scheduler and checkpoint_data.get('scheduler_state_dict'):
         scheduler.load_state_dict(checkpoint_data['scheduler_state_dict'])
     
-    if scaler and checkpoint.get('scaler_state_dict'):
+    if scaler and checkpoint_data.get('scaler_state_dict'):
         scaler.load_state_dict(checkpoint_data['scaler_state_dict'])
     
     print(f"✅ Resumed from epoch {checkpoint_data['epoch']}, step {checkpoint_data['global_step']}")
@@ -7306,7 +7822,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[38]:
+# In[92]:
 
 
 class MetricsLogger:
@@ -7436,7 +7952,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[39]:
+# In[93]:
 
 
 def compute_batch_metrics_lightweight(
@@ -7900,7 +8416,7 @@ def compute_router_gradient_metrics(
 
 # #### Resource metrics
 
-# In[40]:
+# In[94]:
 
 
 def compute_moe_performance_metrics(
@@ -8318,7 +8834,7 @@ def compute_training_time_metrics(
 
 # #### Primary functional metrics
 
-# In[41]:
+# In[95]:
 
 
 """
@@ -8950,7 +9466,7 @@ def compute_ablation_metrics(
 
 # #### Comprehensive evaluation metrics
 
-# In[42]:
+# In[96]:
 
 
 def comprehensive_evaluation(
@@ -9232,7 +9748,7 @@ def comprehensive_evaluation(
 
 # #### Streaming Metrics for evaluation
 
-# In[43]:
+# In[97]:
 
 
 from dataclasses import dataclass, field
@@ -9681,7 +10197,7 @@ test_comprehensive_evaluation_dense()
 
 # ### Extract embedding for each member
 
-# In[44]:
+# In[100]:
 
 
 # ============================================================================
@@ -11118,7 +11634,7 @@ test_downstream_evaluator_with_real_data()
 
 # ### Save and load trained TE
 
-# In[49]:
+# In[98]:
 
 
 def generate_model_name(
@@ -11395,7 +11911,7 @@ def compute_code_frequencies(
 
 # #### Experiment run utils
 
-# In[44]:
+# In[99]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -11459,7 +11975,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[55]:
+# In[100]:
 
 
 # ============================================================================
@@ -11725,11 +12241,8 @@ def _create_dataloaders(
         train_data_df: Original DataFrame (required for bucketing if train_data is Dataset)
         world_size: Number of distributed processes
         logger: Optional logger
-        use_tier_aware: Whether to use tier-aware batching
         code_frequencies: Code frequency array (required if use_tier_aware=True)
-        medium_quota: Min members with medium codes per batch
-        rare_quota: Min members with rare codes per batch
-        tail_quota: Min members with tail codes per batch
+        optimize_config: OptimizeConfig with tier-aware batching settings
         
     Returns:
         (train_loader, val_loader)
@@ -11761,23 +12274,53 @@ def _create_dataloaders(
     if use_tier_aware:
         if code_frequencies is None:
             raise ValueError("code_frequencies required when use_tier_aware_batching=True")
-        if logger:
-            logger.info(f"Using TIER-AWARE batching "
-                       f"(medium={optimize_config.tier_medium_quota}, "
-                       f"rare={optimize_config.tier_rare_quota}, "
-                       f"tail={optimize_config.tier_tail_quota})")
         
-        train_batch_sampler = TierAwareBatchSampler(
-            dataset=train_dataset,
-            code_frequencies=code_frequencies,
-            batch_size=config.batch_size,
-            medium_quota=optimize_config.tier_medium_quota,
-            rare_quota=optimize_config.tier_rare_quota,
-            tail_quota=optimize_config.tier_tail_quota,
-            shuffle=True,
-            drop_last=True,
-            verbose=True
+        use_density = (
+            optimize_config is not None and
+            getattr(optimize_config, 'use_density_aware_batching', False)
         )
+        
+        if use_density:
+            if logger:
+                logger.info(f"Using DENSITY-AWARE tier batching "
+                           f"(medium={optimize_config.tier_medium_quota}, "
+                           f"rare={optimize_config.tier_rare_quota}, "
+                           f"tail={optimize_config.tier_tail_quota}, "
+                           f"tail_pct={optimize_config.density_tail_percentile})")
+            
+            train_batch_sampler = DensityTierAwareBatchSampler(
+                dataset=train_dataset,
+                code_frequencies=code_frequencies,
+                batch_size=config.batch_size,
+                medium_quota=optimize_config.tier_medium_quota,
+                rare_quota=optimize_config.tier_rare_quota,
+                tail_quota=optimize_config.tier_tail_quota,
+                shuffle=True,
+                drop_last=True,
+                density_tail_percentile=optimize_config.density_tail_percentile,
+                density_rare_percentile=optimize_config.density_rare_percentile,
+                density_medium_percentile=optimize_config.density_medium_percentile,
+                verbose=True
+            )
+        else:
+            if logger:
+                logger.info(f"Using TIER-AWARE batching (binary presence) "
+                           f"(medium={optimize_config.tier_medium_quota}, "
+                           f"rare={optimize_config.tier_rare_quota}, "
+                           f"tail={optimize_config.tier_tail_quota})")
+            
+            train_batch_sampler = TierAwareBatchSampler(
+                dataset=train_dataset,
+                code_frequencies=code_frequencies,
+                batch_size=config.batch_size,
+                medium_quota=optimize_config.tier_medium_quota,
+                rare_quota=optimize_config.tier_rare_quota,
+                tail_quota=optimize_config.tier_tail_quota,
+                shuffle=True,
+                drop_last=True,
+                verbose=True
+            )
+        
         train_loader = DataLoader(
             train_dataset,
             batch_sampler=train_batch_sampler,
@@ -11803,7 +12346,7 @@ def _create_dataloaders(
             num_workers=n_workers,
             pin_memory=True,
             collate_fn=collate_fn,
-            persistent_workers=False 
+            persistent_workers=False
         )
     else:
         if logger:
@@ -11819,6 +12362,7 @@ def _create_dataloaders(
             persistent_workers=False
         )
     
+    # VALIDATION LOADER (always standard - no tier-aware needed for eval)
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
@@ -11829,6 +12373,8 @@ def _create_dataloaders(
     )
     
     if logger:
+        logger.info(f"Train loader: {len(train_loader):,} batches")
+        logger.info(f"Val loader: {len(val_loader):,} batches")
         logger.info(f"Using DataLoader with {n_workers} workers.")
     
     return train_loader, val_loader
@@ -12006,7 +12552,7 @@ def _build_final_results(
 
 # #### Run experimentation
 
-# In[56]:
+# In[101]:
 
 
 def run_single_experiment(
@@ -12123,23 +12669,26 @@ def run_single_experiment(
     # CRITERION CREATION (Focal Loss + multiple weight methods)
     # ============================================================
     # Create criterion with pos_weight
-    if optimize_config is not None and (optimize_config.use_pos_weight or optimize_config.use_focal_loss):
+    if optimize_config is not None and (optimize_config.use_pos_weight or 
+                                         optimize_config.use_focal_loss or
+                                         getattr(optimize_config, 'use_asl', False)):
         criterion = create_criterion(
             code_frequencies=code_frequencies,
             device=device,
             optimize_config=optimize_config
         )
-        # Log details
-        if optimize_config.use_focal_loss:
-            logger.info(f"Using FocalLoss (gamma={optimize_config.focal_gamma}, alpha={optimize_config.focal_alpha})")
+        if getattr(optimize_config, 'use_asl', False):
+            logger.info(f"Using AsymmetricLoss (γ+={optimize_config.asl_gamma_pos}, "
+                        f"γ-={optimize_config.asl_gamma_neg})")
+        elif optimize_config.use_focal_loss:
+            logger.info(f"Using FocalLoss (gamma={optimize_config.focal_gamma})")
         else:
             logger.info("Using BCEWithLogitsLoss")
         if optimize_config.use_pos_weight:
             logger.info(f"  With pos_weight method: {optimize_config.pos_weight_method}")
     else:
         criterion = nn.BCEWithLogitsLoss()
-        logger.info("Using BCEWithLogitsLoss without pos_weight")
-        
+        logger.info("Using BCEWithLogitsLoss without pos_weight")        
     # ============================================================
     # DATAPARALLEL WRAPPER FOR MULTI-GPU
     # ============================================================    
@@ -12208,7 +12757,6 @@ def run_single_experiment(
         use_bucketing = use_bucketing, 
         train_data_df = train_data_df, 
         logger=logger,
-        use_tier_aware=use_tier_aware,
         optimize_config=optimize_config,
         code_frequencies=code_frequencies
     )
@@ -12761,7 +13309,7 @@ test_run_single_experiment_with_downstream()
 
 # ### GPU usage tracking
 
-# In[40]:
+# In[102]:
 
 
 class GPUMemoryTracker:
@@ -12851,7 +13399,7 @@ class GPUMemoryTracker:
 
 # ### Memory management
 
-# In[41]:
+# In[103]:
 
 
 import torch
@@ -13150,7 +13698,7 @@ def cleanup_checkpoints_after_training(
 
 # ### Time and cost estimation
 
-# In[42]:
+# In[104]:
 
 
 import numpy as np
@@ -15020,7 +15568,7 @@ results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-m
 
 # ### 3LOB training
 
-# In[49]:
+# In[112]:
 
 
 import google.auth
@@ -15428,7 +15976,7 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_20pct_sam
 input_data = client.query(input_sql).to_dataframe() 
 
 
-# In[51]:
+# In[47]:
 
 
 input_sql2 = """
@@ -15438,7 +15986,13 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sam
 input_data = client.query(input_sql2).to_dataframe() 
 
 
-# In[52]:
+# In[48]:
+
+
+input_data.shape
+
+
+# In[49]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -15448,7 +16002,7 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[53]:
+# In[50]:
 
 
 ## Split training and validation dataset
@@ -15464,13 +16018,13 @@ train_df, val_df = train_test_split(
 )
 
 
-# In[69]:
+# In[51]:
 
 
-df_unique.shape
+df_unique.columns
 
 
-# In[54]:
+# In[52]:
 
 
 print(f"""1.5M d_cnt > 10 and 10% of the entire pop:
@@ -15483,7 +16037,7 @@ for lob in df_unique['lob'].unique():
     print(f"{lob:<15} {total_n:>11.2f} {orig_pct:>11.2f}% {train_pct:>11.2f}% {val_pct:>11.2f}%")
 
 
-# In[81]:
+# In[53]:
 
 
 data_prepared_1p5M = prepare_data_once(
@@ -15493,10 +16047,10 @@ data_prepared_1p5M = prepare_data_once(
 )
 
 
-# In[71]:
+# In[54]:
 
 
-train_df_sample = train_df.sample(640)
+train_df_sample = train_df.sample(720)
 val_df_sample = val_df.sample(320)
 data_prepared_1p5M_mini = prepare_data_once(
     train_data=train_df_sample,
@@ -15527,6 +16081,304 @@ data_prepared = prepare_data_once(
 
 
 
+
+
+# ##### frequency tier prevalanece
+
+# In[61]:
+
+
+# ============================================================
+# TIER PREVALENCE ANALYSIS (CORRECTED FOR YOUR FORMAT)
+# Target format: "code1,code2*code3*code4,code5,code6*..."
+# ============================================================
+
+import numpy as np
+import pandas as pd
+from collections import Counter, defaultdict
+from typing import Dict, List, Tuple
+
+def parse_target_string(target_str: str) -> List[List[int]]:
+    """
+    Parse target string in format: "code1,code2*code3*code4,code5*..."
+    Returns: List of lists, one per day
+    """
+    if not target_str or not isinstance(target_str, str):
+        return []
+    
+    result = []
+    for day_str in target_str.split('*'):
+        if day_str.strip():
+            try:
+                day_codes = [int(c.strip()) for c in day_str.split(',') if c.strip()]
+                result.append(day_codes)
+            except ValueError:
+                result.append([])
+        else:
+            result.append([])
+    return result
+
+
+def analyze_tier_prevalence(
+    train_df: pd.DataFrame,
+    code_frequencies: np.ndarray,
+    percentile_boundaries: Tuple[float, float, float] = (20, 50, 80)
+) -> Dict[str, any]:
+    """
+    Analyze the prevalence of common/medium/rare/tail codes at different levels.
+    """
+    print("="*80)
+    print("TIER PREVALENCE ANALYSIS")
+    print("="*80)
+    
+    # ========================================
+    # STEP 1: Build tier code sets
+    # ========================================
+    freq_nz = code_frequencies[code_frequencies > 0]
+    percentiles = np.percentile(freq_nz, list(percentile_boundaries))
+    
+    tier_code_sets = {
+        'common': set(np.where(code_frequencies > percentiles[2])[0]),
+        'medium': set(np.where((code_frequencies <= percentiles[2]) & 
+                               (code_frequencies > percentiles[1]))[0]),
+        'rare': set(np.where((code_frequencies <= percentiles[1]) & 
+                             (code_frequencies > percentiles[0]))[0]),
+        'tail': set(np.where((code_frequencies <= percentiles[0]) & 
+                             (code_frequencies > 0))[0]),
+        'zero': set(np.where(code_frequencies == 0)[0])
+    }
+    
+    print(f"\n📊 Tier Definitions (based on frequency percentiles):")
+    print(f"   Common: freq > {percentiles[2]:.0f} ({len(tier_code_sets['common']):,} codes)")
+    print(f"   Medium: {percentiles[1]:.0f} < freq ≤ {percentiles[2]:.0f} ({len(tier_code_sets['medium']):,} codes)")
+    print(f"   Rare:   {percentiles[0]:.0f} < freq ≤ {percentiles[1]:.0f} ({len(tier_code_sets['rare']):,} codes)")
+    print(f"   Tail:   0 < freq ≤ {percentiles[0]:.0f} ({len(tier_code_sets['tail']):,} codes)")
+    print(f"   Zero:   freq = 0 ({len(tier_code_sets['zero']):,} codes)")
+    
+    # ========================================
+    # STEP 2: Parse targets and count
+    # ========================================
+    print(f"\n⏳ Parsing {len(train_df):,} member records...")
+    
+    # Initialize counters
+    tier_member_counts = {'common': 0, 'medium': 0, 'rare': 0, 'tail': 0}
+    tier_day_counts = {'common': 0, 'medium': 0, 'rare': 0, 'tail': 0}
+    tier_occurrence_counts = {'common': 0, 'medium': 0, 'rare': 0, 'tail': 0}
+    
+    total_days = 0
+    total_occurrences = 0
+    parse_errors = 0
+    
+    for idx, row in train_df.iterrows():
+        if idx > 0 and idx % 200000 == 0:
+            print(f"   Processed {idx:,}/{len(train_df):,} members...")
+        
+        target_str = row['target']
+        
+        # Parse target string with * and , separators
+        target_list = parse_target_string(target_str)
+        
+        if not target_list:
+            parse_errors += 1
+            continue
+        
+        # Track which tiers this member has
+        member_has_tier = {'common': False, 'medium': False, 'rare': False, 'tail': False}
+        
+        # Process each day
+        for day_codes in target_list:
+            if not day_codes:
+                continue
+            
+            total_days += 1
+            day_has_tier = {'common': False, 'medium': False, 'rare': False, 'tail': False}
+            
+            for code in day_codes:
+                total_occurrences += 1
+                
+                # Determine tier for this code
+                for tier_name in ['common', 'medium', 'rare', 'tail']:
+                    if code in tier_code_sets[tier_name]:
+                        tier_occurrence_counts[tier_name] += 1
+                        day_has_tier[tier_name] = True
+                        member_has_tier[tier_name] = True
+                        break
+            
+            # Count days with each tier
+            for tier_name, has_tier in day_has_tier.items():
+                if has_tier:
+                    tier_day_counts[tier_name] += 1
+        
+        # Count members with each tier
+        for tier_name, has_tier in member_has_tier.items():
+            if has_tier:
+                tier_member_counts[tier_name] += 1
+    
+    total_members = len(train_df)
+    
+    # ========================================
+    # STEP 3: Print Results
+    # ========================================
+    print(f"\n   ✅ Parsing complete. Errors: {parse_errors:,}")
+    
+    print("\n" + "="*80)
+    print("RESULTS: TIER PREVALENCE ANALYSIS")
+    print("="*80)
+    
+    print(f"\n📈 MEMBER-LEVEL ANALYSIS")
+    print(f"   Total members: {total_members:,}")
+    print("-" * 65)
+    print(f"   {'Tier':<10} {'Members':>12} {'% of Total':>12} {'Ratio to Tail':>15}")
+    print("-" * 65)
+    for tier_name in ['common', 'medium', 'rare', 'tail']:
+        count = tier_member_counts[tier_name]
+        pct = count / total_members * 100
+        ratio = count / max(tier_member_counts['tail'], 1)
+        print(f"   {tier_name:<10} {count:>12,} {pct:>11.1f}% {ratio:>14.1f}x")
+    
+    print(f"\n📅 DAY-LEVEL ANALYSIS")
+    print(f"   Total member-days with ≥1 code: {total_days:,}")
+    print("-" * 65)
+    print(f"   {'Tier':<10} {'Days':>12} {'% of Total':>12} {'Ratio to Tail':>15}")
+    print("-" * 65)
+    for tier_name in ['common', 'medium', 'rare', 'tail']:
+        count = tier_day_counts[tier_name]
+        pct = count / total_days * 100 if total_days > 0 else 0
+        ratio = count / max(tier_day_counts['tail'], 1)
+        print(f"   {tier_name:<10} {count:>12,} {pct:>11.1f}% {ratio:>14.1f}x")
+    
+    print(f"\n🔢 OCCURRENCE-LEVEL ANALYSIS")
+    print(f"   Total code occurrences: {total_occurrences:,}")
+    print("-" * 65)
+    print(f"   {'Tier':<10} {'Occurrences':>12} {'% of Total':>12} {'Ratio to Tail':>15}")
+    print("-" * 65)
+    for tier_name in ['common', 'medium', 'rare', 'tail']:
+        count = tier_occurrence_counts[tier_name]
+        pct = count / total_occurrences * 100 if total_occurrences > 0 else 0
+        ratio = count / max(tier_occurrence_counts['tail'], 1)
+        print(f"   {tier_name:<10} {count:>12,} {pct:>11.1f}% {ratio:>14.1f}x")
+    
+    # ========================================
+    # STEP 4: Quota Recommendations
+    # ========================================
+    print("\n" + "="*80)
+    print("QUOTA RECOMMENDATIONS")
+    print("="*80)
+    
+    print(f"\n📊 Member Imbalance (how many more members have common vs other tiers):")
+    for tier in ['medium', 'rare', 'tail']:
+        ratio = tier_member_counts['common'] / max(tier_member_counts[tier], 1)
+        print(f"   {tier:<10}: {ratio:.1f}x (common has {ratio:.1f}x more members)")
+    
+    print(f"\n💡 RECOMMENDED QUOTAS by batch size:")
+    print("-" * 65)
+    
+    for batch_size in [32, 64, 128, 256]:
+        # Calculate based on member prevalence
+        tail_pct = tier_member_counts['tail'] / max(total_members, 1)
+        rare_pct = tier_member_counts['rare'] / max(total_members, 1)
+        medium_pct = tier_member_counts['medium'] / max(total_members, 1)
+        
+        # More aggressive quotas for lower prevalence
+        # Target: make each tier ~10-15% of batch
+        tail_quota = max(2, min(int(batch_size * 0.15), int(batch_size * 0.4)))
+        rare_quota = max(2, min(int(batch_size * 0.12), int(batch_size * 0.3)))
+        medium_quota = max(0, min(int(batch_size * 0.06), int(batch_size * 0.2)))
+        
+        # Adjust based on actual prevalence
+        if tail_pct > 0.3:  # If tail is already common, reduce quota
+            tail_quota = int(tail_quota * 0.7)
+        if rare_pct > 0.5:
+            rare_quota = int(rare_quota * 0.7)
+        if medium_pct > 0.7:
+            medium_quota = 0  # No need to boost
+        
+        # Ensure total doesn't exceed 50% of batch
+        total_quota = medium_quota + rare_quota + tail_quota
+        if total_quota > batch_size * 0.5:
+            scale = (batch_size * 0.5) / total_quota
+            medium_quota = int(medium_quota * scale)
+            rare_quota = int(rare_quota * scale)
+            tail_quota = int(tail_quota * scale)
+        
+        general = batch_size - medium_quota - rare_quota - tail_quota
+        
+        print(f"\n   batch_size={batch_size}:")
+        print(f"      tier_medium_quota = {medium_quota:3d}  ({medium_quota/batch_size*100:5.1f}%)")
+        print(f"      tier_rare_quota   = {rare_quota:3d}  ({rare_quota/batch_size*100:5.1f}%)")
+        print(f"      tier_tail_quota   = {tail_quota:3d}  ({tail_quota/batch_size*100:5.1f}%)")
+        print(f"      general pool      = {general:3d}  ({general/batch_size*100:5.1f}%)")
+    
+    # Return results
+    return {
+        'tier_definitions': {
+            'percentiles': percentiles.tolist(),
+            'code_counts': {tier: len(codes) for tier, codes in tier_code_sets.items()}
+        },
+        'member_level': {
+            'total_members': total_members,
+            'tier_counts': tier_member_counts,
+            'tier_percentages': {tier: count/total_members*100 for tier, count in tier_member_counts.items()}
+        },
+        'day_level': {
+            'total_days': total_days,
+            'tier_counts': tier_day_counts,
+            'tier_percentages': {tier: count/total_days*100 if total_days > 0 else 0 
+                                for tier, count in tier_day_counts.items()}
+        },
+        'occurrence_level': {
+            'total_occurrences': total_occurrences,
+            'tier_counts': tier_occurrence_counts,
+            'tier_percentages': {tier: count/total_occurrences*100 if total_occurrences > 0 else 0 
+                                for tier, count in tier_occurrence_counts.items()}
+        }
+    }
+
+
+# In[62]:
+
+
+prevalence_results = analyze_tier_prevalence(
+    train_df=train_df,
+    code_frequencies=data_prepared_1p5M.code_frequencies,
+    percentile_boundaries=(20, 50, 80)
+)
+
+
+# In[60]:
+
+
+# Sample a few rows
+sample_df = train_df.head(5)
+
+for idx, row in sample_df.iterrows():
+    print(f"\nRow {idx}:")
+    target = row['target']
+    print(f"  Type: {type(target)}")
+    print(f"  Value (first 200 chars): {str(target)[:200]}")
+    
+    # Try different parsing approaches
+    if isinstance(target, str):
+        print(f"  String length: {len(target)}")
+        # Check if it's already a list-like string
+        if target.startswith('['):
+            try:
+                import ast
+                parsed = ast.literal_eval(target)
+                print(f"  Parsed type: {type(parsed)}")
+                print(f"  Parsed length: {len(parsed)}")
+                if len(parsed) > 0:
+                    print(f"  First element type: {type(parsed[0])}")
+                    print(f"  First element: {parsed[0]}")
+            except Exception as e:
+                print(f"  Parse error: {e}")
+    elif isinstance(target, list):
+        print(f"  Already a list with {len(target)} elements")
+        if len(target) > 0:
+            print(f"  First element type: {type(target[0])}")
+            print(f"  First element: {target[0]}")
+    else:
+        print(f"  Unexpected type!")
 
 
 # ##### Exp1 baseline dense model
@@ -15647,7 +16499,12 @@ optimize_config = OptimizeConfig(
     use_focal_loss=False,
     focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
     focal_alpha=0.25,
-    enable_gradient_tier_analysis=True
+    enable_gradient_tier_analysis=True,
+    use_tier_aware_batching = True,   # Enable tier-aware batch sampler
+    tier_medium_quota = 10,              # Min members with medium codes per batch
+    tier_rare_quota = 20,                # Min members with rare codes per batch
+    tier_tail_quota = 16               # Min members with tail codes per batch    
+    
 )
 
 
@@ -15864,6 +16721,586 @@ os.makedirs(os.path.dirname(results_save_path), exist_ok=True)
 
 with open(results_save_path, 'w') as f:
     json.dump(MetricsLogger.convert_to_serializable(results), f, indent=2)
+
+
+# In[ ]:
+
+
+
+
+
+# ##### Exp2: LR Polishing Test Feb1
+
+# In[119]:
+
+
+# ==============================================================================
+# LR POLISHING TEST
+# ==============================================================================
+# Purpose: Diagnose if the learning plateau is caused by the LR schedule
+# Test: Resume from plateau checkpoint with 10x lower constant LR
+# Expected: If metrics improve, schedule is the bottleneck
+# ==============================================================================
+
+# ==============================================================================
+# LR POLISHING TEST - CORRECTED VERSION
+# ==============================================================================
+
+def run_lr_polishing_test(
+    checkpoint_path: str,
+    prepared_data: PreparedData,  # ← Use PreparedData instead of DataFrames
+    polishing_lr: float = 4e-6,
+    polishing_steps: int = 2000,
+    batch_size: int = 128,
+    log_interval: int = 200,
+    save_dir: str = "logs/lr_polishing_test",
+    device: torch.device = None,
+    enable_gradient_tier_analysis: bool = True
+) -> Dict[str, Any]:
+    """
+    LR Polishing Test using pre-computed PreparedData.
+    
+    More efficient than passing raw DataFrames because:
+    - Reuses pre-computed code_frequencies
+    - Reuses pre-created ClinicalDataset objects
+    """
+    import os
+    import json
+    import gc
+    from datetime import datetime
+    
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    print("\n" + "="*80)
+    print("LR POLISHING TEST (Using PreparedData)")
+    print("="*80)
+    print(f"Checkpoint: {checkpoint_path}")
+    print(f"Polishing LR: {polishing_lr:.2e} (CONSTANT)")
+    print(f"Polishing steps: {polishing_steps}")
+    print(f"PreparedData: {prepared_data}")
+    print("="*80 + "\n")
+    
+    # =========================================================================
+    # STEP 1: Extract from PreparedData (NO recomputation!)
+    # =========================================================================
+    print("[1/5] Extracting from PreparedData...")
+    train_dataset = prepared_data.train_dataset
+    val_dataset = prepared_data.val_dataset
+    code_frequencies = prepared_data.code_frequencies  # ← Already computed!
+    base_config = prepared_data.config
+    
+    print(f"   ✅ Train samples: {len(train_dataset)}")
+    print(f"   ✅ Val samples: {len(val_dataset)}")
+    print(f"   ✅ Code frequencies shape: {code_frequencies.shape}")
+    
+    # =========================================================================
+    # STEP 2: Load checkpoint and reconstruct model
+    # =========================================================================
+    print("\n[2/5] Loading checkpoint...")
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    
+    saved_config = checkpoint.get('config', {})
+    moe_config_dict = checkpoint.get('moe_config', None)
+    
+    # Reconstruct config (use saved values, but inherit data dims from PreparedData)
+    config = FlashAttentionConfig(
+        # Model architecture from checkpoint
+        embedding_size=saved_config.get('embedding_size', base_config.embedding_size),
+        nhid=saved_config.get('nhid', base_config.nhid),
+        nhead=saved_config.get('nhead', 8),
+        nlayers=saved_config.get('nlayers', base_config.nlayers),
+        dropout=saved_config.get('dropout', base_config.dropout),
+        use_learnt_att_pool=saved_config.get('use_learnt_att_pool', True),
+        use_swiglu=saved_config.get('use_swiglu', True),
+        use_rope=saved_config.get('use_rope', True),
+        use_flash=saved_config.get('use_flash', True),
+        # Data dimensions from PreparedData
+        len_dy=base_config.len_dy,
+        len_cd=base_config.len_cd,
+        cd_cnt=base_config.cd_cnt,
+        target_cd_cnt=base_config.target_cd_cnt,
+        # Training
+        batch_size=batch_size
+    )
+    
+    model_type = checkpoint.get('model_type', 'FlashAttentionTransformer')
+    print(f"   Model type: {model_type}")
+    print(f"   Config: d_model={config.embedding_size}, nlayers={config.nlayers}")
+    
+    # Create model
+    if model_type == 'FlashMoETransformer' and moe_config_dict is not None:
+        moe_config = MoEConfig(
+            d_model=moe_config_dict.get('d_model', config.embedding_size),
+            d_ff=moe_config_dict.get('d_ff', config.nhid),
+            num_experts=moe_config_dict.get('num_experts', 8),
+            num_shared_experts=moe_config_dict.get('num_shared_experts', 0),
+            top_k=moe_config_dict.get('top_k', 2),
+            expert_dropout=moe_config_dict.get('expert_dropout', 0.05),
+            load_balance_strategy=moe_config_dict.get('load_balance_strategy', 'switch'),
+            aux_loss_weight=moe_config_dict.get('aux_loss_weight', 0.01)
+        )
+        model = FlashMoETransformer(config, moe_config)
+        is_moe = True
+    else:
+        model = FlashAttentionTransformer(config)
+        moe_config = None
+        is_moe = False
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    print(f"   ✅ Model loaded: {sum(p.numel() for p in model.parameters()):,} params")
+    
+    # =========================================================================
+    # STEP 3: Create dataloaders (fast - datasets already exist)
+    # =========================================================================
+    print("\n[3/5] Creating dataloaders...")
+    
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=create_collate_fn(config),
+        num_workers=4,
+        pin_memory=True,
+        drop_last=True
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=create_collate_fn(config),
+        num_workers=4,
+        pin_memory=True
+    )
+    print(f"   Train batches: {len(train_loader)}")
+    print(f"   Val batches: {len(val_loader)}")
+    
+    # =========================================================================
+    # STEP 4: Create optimizer and criterion
+    # =========================================================================
+    print("\n[4/5] Creating optimizer and criterion...")
+    
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=polishing_lr,
+        weight_decay=0.01,
+        betas=(0.9, 0.999)
+    )
+    print(f"   ✅ AdamW with LR={polishing_lr:.2e} (CONSTANT)")
+    
+    optimize_config = OptimizeConfig(
+        use_pos_weight=True,
+        pos_weight_max=35.0,
+        pos_weight_method='log_scaled'
+    )
+    criterion = create_criterion(
+        code_frequencies=code_frequencies,
+        device=device,
+        optimize_config=optimize_config
+    )
+    eval_criterion = nn.BCEWithLogitsLoss()
+    
+    gradient_tier_analyzer = None
+    if enable_gradient_tier_analysis:
+        gradient_tier_analyzer = GradientTierAnalyzer(
+            code_frequencies=code_frequencies,
+            device=device,
+            log_interval=log_interval
+        )
+    
+    scaler = torch.cuda.amp.GradScaler()
+    
+    # =========================================================================
+    # STEP 5: Run polishing (same as before)
+    # =========================================================================
+    print("\n[5/5] Evaluating BEFORE and running polishing...")
+    
+    # Before metrics
+    before_metrics = evaluate(
+        model=model, dataloader=val_loader, criterion=eval_criterion,
+        config=config, device=device, use_mixed_precision=True, verbose=True
+    )
+    before_stratified = _compute_stratified_eval(
+        model=model, dataloader=val_loader, config=config,
+        device=device, code_frequencies=code_frequencies, max_batches=50
+    )
+    
+    print(f"\n📊 BEFORE: recall@10={before_metrics.get('recall@10', 0):.4f}, "
+          f"tail_acc={before_stratified.get('tail_top10_acc', 0):.4f}")
+    
+    # Polishing loop
+    model.train()
+    polishing_metrics = []
+    total_loss = 0.0
+    train_iter = iter(train_loader)
+    
+    for step in range(polishing_steps):
+        try:
+            batch = next(train_iter)
+        except StopIteration:
+            train_iter = iter(train_loader)
+            batch = next(train_iter)
+        
+        # Prepare inputs
+        age = batch['age'].to(device, non_blocking=True)
+        gender = batch['gender'].to(device, non_blocking=True)
+        lob = batch['lob'].to(device, non_blocking=True)
+        codes = batch['codes'].to(device, non_blocking=True)
+        targets_mh = batch['target_multihot'].to(device, non_blocking=True)
+        
+        x = torch.cat([
+            age.unsqueeze(-1), gender.unsqueeze(-1), 
+            lob.unsqueeze(-1), codes
+        ], dim=-1)
+        
+        batch_size_actual = x.shape[0]
+        actual_len_dy = x.shape[1]
+        
+        optimizer.zero_grad()
+        
+        with torch.cuda.amp.autocast():
+            if is_moe:
+                output, moe_losses = model(x, return_moe_losses=True)
+                aux_loss = moe_losses.get('total_aux_loss', 0.0)
+            else:
+                output = model(x)
+                aux_loss = 0.0
+            
+            output_flat = output.view(batch_size_actual * actual_len_dy, config.target_cd_cnt)
+            targets_flat = targets_mh.view(batch_size_actual * actual_len_dy, config.target_cd_cnt)
+            loss = criterion(output_flat, targets_flat)
+            
+            if is_moe and aux_loss != 0.0:
+                loss = loss + aux_loss
+        
+        scaler.scale(loss).backward()
+        
+        tier_metrics = {}
+        if gradient_tier_analyzer is not None:
+            tier_metrics = gradient_tier_analyzer.log_batch(model, step)
+        
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+        
+        total_loss += loss.item()
+        
+        if (step + 1) % log_interval == 0:
+            avg_loss = total_loss / log_interval
+            model.eval()
+            with torch.no_grad():
+                val_quick = evaluate(
+                    model=model, dataloader=val_loader, criterion=eval_criterion,
+                    config=config, device=device, use_mixed_precision=True, max_batches=20
+                )
+            model.train()
+            
+            print(f"   Step {step+1:4d}/{polishing_steps}: "
+                  f"loss={avg_loss:.4f}, recall@10={val_quick.get('recall@10', 0):.4f}")
+            
+            polishing_metrics.append({
+                'step': step + 1, 'train_loss': avg_loss,
+                'val_loss': val_quick.get('val_loss', 0),
+                'recall@10': val_quick.get('recall@10', 0), **tier_metrics
+            })
+            total_loss = 0.0
+    
+    # After metrics
+    model.eval()
+    after_metrics = evaluate(
+        model=model, dataloader=val_loader, criterion=eval_criterion,
+        config=config, device=device, use_mixed_precision=True, verbose=True
+    )
+    after_stratified = _compute_stratified_eval(
+        model=model, dataloader=val_loader, config=config,
+        device=device, code_frequencies=code_frequencies, max_batches=50
+    )
+    
+    # Print comparison and diagnosis
+    _print_comparison(before_metrics, after_metrics, before_stratified, after_stratified)
+    diagnosis = _diagnose_polishing_result(
+        before_metrics, after_metrics, before_stratified, after_stratified
+    )
+    
+    # Save results
+    results = {
+        'checkpoint_path': checkpoint_path,
+        'polishing_lr': polishing_lr,
+        'polishing_steps': polishing_steps,
+        'before_metrics': before_metrics,
+        'before_stratified': before_stratified,
+        'after_metrics': after_metrics,
+        'after_stratified': after_stratified,
+        'step_by_step_metrics': polishing_metrics,
+        'diagnosis': diagnosis,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    results_path = os.path.join(save_dir, 'polishing_test_results.json')
+    with open(results_path, 'w') as f:
+        json.dump(MetricsLogger.convert_to_serializable(results), f, indent=2)
+    
+    print(f"\n💾 Results saved to: {results_path}")
+    
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    return results
+
+
+# ==============================================================================
+# HELPER FUNCTIONS FOR POLISHING TEST
+# ==============================================================================
+
+def _compute_stratified_eval(
+    model: nn.Module,
+    dataloader: DataLoader,
+    config: BaseConfig,
+    device: torch.device,
+    code_frequencies: np.ndarray,
+    max_batches: int = 50
+) -> Dict[str, float]:
+    """
+    Collect predictions and compute stratified metrics.
+    
+    This wraps compute_stratified_metrics with proper prediction collection.
+    """
+    model.eval()
+    all_predictions = []
+    all_targets = []
+    
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            if batch_idx >= max_batches:
+                break
+            
+            # Prepare inputs
+            age = batch['age'].to(device, non_blocking=True)
+            gender = batch['gender'].to(device, non_blocking=True)
+            lob = batch['lob'].to(device, non_blocking=True)
+            codes = batch['codes'].to(device, non_blocking=True)
+            y = batch['target']  # List of lists
+            
+            x = torch.cat([
+                age.unsqueeze(-1),
+                gender.unsqueeze(-1),
+                lob.unsqueeze(-1),
+                codes
+            ], dim=-1)
+            
+            with torch.cuda.amp.autocast():
+                output = model(x)  # [batch, len_dy, target_cd_cnt]
+            
+            # Flatten predictions and collect valid targets
+            batch_size = output.shape[0]
+            len_dy = output.shape[1]
+            
+            for sample_idx in range(batch_size):
+                for day_idx in range(len_dy):
+                    day_targets = y[sample_idx][day_idx] if day_idx < len(y[sample_idx]) else []
+                    if len(day_targets) > 0:  # Only include days with targets
+                        all_predictions.append(output[sample_idx, day_idx].cpu())
+                        all_targets.append(day_targets)
+    
+    if len(all_predictions) == 0:
+        return {
+            'common_top10_acc': 0.0,
+            'medium_top10_acc': 0.0,
+            'rare_top10_acc': 0.0,
+            'tail_top10_acc': 0.0,
+            'tail_code_coverage': 0.0
+        }
+    
+    # Stack predictions
+    predictions_tensor = torch.stack(all_predictions)
+    
+    # Call the actual compute_stratified_metrics with correct signature
+    stratified = compute_stratified_metrics(
+        predictions=predictions_tensor,
+        targets=all_targets,
+        code_frequencies=code_frequencies,
+        vocab_size=config.target_cd_cnt
+    )
+    
+    return stratified
+
+
+def _print_comparison(
+    before_metrics: Dict,
+    after_metrics: Dict,
+    before_stratified: Dict,
+    after_stratified: Dict
+):
+    """Print comparison table."""
+    print("\n" + "="*80)
+    print("📊 POLISHING TEST RESULTS")
+    print("="*80)
+    
+    print("\n📈 Metric Comparison (After - Before):")
+    print("-" * 70)
+    print(f"{'Metric':<25} {'Before':>12} {'After':>12} {'Delta':>10} {'%':>8}")
+    print("-" * 70)
+    
+    for key in ['val_loss', 'recall@5', 'recall@10', 'recall@20', 'ndcg@20', 'mrr']:
+        before_val = before_metrics.get(key, 0)
+        after_val = after_metrics.get(key, 0)
+        delta_val = after_val - before_val
+        pct = (delta_val / before_val * 100) if before_val != 0 else 0
+        print(f"{key:<25} {before_val:>12.4f} {after_val:>12.4f} {delta_val:>+10.4f} {pct:>+7.1f}%")
+    
+    print("\n📈 Stratified Metrics:")
+    print("-" * 70)
+    for key in ['common_top10_acc', 'medium_top10_acc', 'rare_top10_acc', 'tail_top10_acc']:
+        before_val = before_stratified.get(key, 0)
+        after_val = after_stratified.get(key, 0)
+        delta_val = after_val - before_val
+        pct = (delta_val / before_val * 100) if before_val != 0 else 0
+        print(f"{key:<25} {before_val:>12.4f} {after_val:>12.4f} {delta_val:>+10.4f} {pct:>+7.1f}%")
+
+
+def _diagnose_polishing_result(
+    before_metrics: Dict,
+    after_metrics: Dict,
+    before_stratified: Dict,
+    after_stratified: Dict
+) -> str:
+    """Diagnose the polishing test result."""
+    print("\n" + "="*80)
+    print("🔬 DIAGNOSIS")
+    print("="*80)
+    
+    recall_improvement = after_metrics.get('recall@10', 0) - before_metrics.get('recall@10', 0)
+    ndcg_improvement = after_metrics.get('ndcg@20', 0) - before_metrics.get('ndcg@20', 0)
+    tail_improvement = after_stratified.get('tail_top10_acc', 0) - before_stratified.get('tail_top10_acc', 0)
+    
+    if recall_improvement > 0.005 or ndcg_improvement > 0.005:
+        print("✅ POSITIVE RESULT: Metrics improved with low-LR polishing!")
+        print("   → The LR schedule is likely a contributing factor to the plateau.")
+        print("   → RECOMMENDATION: Modify schedule to include longer low-LR phase")
+        print("      - Reduce plateau_pct: 0.45 → 0.10")
+        print("      - Reduce min_lr_ratio: 0.2 → 0.01")
+        diagnosis = "SCHEDULE_BOTTLENECK"
+    elif tail_improvement > 0.001:
+        print("⚠️ PARTIAL RESULT: Tail metrics moved, but overall metrics flat.")
+        print("   → Low-LR helps tail codes but not enough to overcome gradient starvation.")
+        print("   → RECOMMENDATION: Combine schedule fix with tier-aware batching")
+        diagnosis = "PARTIAL_SCHEDULE_ISSUE"
+    else:
+        print("❌ NEGATIVE RESULT: Metrics did not improve with low-LR polishing.")
+        print("   → The plateau is NOT primarily caused by the LR schedule.")
+        print("   → RECOMMENDATION: Focus on structural interventions:")
+        print("      - Tier-aware batching (day-level)")
+        print("      - Focal loss / ASL")
+        print("      - Hierarchical supervision")
+        diagnosis = "STRUCTURAL_BOTTLENECK"
+    
+    return diagnosis
+
+
+# In[120]:
+
+
+CHECKPOINT_PATH = "logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool_v2_gradient/saved_models/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260125_105212_final.pt"
+# Run the polishing test
+lr_polishing_results = run_lr_polishing_test(
+    checkpoint_path=CHECKPOINT_PATH,
+    prepared_data=data_prepared_1p5M,
+    polishing_lr=4e-6,
+    polishing_steps=2000
+)
+
+
+# In[ ]:
+
+
+
+
+
+# ##### Exp2: Asym Focal loss
+
+# In[110]:
+
+
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp2b_flash_learned_pool'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 256  # 256, 384, or 512
+# "exp_round5_1-5M_3lobs_pretrain_multi_gpu_test_v2"
+EXPERIMENT_ROUND = "exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
+
+
+# In[108]:
+
+
+optimize_config_asl = OptimizeConfig(
+    # scheduler_type='onecycle',      # OneCycleLR for faster convergence
+    # onecycle_pct_start=0.30,
+    warmup_pct=0.15,
+    scheduler_type='linear',       # Linear warmup + plateau + decay
+    plateau_pct=0.45,             # 45% at peak (total 60% before decay)
+    min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
+    
+    # ASL — the sole intervention
+    use_asl=True,
+    asl_gamma_pos=0.0,     # Preserve ALL positive gradients
+    asl_gamma_neg=4.0,     # Aggressively down-weight easy negatives
+    asl_clip=0.05,         # Zero out negatives with p < 0.05
+
+    # NO pos_weight (per focal loss analysis: don't stack reweighting mechanisms)
+    use_pos_weight=True,
+    use_focal_loss=False,
+
+    # NO tier-aware batching (clean ASL-only test)
+    use_tier_aware_batching=False,
+
+    # Gradient diagnostic — MUST be ON to verify ASL is working
+    enable_gradient_tier_analysis=True,
+    
+)
+
+
+# In[ ]:
+
+
+cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
+
+exp2b_asl_results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    prepared_data=data_prepared_1p5M,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    experiment_round=EXPERIMENT_ROUND,
+    embedding_size=EMBEDDING_SIZE,
+    log_dir='logs',
+    log_metrics_every=500,
+    save_model=True,
+    optimize_config=optimize_config_asl,
+)
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
 
 
 # In[ ]:

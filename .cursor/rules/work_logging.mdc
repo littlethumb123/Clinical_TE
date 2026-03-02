@@ -1,0 +1,204 @@
+---
+name: Daily Work Logging
+description: Automated daily progress tracking with comprehensive context extraction from current session
+applies_to:
+  - "**/*"
+trigger: When user requests "log progress", "log today's work", or at end of working session
+---
+
+# Daily Work Logging System
+
+You are a meticulous technical progress tracker. When triggered, **automatically generate a comprehensive daily progress report** by analyzing today's session activity.
+
+## Core Responsibilities
+
+Extract and document from TODAY's session (2026-02-14):
+1. **Files created/modified** - Scan git status, recent edits, file timestamps
+2. **Decisions made** - Architectural choices, trade-offs, technical rationale
+3. **Discussions held** - Reasoning traces, alternatives considered, evidence cited
+4. **Changes executed** - Code refactors, config updates, schema changes
+5. **Plan alignment** - How work maps to PRD/original goals
+6. **Next steps** - Concrete action items for next session
+
+## Data Sources (Proactive Retrieval)
+
+Before generating report, gather:
+- `git status` & `git diff` (staged/unstaged changes)
+- `git log --since="2026-02-14 00:00"` (today's commits)
+- Recent terminal outputs from `/home/zhaopeng_xing_cvshealth_com/.cursor/projects/home-jupyter-Thinkubator-mcp/terminals/*.txt`
+- Chat history context (decisions discussed this session)
+- Modified files: `find . -type f -newermt "2026-02-14 00:00" ! -path "./.git/*"`
+
+## Output Structure (Markdown)
+
+Generate report at `docs/progress/YYYY-MM-DD_session_summary.md`:
+
+```markdown
+# Session Progress Report - [Topic/Focus]
+**Date**: YYYY-MM-DD  
+**Status**: [One-line summary]
+
+## 1. Executive Summary
+[3-4 sentences: What was accomplished, why it matters, what changed]
+
+## 2. Planned vs. Executed
+**Original Plan**: [What was intended based on PRD/task description]
+**What Got Done**: 
+- [x] Task 1
+- [x] Task 2
+- [ ] Task 3 (deferred - reason)
+
+**Alignment Notes**: [How execution differed from plan and why]
+
+## 3. Key Decisions & Rationale
+
+### Decision 1: [Title]
+**Context**: [Why this decision was needed]
+**Options Considered**:
+1. Option A - [Pros/Cons]
+2. Option B - [Pros/Cons]
+
+**Chosen**: Option [X]  
+**Rationale**: [Evidence-based reasoning - performance data, best practices, constraints]
+**Trade-offs**: [What was sacrificed, technical debt incurred]
+
+[Repeat for each major decision]
+
+## 4. Technical Changes
+
+### 4.1 Files Created
+- `path/to/new_file.py` - [Purpose, key functions]
+
+### 4.2 Files Modified
+- `path/to/existing.py` - [What changed, why]
+  - Refactored: [Function/class name] - [Reason]
+  - Added: [New capability]
+  - Fixed: [Bug/issue]
+
+### 4.3 Configuration/Schema Updates
+- `config.yml` - [Parameters changed, impact]
+
+## 5. Discussions & Reasoning
+
+### Topic 1: [Discussion focus]
+**Question**: [What was being explored]
+**Analysis**: [Step-by-step reasoning process]
+**Conclusion**: [Resolution with supporting evidence]
+**Citations**: [Code references, documentation, data]
+
+[Repeat for each significant discussion]
+
+## 6. Verification & Quality Checks
+
+**Tests Run**:
+- Unit tests: [Pass/fail, coverage]
+- Integration tests: [Results]
+- Linter/formatter: [Compliance status]
+
+**Build Status**: [Success/errors addressed]
+
+**Manual Validation**:
+- [Functionality tested]
+- [Edge cases verified]
+
+## 7. Plan Alignment Review
+
+**PRD/Original Goals**: [Reference to source document]
+**Completion Status**:
+- Milestone X: [% complete, blockers]
+- Feature Y: [Status, deviations]
+
+**Scope Changes**: [Any adjustments made and why]
+
+## 8. Blockers & Issues
+
+**Resolved**:
+- [Issue] - [How it was fixed]
+
+**Outstanding**:
+- [Issue] - [Impact, workaround, need for next session]
+
+## 9. Next Session Plan
+
+**Immediate Priorities** (ranked):
+1. [Task] - [Why critical, estimated complexity]
+2. [Task] - [Dependencies, prerequisites]
+
+**Preparation Required**:
+- Research: [Topics to investigate]
+- Setup: [Environment/data needs]
+
+**Open Questions**:
+- [Question requiring user input]
+
+---
+
+**Session Duration**: [Estimated from chat start time]  
+**Files Modified**: [Count]  
+**Commits**: [Count with message summaries]  
+**Environment**: [OS, key tools used]
+```
+
+## Execution Protocol
+
+1. **Trigger Detection**
+   - User says: "log progress", "end of day", "log today", "session summary"
+   - Manual: `/work-log` command
+
+2. **Context Gathering** (no user confirmation needed)
+   - Read all source documents autonomously
+   - Scan file system for today's changes
+   - Extract decisions from chat transcript
+
+3. **Report Generation**
+   - Use structured format above
+   - Be specific: file paths, function names, metrics
+   - Include code references: `100:120:src/module.py`
+   - Cite evidence: performance numbers, test results
+
+4. **Verification**
+   - Ensure all major changes documented
+   - Cross-check commit messages vs. report
+   - Validate next steps are actionable
+
+5. **Delivery**
+   - Save to `docs/progress/YYYY-MM-DD_*.md`
+   - Present 3-sentence summary to user
+   - Note: "Full report saved at [path]"
+
+## Quality Standards
+
+✅ **Must Have**:
+- All file changes accounted for
+- Technical decisions with rationale
+- Alignment statement to PRD/goals
+- Concrete next steps
+
+✅ **Precision**:
+- Use exact file paths, function names
+- Include metrics where available (test pass %, timing)
+- Quote specific chat context for decisions
+
+❌ **Avoid**:
+- Generic statements ("made progress", "worked on features")
+- Missing rationale for decisions
+- Vague next steps ("continue work", "improve code")
+
+## Example Triggers
+
+```
+User: "log today's progress"
+→ Generate full report, save to docs/progress/
+
+User: "what did we accomplish?"
+→ Generate brief summary with highlights + save full report
+
+User: "wrap up for the day"
+→ Generate report with emphasis on blockers + next session prep
+```
+
+## Special Cases
+
+**Mid-session checkpoint**: Generate abbreviated report without "Next Steps" section  
+**Multi-session task**: Include "Since Last Log" diff section  
+**Abandoned approaches**: Document under "Discussions" with reasoning for abandonment

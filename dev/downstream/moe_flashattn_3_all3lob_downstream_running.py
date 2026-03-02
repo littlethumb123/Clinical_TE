@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[25]:
+# In[1]:
 
 
 import os
@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 
 
-# In[26]:
+# In[2]:
 
 
 import os
@@ -21,7 +21,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"  # preset only 2 to the embedding
 import torch
 
 
-# In[27]:
+# In[7]:
 
 
 # Import everything from the core module
@@ -145,7 +145,7 @@ if 'temporal_layers.2.ffn.experts.0.ffn.w_gate.weight' in state_dict:
 
 # ### Intrinsic metrics eval
 
-# In[159]:
+# In[30]:
 
 
 import json
@@ -272,7 +272,7 @@ df_exp_round5_results.T.to_excel("experiment_logs/exp_round5_3lobs_1-5M_1epoch_3
 
 # ### Model reconstruction
 
-# In[28]:
+# In[8]:
 
 
 def load_model_from_checkpoint(
@@ -430,7 +430,7 @@ def load_model_from_checkpoint(
     return model, config, moe_config, use_mixed_precision, model_type
 
 
-# In[29]:
+# In[9]:
 
 
 from torch.utils.data import Dataset
@@ -502,7 +502,7 @@ MODEL_PATHS
 
 # ### Generate embeddings
 
-# In[54]:
+# In[10]:
 
 
 import time
@@ -901,7 +901,7 @@ def _generate_embeddings_multi_gpu(
 
 # #### Save embeddings
 
-# In[31]:
+# In[11]:
 
 
 def save_embeddings(
@@ -964,7 +964,7 @@ def save_embeddings(
     return npz_path
 
 
-# In[32]:
+# In[12]:
 
 
 from google.cloud import bigquery
@@ -1106,7 +1106,7 @@ result_table = save_embeddings_to_bigquery(
 
 # ### Commercial IP downstream
 
-# In[22]:
+# In[16]:
 
 
 import google.auth
@@ -1120,7 +1120,7 @@ from tqdm.notebook import tqdm
 client = bigquery.Client()
 
 
-# In[143]:
+# In[17]:
 
 
 # import members not in the trainingset of the transformer
@@ -1130,7 +1130,7 @@ select * from edp-prod-storage.edp_ent_sdoheir_cns.a964286_commercial_heldout_tr
 df_cm = client.query(commercial_sql_code).to_dataframe()
 
 
-# In[15]:
+# In[18]:
 
 
 # sample before and after 2023-10-16 (post part will be used for oot validation)
@@ -1146,7 +1146,7 @@ df_cm_sample = pd.concat([df_cm_b4_oct_sample,
 
 # #### Embedding generation
 
-# In[84]:
+# In[25]:
 
 
 MODEL_PATHS = {
@@ -1171,15 +1171,22 @@ MODEL_PATHS = {
     #     'exp6_auxiliary_free_v3/saved_models/'
     #     'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_20251231_152438_final.pt',
     
-    # Round 5; 
+    # Experiment 2b
     'exp2b_flash_learned_pool': 
-    'logs/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2/'
-    'exp2b_flash_learned_pool/saved_models/'
-    'exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260110_112709_final.pt'
+    'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
+    'exp2b_flash_learned_pool_v4_asym_focalloss/saved_models/'
+    'exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260221_120056_final.pt'
+
+    
+    # Round 5; 
+    # 'exp2b_flash_learned_pool': 
+    # 'logs/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2/'
+    # 'exp2b_flash_learned_pool/saved_models/'
+    # 'exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260110_112709_final.pt'
 }
 
 
-# In[85]:
+# In[26]:
 
 
 results = {}
@@ -1188,6 +1195,7 @@ batch_size = 64
 output_dir = "embedding_output/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
 PROJECT_ID = "edp-prod-storage"
 DATASET_ID = "edp_ent_sdoheir_cns"
+LOB = 'commercial'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 for exp_name, model_path in tqdm(MODEL_PATHS.items()):
@@ -1197,6 +1205,7 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
         device=device,
         verbose=True
     )
+    inference_start_time = time.time()
     embeddings, individual_ids, index_dts = generate_embeddings(
         model=model,
         config=config,
@@ -1211,37 +1220,43 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
         multi_gpu=True,           
         moe_config=moe_config, 
     )
-    exp_output_dir = os.path.join(output_dir, exp_name)
-    embeddings_path = save_embeddings(
-        embeddings=embeddings,
-        individual_ids=individual_ids,
-        index_dts=index_dts,
-        output_path=exp_output_dir,
-        model_name=exp_name,
-        additional_metadata={
-            'model_path': model_path,
-            'model_type': model_type,
-            'use_mixed_precision': use_mixed_precision,
-        }
-    )
-    # safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
-    # table_name = f"a965286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_commercial_0p3sample_embedding"
-    # bq_table_path = save_embeddings_to_bigquery(
+    inference_duration = time.time() - inference_start_time
+    print(f"Inference duration for {exp_name}: {round(inference_duration/3600, 2):.2f} hr)")
+    # exp_output_dir = os.path.join(output_dir, exp_name)
+    # embeddings_path = save_embeddings(
     #     embeddings=embeddings,
     #     individual_ids=individual_ids,
     #     index_dts=index_dts,
-    #     project_id=PROJECT_ID,
-    #     dataset_id=DATASET_ID,
-    #     table_name=table_name,
-    #     exp_name=exp_name,
-    #     model_type=model_type,
-    #     if_exists="replace"
+    #     output_path=exp_output_dir,
+    #     model_name=exp_name,
+    #     additional_metadata={
+    #         'model_path': model_path,
+    #         'model_type': model_type,
+    #         'use_mixed_precision': use_mixed_precision,
+    #     }
     # )
+    add_info = "_asym_focalloss"
+    safe_exp_name = exp_name.replace('-', '_').replace('.', '_') + add_info
+    
+    table_name = f"a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_{LOB}_all_sample_embedding"
+    bq_table_path = save_embeddings_to_bigquery(
+        embeddings=embeddings,
+        individual_ids=individual_ids,
+        index_dts=index_dts,
+        project_id=PROJECT_ID,
+        dataset_id=DATASET_ID,
+        table_name=table_name,
+        exp_name=exp_name,
+        model_type=model_type,
+        if_exists="replace"
+    )
     results[exp_name] = {
-        'embeddings_path': embeddings_path,
+        'bq_table_path': bq_table_path,
+        # 'embeddings_path': embeddings_path,
         'embedding_shape': embeddings.shape,
         'model_type': model_type,
         'model_path': model_path,
+        'inference_duration_hr': round(inference_duration / 3600, 2),
         'status': 'success'
     }
 
@@ -1259,7 +1274,7 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
 
 # #### Replicate IP model pipeline
 
-# In[86]:
+# In[27]:
 
 
 from sklearn.linear_model import LogisticRegression
@@ -1286,15 +1301,28 @@ import time
 from dataclasses import dataclass
 
 
-# In[104]:
+# In[33]:
 
 
 # constant
-EMBEDDING_BASE = "embedding_output/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
+# EMBEDDING_BASE = "embedding_output/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
+PROJECT_ID = "edp-prod-storage"
+DATASET_ID = "edp_ent_sdoheir_cns"
+
+# BigQuery embedding table pattern (matches save_embeddings_to_bigquery output)
+# Template: a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_commercial_all_sample_embedding
+def get_commercial_embedding_table(exp_name: str) -> str:
+    """Build the full BigQuery table ID for a commercial embedding experiment."""
+    safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
+    table_name = f"a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_commercial_all_sample_embedding"
+    return f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
+
+
 EXPERIMENT_NAMES = [
     # 'exp1_dense_baseline_opt_config',
     # 'exp1_dense_baseline_pure_legacy', 
-    'exp2b_flash_learned_pool', 
+    # 'exp2b_flash_learned_pool', 
+    'exp2b_flash_learned_pool_v4_asym_focalloss'
     # 'exp2b_flash_learned_pool_v2', 
     # 'exp6_auxiliary_free_v3'
     
@@ -1346,7 +1374,7 @@ APPLY_DOWNSAMPLING = True  # Set to False to disable downsampling
 # 5	5: 6-12 months	100909	1.44	0.10750279955207313	-334	334
 
 
-# In[106]:
+# In[32]:
 
 
 # =============================================================================
@@ -1404,13 +1432,55 @@ def compute_split_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, f
     }
 
 
-# In[107]:
+# In[34]:
 
 
 # =============================================================================
 # DATA PREPARATION FUNCTIONS
 # =============================================================================
 import glob
+
+def load_embeddings_from_bigquery(
+    table_id: str,
+    project_id: Optional[str] = None,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Load embeddings from a BigQuery table.
+    
+    Returns a DataFrame with individual_id, index_dt, and embedding_0...embedding_N columns,
+    matching the schema produced by save_embeddings_to_bigquery().
+    
+    Args:
+        table_id: Full table ID (project.dataset.table)
+        project_id: GCP project ID (optional if table_id is fully qualified)
+        verbose: Print loading info
+        
+    Returns:
+        DataFrame ready for join_embeddings_with_features()
+    """
+    client = bigquery.Client(project=project_id) if project_id else bigquery.Client()
+    
+    query = f"SELECT * FROM `{table_id}`"
+    
+    if verbose:
+        print(f"  Loading embeddings from BigQuery: {table_id}")
+    
+    df = client.query(query).to_dataframe()
+    
+    embedding_cols = sorted(
+        [c for c in df.columns if c.startswith('embedding_')],
+        key=lambda c: int(c.split('_')[1])
+    )
+    
+    if verbose:
+        print(f"  Loaded {len(df):,} rows with {len(embedding_cols)} embedding dimensions")
+    
+    df['index_dt'] = pd.to_datetime(df['index_dt']).dt.strftime('%Y-%m-%d')
+    
+    keep_cols = ['individual_id', 'index_dt'] + embedding_cols
+    return df[keep_cols]
+
 
 def load_embeddings_from_dir(embedding_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -1664,7 +1734,7 @@ def prepare_features(
 
 
 
-# In[145]:
+# In[35]:
 
 
 from dataclasses import dataclass
@@ -1697,7 +1767,9 @@ def prepare_evaluation_data(
     
     Args:
         df_features: DataFrame with features and outcomes (from BigQuery)
-        embedding_location_path: Path to NPZ file or directory (not needed for tabular_only)
+        embedding_location_path: BigQuery table ID (project.dataset.table) or local path to NPZ dir.
+                                 BigQuery tables are auto-detected by the '.' separator convention.
+                                 Not needed for tabular_only.
         feature_set: One of 'embedding_only', 'tabular_only', 'hybrid'
         oot_cutoff_date: Date string for OOT split cutoff
         downsample_ratio: If provided, downsample training negatives to this ratio 
@@ -1720,10 +1792,15 @@ def prepare_evaluation_data(
     print(f"\n Loading and preparing data...")
     # Load embeddings (skip for tabular_only)
     if feature_set != 'tabular_only':
-        print(f"  Loading embeddings from: {embedding_location_path}")
-        embeddings, individual_ids, index_dts = load_embeddings_from_dir(embedding_location_path)
-        print(f"  Creating embedding DataFrame...")
-        emb_df = create_embedding_df(embeddings, individual_ids, index_dts)
+        is_bigquery = embedding_location_path.count('.') >= 2
+        print(f"  Loading embeddings from {'BigQuery' if is_bigquery else 'local'}: {embedding_location_path}")
+        
+        if is_bigquery:
+            emb_df = load_embeddings_from_bigquery(embedding_location_path)
+        else:
+            embeddings, individual_ids, index_dts = load_embeddings_from_dir(embedding_location_path)
+            print(f"  Creating embedding DataFrame...")
+            emb_df = create_embedding_df(embeddings, individual_ids, index_dts)
         
         print(f"  Joining embeddings with features...")
         if feature_set == 'embedding_only':
@@ -1732,9 +1809,14 @@ def prepare_evaluation_data(
             df_merged = join_embeddings_with_features(emb_df, df_features)
     else:
         if embedding_location_path:
-            print(f"  Preparing tabular-only data (no embeddings) joined with member ID im embedding table...")
-            # For tabular-only, just apply filters directly
-            df_members = load_mbrs_have_embed(embedding_location_path)
+            is_bigquery = embedding_location_path.count('.') >= 2
+            if is_bigquery:
+                print(f"  Preparing tabular-only data scoped to members in BigQuery embedding table...")
+                emb_df = load_embeddings_from_bigquery(embedding_location_path)
+                df_members = emb_df[['individual_id', 'index_dt']]
+            else:
+                print(f"  Preparing tabular-only data (no embeddings) joined with member ID in embedding table...")
+                df_members = load_mbrs_have_embed(embedding_location_path)
             df_merged = join_embeddings_with_features(df_members[['individual_id', 'index_dt']], df_features)
         # using entire table without joining to match 30% samples
         else:
@@ -1816,7 +1898,7 @@ def prepare_evaluation_data(
     )
 
 
-# In[43]:
+# In[36]:
 
 
 # =============================================================================
@@ -1914,7 +1996,7 @@ def evaluate_model_on_splits(
     return results
 
 
-# In[44]:
+# In[37]:
 
 
 def evaluate_with_prepared_data(
@@ -2047,7 +2129,7 @@ def evaluate_all_experiments(
     return pd.DataFrame(results)
 
 
-# In[148]:
+# In[38]:
 
 
 lr_model = LogisticRegression(
@@ -2091,7 +2173,7 @@ catboost_model_legacy = CatBoostClassifier(
 )
 
 
-# In[114]:
+# In[39]:
 
 
 experiment_configs = [
@@ -2104,9 +2186,10 @@ experiment_configs = [
     #     'apply_scaling': False
     # },
     {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool", # exp_round6
+        # 'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool", # exp_round6
+        'embedding_location_path': get_commercial_embedding_table('exp2b_flash_learned_pool_v4_asym_focalloss'), #edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_commercial_all_sample_embedding
         'ml_model_object': catboost_model,
-        'exp_name': "exp_round6_exp2b_catboost_emb_only",
+        'exp_name': "exp_round6_exp2b_v4_asym_focalloss_catboost_emb_only",
         'feature_set': 'embedding_only',
         'apply_scaling': False
     },
@@ -2140,9 +2223,11 @@ experiment_configs = [
     #     'apply_scaling': False
     # },
     {
-        'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
+        # 'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
+        'embedding_location_path': get_commercial_embedding_table('exp2b_flash_learned_pool_v4_asym_focalloss'), #edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_commercial_all_sample_embedding
+
         'ml_model_object': catboost_model,
-        'exp_name': "exp_round6_exp2b_catboost_hybrid",
+        'exp_name': "exp_round6_exp2b_v4_asym_focalloss_catboost_hybrid",
         'feature_set': 'hybrid',
         'apply_scaling': False
     },
@@ -2160,20 +2245,20 @@ experiment_configs = [
     #     'feature_set': 'hybrid',
     #     'apply_scaling': False
     # }, 
-    # {
-    #     'embedding_location_path': f"", # use full dataset commericial what is the ceiline
-    #     'ml_model_object': catboost_model,
-    #     'exp_name': "full_tabular_only_catboost",
-    #     'feature_set': 'tabular_only',
-    #     'apply_scaling': False
-    # }
+    {
+        'embedding_location_path': f"", # use full dataset commericial what is the ceiline
+        'ml_model_object': catboost_model,
+        'exp_name': "full_tabular_only_catboost",
+        'feature_set': 'tabular_only',
+        'apply_scaling': False
+    }
 
 ]
 
 
 # ##### import feature tables
 
-# In[66]:
+# In[41]:
 
 
 import google.auth
@@ -2187,22 +2272,22 @@ from tqdm.notebook import tqdm
 client = bigquery.Client()
 
 
-# In[67]:
+# In[40]:
 
 
-feature_sql = """
-SELECT 
-* from edp-prod-storage.edp_ent_sdoheir_cns.a964286_commercial_ip_heldout_transformer_matched_final_dataset_4_te_experiment_round5_downstream
+feature_sql = f"""
+SELECT *
+FROM `{FEATURES_TABLE}`
 """
 
 
-# In[68]:
+# In[ ]:
 
 
 df_ip_features = client.query(feature_sql).to_dataframe()
 
 
-# In[95]:
+# In[ ]:
 
 
 df_ip_features['ip6'].value_counts()
@@ -2212,7 +2297,7 @@ df_ip_features['ip6'].value_counts()
 
 
 df_ip_features['index_dt'] = pd.to_datetime(df_ip_features['index_dt']).dt.strftime('%Y-%m-%d')
-embedding_dfs['exp1_dense_baseline']['index_dt'] = pd.to_datetime(embedding_dfs['exp1_dense_baseline']['index_dt']).dt.strftime('%Y-%m-%d')
+# embedding_dfs['exp1_dense_baseline']['index_dt'] = pd.to_datetime(embedding_dfs['exp1_dense_baseline']['index_dt']).dt.strftime('%Y-%m-%d')
 
 
 # #### Evaluate
@@ -2453,7 +2538,7 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
 
 # ### Medicaid embedding generation
 
-# In[34]:
+# In[23]:
 
 
 import os
@@ -2496,7 +2581,7 @@ from google.cloud import bigquery
 
 # #### Configs
 
-# In[38]:
+# In[88]:
 
 
 # BigQuery Tables - CORRECTED
@@ -2728,7 +2813,7 @@ SELECTED_TABULAR_FEATURES = [
 ]
 
 # Embedding features (256 dimensions)
-EMBEDDING_FEATURES = [f'emb{i}' for i in range(256)]
+EMBEDDING_FEATURES = [f'embedding_{i}' for i in range(256)]
 
 # Categorical features requiring special handling
 CATEGORICAL_FEATURES = [
@@ -2739,7 +2824,7 @@ CATEGORICAL_FEATURES = [
 ]
 
 
-# In[51]:
+# In[89]:
 
 
 MODEL_PATHS = {
@@ -2774,7 +2859,7 @@ MODEL_PATHS = {
 
 # #### Eval metrics
 
-# In[24]:
+# In[90]:
 
 
 # =============================================================================
@@ -2897,7 +2982,7 @@ def compute_split_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, f
 
 # #### Load data
 
-# In[45]:
+# In[91]:
 
 
 # =============================================================================
@@ -3076,7 +3161,7 @@ def load_medicaid_data_from_bigquery(
 
 # #### Data and feature preprocessing
 
-# In[46]:
+# In[92]:
 
 
 def preprocess_features(
@@ -3087,7 +3172,7 @@ def preprocess_features(
     Preprocess features replicating the original Medicaid IP pipeline.
     
     Preprocessing steps:
-    1. Fill embedding columns (emb0-emb255) with 0
+    1. Fill embedding columns (embedding_0-embedding_255) with 0
     2. Fill numeric columns with 0
     3. Fill string/categorical columns with empty string
     4. Encode gender: M -> 1, F -> 0, other -> -1
@@ -3111,7 +3196,7 @@ def preprocess_features(
         print("Preprocessing features...")
     
     # Step 1: Fill embedding columns with 0
-    emb_pattern = r'^emb\d+$'
+    emb_pattern = r'^embedding_\d+$'
     emb_cols = [col for col in df.columns if re.match(emb_pattern, col)]
     if emb_cols:
         df[emb_cols] = df[emb_cols].fillna(0)
@@ -3603,50 +3688,103 @@ def load_embeddings_from_npz(
     )
 
 
-def merge_new_embeddings_with_features(
-    df_features: pd.DataFrame,
-    embeddings: np.ndarray,
-    individual_ids: np.ndarray,
-    merge_key: str = MEMBER_KEY
+def load_embeddings_from_bigquery(
+    embedding_table: str,
+    verbose: bool = True
 ) -> pd.DataFrame:
     """
-    Replace existing embeddings with new transformer embeddings.
-    
-    This function is used when you want to evaluate new embeddings
-    (e.g., from a new transformer model) against the same Medicaid IP task.
+    Load embeddings from BigQuery table.
     
     Args:
-        df_features: DataFrame with existing features (may include old embeddings)
-        embeddings: New embeddings array [num_members, embedding_dim]
-        individual_ids: Member IDs corresponding to embeddings
-        merge_key: Column name to join on
+        embedding_table: Full BigQuery table path
+        verbose: Print progress
         
     Returns:
-        DataFrame with old embeddings replaced by new embeddings
+        DataFrame with asdb_member_key, index_dt, and emb0-emb255 columns
     """
-    # Create embedding DataFrame
-    embedding_dim = embeddings.shape[1]
-    embedding_cols = [f'emb{i}' for i in range(embedding_dim)]
+    client = bigquery.Client()
     
-    df_emb = pd.DataFrame(embeddings, columns=embedding_cols)
-    df_emb[merge_key] = individual_ids
+    if verbose:
+        print(f"Loading embeddings from: {embedding_table}")
     
-    # Remove old embeddings from features
-    old_emb_cols = [c for c in df_features.columns if c.startswith('emb')]
-    df_features_no_emb = df_features.drop(columns=old_emb_cols, errors='ignore')
+    sql = f"""
+    SELECT *
+    FROM `{embedding_table}`
+    """
     
-    # Merge new embeddings
-    df_merged = df_features_no_emb.merge(df_emb, on=merge_key, how='inner')
+    df_embeddings = client.query(sql).to_dataframe()
     
-    print(f"Merged new embeddings: {len(df_merged):,} rows (from {len(df_features):,})")
-    print(f"  Embedding dim: {embedding_dim}")
+    if verbose:
+        print(f"  Loaded: {len(df_embeddings):,} rows, {len(df_embeddings.columns)} columns")
+        emb_cols = [c for c in df_embeddings.columns if c.startswith('emb')]
+        print(f"  Embedding dimensions: {len(emb_cols)}")
+    
+    return df_embeddings
+
+
+def merge_embeddings_with_features_outcomes(
+    df_features: pd.DataFrame,
+    df_outcome: pd.DataFrame,
+    df_embeddings: pd.DataFrame,
+    features_key='asdb_member_key',    # Medicaid native key
+    embeddings_key='individual_id',     # TE pipeline key
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Merge embeddings with features and outcomes for downstream evaluation.
+    
+    Args:
+        df_features: Features DataFrame (from heldout features table)
+        df_outcome: Outcomes DataFrame (from heldout outcome table)
+        df_embeddings: Embeddings DataFrame (from BigQuery embedding table)
+        merge_key: Column to join on (default: asdb_member_key)
+        verbose: Print progress
+        
+    Returns:
+        Merged DataFrame ready for evaluation
+    """
+    if verbose:
+        print(f"\nMerging data...")
+        print(f"  Features: {len(df_features):,} rows (key: {features_key})")
+        print(f"  Outcomes: {len(df_outcome):,} rows (key: {features_key})")
+        print(f"  Embeddings: {len(df_embeddings):,} rows (key: {embeddings_key})")
+    
+    # Ensure key types match (as strings)
+    df_features[features_key] = df_features[features_key].astype(str)
+    df_outcome[features_key] = df_outcome[features_key].astype(str)
+    df_embeddings[embeddings_key] = df_embeddings[embeddings_key].astype(str)
+    
+    # Merge features with outcomes (same key)
+    df_merged = df_features.merge(
+        df_outcome[[features_key, TARGET_COLUMN]], 
+        on=features_key, 
+        how='inner'
+    )
+    
+    if verbose:
+        print(f"  After features+outcomes merge: {len(df_merged):,} rows")
+    
+    # Extract embedding columns
+    emb_cols = [c for c in df_embeddings.columns if c.startswith('emb')]
+    
+    # Merge with embeddings using different keys
+    # Rename embeddings key to match features key for the merge
+    df_emb_subset = df_embeddings[[embeddings_key] + emb_cols].copy()
+    df_emb_subset = df_emb_subset.rename(columns={embeddings_key: features_key})
+    
+    df_merged = df_merged.merge(df_emb_subset, on=features_key, how='inner')
+    
+    if verbose:
+        print(f"  After embeddings merge: {len(df_merged):,} rows")
+        print(f"  Total columns: {len(df_merged.columns)}")
+        print(f"  Positive rate: {df_merged[TARGET_COLUMN].mean()*100:.2f}%")
     
     return df_merged
 
 
 # #### Generic pipeline
 
-# In[47]:
+# In[82]:
 
 
 # =============================================================================
@@ -3738,7 +3876,7 @@ def run_medicaid_ip_evaluation(
 
 # #### Adapted embedding saving
 
-# In[48]:
+# In[84]:
 
 
 def save_medicaid_embeddings(
@@ -3894,28 +4032,211 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items(), desc="Processing models"):
 
 # #### Model training
 
-# In[ ]:
+# In[85]:
 
 
+MEDICAID_EMBEDDING_TABLES = {
+    'exp1_dense_baseline_pure_legacy': 
+        f"{PROJECT_ID}.{DATASET_ID}.a964286_te4exp_exp1_dense_baseline_pure_legacy_medicaid_heldout_embedding",
+    
+    'exp1_dense_baseline_opt_config': 
+        f"{PROJECT_ID}.{DATASET_ID}.a964286_te4exp_exp1_dense_baseline_opt_config_medicaid_heldout_embedding",
+    
+    'exp2b_flash_learned_pool_v2': 
+        f"{PROJECT_ID}.{DATASET_ID}.a964286_te4exp_exp2b_flash_learned_pool_v2_medicaid_heldout_embedding",
+    
+    'exp6_auxiliary_free_v3': 
+        f"{PROJECT_ID}.{DATASET_ID}.a964286_te4exp_exp6_auxiliary_free_v3_medicaid_heldout_embedding",
+}
 
 
-
-# In[ ]:
-
+# In[63]:
 
 
+# =============================================================================
+# STEP 1: Load heldout features and outcomes (same for all experiments)
+# =============================================================================
+client = bigquery.Client()
+
+# Load features
+features_sql = f"SELECT * FROM `{HELDOUT_FEATURES_TABLE}`"
+df_features = client.query(features_sql).to_dataframe()
+print(f"  Features loaded: {len(df_features):,} rows, {len(df_features.columns)} columns")
+
+# Load outcomes
+outcomes_sql = f"SELECT {MEMBER_KEY}, {TARGET_COLUMN} FROM `{HELDOUT_OUTCOME_TABLE}`"
+df_outcome = client.query(outcomes_sql).to_dataframe()
+print(f"  Outcomes loaded: {len(df_outcome):,} rows")
+print(f"  Positive rate: {df_outcome[TARGET_COLUMN].mean()*100:.2f}%")
 
 
-# In[ ]:
+# In[66]:
 
 
+df_embeddings = load_embeddings_from_bigquery(f"{PROJECT_ID}.{DATASET_ID}.a964286_te4exp_exp1_dense_baseline_pure_legacy_medicaid_heldout_embedding", verbose=True)
 
 
-
-# In[ ]:
-
+# In[68]:
 
 
+df_embeddings.head()
 
 
-# 
+# In[86]:
+
+
+df_merged = merge_embeddings_with_features_outcomes(
+    df_features=df_features,
+    df_outcome=df_outcome,
+    df_embeddings=df_embeddings,
+    features_key='asdb_member_key',    # Medicaid native key
+    embeddings_key='individual_id',     # TE pipeline key
+    verbose=True
+)
+
+
+# In[75]:
+
+
+prepared_data = prepare_medicaid_evaluation_data(
+    df=df_merged,
+    feature_set='hybrid',
+    apply_downsampling=True,
+    downsample_ratio=CATBOOST_UNDERSAMPLE_RATIO,  # 0.2
+    split_random_state=RANDOM_STATE,  # 35
+    undersample_random_state=UNDERSAMPLE_RANDOM_STATE,  # 53
+    verbose=True
+)
+# Create CatBoost model with tuned hyperparameters
+model = CatBoostClassifier(**CATBOOST_TUNED_PARAMS)
+
+# Train and evaluate
+split_results = evaluate_model_on_splits(model, prepared_data, verbose=True)
+
+# Extract test metrics
+test_metrics = split_results['test']
+
+
+# In[79]:
+
+
+from tqdm.notebook import tqdm
+
+
+# In[93]:
+
+
+# =============================================================================
+# STEP 2: Evaluate each experiment
+# =============================================================================
+print("\n[Step 2] Evaluating each experiment...")
+
+# Store results for comparison
+all_results = {}
+for exp_name, embedding_table in tqdm(MEDICAID_EMBEDDING_TABLES.items()):
+    print(f"\n{'='*70}")
+    print(f"EXPERIMENT: {exp_name}")
+    print(f"{'='*70}")
+    
+    # Load embeddings for this experiment
+    df_embeddings = load_embeddings_from_bigquery(embedding_table, verbose=True)
+    
+    # Merge with features and outcomes
+    df_merged = merge_embeddings_with_features_outcomes(
+        df_features=df_features,
+        df_outcome=df_outcome,
+        df_embeddings=df_embeddings,
+        features_key='asdb_member_key',    # Medicaid native key
+        embeddings_key='individual_id',     # TE pipeline key
+        verbose=True
+    )
+    
+    # Evaluate three feature sets: embedding_only, tabular_only, hybrid
+    exp_results = {}
+    
+    for feature_set in ['embedding_only', 'tabular_only', 'hybrid']:
+        print(f"\n--- Feature set: {feature_set} ---")
+        
+        # Prepare data (preprocessing, split, downsampling)
+        prepared_data = prepare_medicaid_evaluation_data(
+            df=df_merged,
+            feature_set=feature_set,
+            apply_downsampling=True,
+            downsample_ratio=CATBOOST_UNDERSAMPLE_RATIO,  # 0.2
+            split_random_state=RANDOM_STATE,  # 35
+            undersample_random_state=UNDERSAMPLE_RANDOM_STATE,  # 53
+            verbose=True
+        )
+        
+        # Create CatBoost model with tuned hyperparameters
+        model = CatBoostClassifier(**CATBOOST_TUNED_PARAMS)
+        
+        # Train and evaluate
+        split_results = evaluate_model_on_splits(model, prepared_data, verbose=True)
+        
+        # Extract test metrics
+        test_metrics = split_results['test']
+        
+        exp_results[feature_set] = {
+            'auc_roc': test_metrics['auc_roc'],
+            'lift_1pct': test_metrics['lift_1pct'],
+            'lift_5pct': test_metrics['lift_5pct'],
+            'lift_10pct': test_metrics['lift_10pct'],
+            'ppv_1pct': test_metrics['ppv_1pct'],
+            'sensitivity_1pct': test_metrics['sensitivity_1pct'],
+            'n_features': len(prepared_data.feature_cols),
+        }
+        
+        print(f"\n📊 {exp_name} - {feature_set}:")
+        print(f"   AUC-ROC: {test_metrics['auc_roc']:.4f}")
+        print(f"   Lift@1%: {test_metrics['lift_1pct']:.2f}x")
+        print(f"   Lift@10%: {test_metrics['lift_10pct']:.2f}x")
+        print(f"   PPV@1%: {test_metrics['ppv_1pct']:.2f}%")
+    del df_embeddings
+    all_results[exp_name] = exp_results
+
+
+# In[96]:
+
+
+# =============================================================================
+# STEP 3: Create comparison summary
+# =============================================================================
+print("\n" + "="*70)
+print("MEDICAID IP DOWNSTREAM EVALUATION - SUMMARY")
+print("="*70)
+
+# Build comparison DataFrame
+comparison_rows = []
+for exp_name, exp_results in all_results.items():
+    for feature_set, metrics in exp_results.items():
+        comparison_rows.append({
+            'experiment': exp_name,
+            'feature_set': feature_set,
+            'auc_roc': metrics['auc_roc'],
+            'lift_1pct': metrics['lift_1pct'],
+            'lift_5pct': metrics['lift_5pct'],
+            'lift_10pct': metrics['lift_10pct'],
+            'ppv_1pct': metrics['ppv_1pct'],
+            'sensitivity_1pct': metrics['sensitivity_1pct'],
+            'n_features': metrics['n_features'],
+        })
+
+df_comparison = pd.DataFrame(comparison_rows)
+
+# Display sorted by AUC
+print("\n📊 All Results (sorted by AUC-ROC):")
+print(df_comparison.sort_values('auc_roc', ascending=False).to_string(index=False))
+
+# Show best per feature set
+print("\n📊 Best per Feature Set:")
+for fs in ['embedding_only', 'tabular_only', 'hybrid']:
+    fs_data = df_comparison[df_comparison['feature_set'] == fs].sort_values('auc_roc', ascending=False).iloc[0]
+    print(f"  {fs}: {fs_data['experiment']} (AUC={fs_data['auc_roc']:.4f}, Lift@1%={fs_data['lift_1pct']:.2f}x)")
+
+
+# In[98]:
+
+
+df_comparison.to_excel("exp_round5_3lob_1-5M_1epoch_128batch_dim256_medicaid_ip_downstream_eval.xlsx")
+
