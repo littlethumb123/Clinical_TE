@@ -3384,6 +3384,100 @@ print(f"target_multihot shape: {batch['target_multihot'].shape}")  # Should be [
 print(f"dt_cnt type: {type(batch['dt_cnt'])}")  # Should be torch.Tensor
 
 
+# #### Process data with lazy dataloader (scaled to 11M)
+
+# In[66]:
+
+
+class ClinicalDatasetLazy(Dataset):
+    """
+    Memory-efficient Dataset: stores raw strings, parses on-the-fly in __getitem__.
+    
+    For 11M samples:
+      - ClinicalDataset:     ~888 GB RAM (pre-allocated tensors + targets lists)
+      - ClinicalDatasetLazy: ~130 GB RAM (raw strings only)
+    
+    Interface contract: __getitem__ returns identical dict as ClinicalDataset,
+    so collate_fn, DataLoader, and training loop require zero changes.
+    """
+    def __init__(self, df: pd.DataFrame, config: BaseConfig):
+        self.config = config
+        self.n = len(df)
+        
+        print(f"ClinicalDatasetLazy: Storing {self.n:,} samples as raw strings (lazy parsing)...")
+        start = time.time()
+        
+        self.age_strs = df['age_in_months'].tolist()
+        self.gender_strs = df['gender_cd'].tolist()
+        self.cd_strs = df['cd'].tolist()
+        self.target_strs = df['target'].tolist()
+        self.dt_cnt = df['dt_cnt'].tolist()
+        self.lob_strs = df['lob'].tolist()
+        
+        sample_size = min(1000, self.n)
+        avg_cd_len = sum(
+            len(str(s)) if s and not pd.isna(s) else 0
+            for s in self.cd_strs[:sample_size]
+        ) / max(sample_size, 1)
+        est_gb = (avg_cd_len * self.n * 1.5) / 1e9
+        
+        elapsed = time.time() - start
+        print(f"  Done in {elapsed:.1f}s. Estimated string memory: ~{est_gb:.1f} GB")
+        print(f"  Parsing will happen on-the-fly in __getitem__ (parallelized by DataLoader workers)")
+    
+    def __len__(self):
+        return self.n
+    
+    def __getitem__(self, idx):
+        config = self.config
+        return {
+            'age': torch.tensor(
+                conv_age_gender(self.age_strs[idx], config.len_dy), dtype=torch.int16
+            ),
+            'gender': torch.tensor(
+                conv_age_gender(self.gender_strs[idx], config.len_dy, max_val=3), dtype=torch.int8
+            ),
+            'lob': torch.tensor(
+                conv_lob(self.lob_strs[idx], config.len_dy), dtype=torch.int8
+            ),
+            'codes': torch.tensor(
+                conv_cd(self.cd_strs[idx], config.len_dy, config.len_cd), dtype=torch.int32
+            ),
+            'dt_cnt': self.dt_cnt[idx],
+            'target': conv_target(
+                self.target_strs[idx], config.len_dy, config.target_cd_cnt
+            )
+        }
+    
+    def get_target_codes_for_member(self, idx: int) -> set:
+        """
+        Parse target string for a single member and return the set of unique
+        positive target code indices (0-based, excluding index 0 for consistency
+        with existing code that uses `if code != 0` to skip padding).
+        
+        Used by streaming tier computation to avoid materializing full targets list.
+        """
+        target_str = self.target_strs[idx]
+        if not target_str or pd.isna(target_str):
+            return set()
+        
+        codes = set()
+        for day_str in target_str.split('*')[:self.config.len_dy]:
+            if not day_str:
+                continue
+            for code_str in day_str.split(','):
+                try:
+                    code_val = int(code_str) if code_str else 0
+                    if 0 < code_val <= self.config.target_cd_cnt:
+                        code_idx = code_val - 1
+                        if code_idx == 0:
+                            continue
+                        codes.add(code_idx)
+                except ValueError:
+                    pass
+        return codes
+
+
 # #### Data preparation
 
 # In[21]:
@@ -5919,7 +6013,8 @@ class TierAwareBatchSampler(Sampler):
         shuffle: bool = True,
         drop_last: bool = True,
         percentile_boundaries: Tuple[float, float, float] = (20, 50, 80),
-        verbose: bool = True
+        verbose: bool = True,
+        precomputed_tier_indices: Optional[dict] = None
     ):
         """
         Args:
@@ -5954,13 +6049,22 @@ class TierAwareBatchSampler(Sampler):
         assert total_quota <= batch_size, \
             f"Combined quotas ({total_quota}) exceed batch_size ({batch_size})"
         
-        # Build tier code indices
-        self._build_tier_indices(code_frequencies, percentile_boundaries)
+        if precomputed_tier_indices is not None:
+            self.tier_code_indices = precomputed_tier_indices['tier_code_indices']
+            self.tier_thresholds = precomputed_tier_indices['tier_thresholds']
+            self.samples_with_medium = precomputed_tier_indices['samples_with_medium']
+            self.samples_with_rare = precomputed_tier_indices['samples_with_rare']
+            self.samples_with_tail = precomputed_tier_indices['samples_with_tail']
+            self.general_samples = list(range(self.num_samples))
+            if verbose:
+                print(f"TierAwareBatchSampler: Using pre-computed tier indices")
+                print(f"  Members with medium: {len(self.samples_with_medium):,}")
+                print(f"  Members with rare: {len(self.samples_with_rare):,}")
+                print(f"  Members with tail: {len(self.samples_with_tail):,}")
+        else:
+            self._build_tier_indices(code_frequencies, percentile_boundaries)
+            self._build_sample_tier_mapping(verbose)
         
-        # Build sample-to-tier mapping (optimized for large datasets)
-        self._build_sample_tier_mapping(verbose)
-        
-        # Calculate number of batches
         self._calculate_num_batches()
     
     def _build_tier_indices(
@@ -6468,7 +6572,8 @@ class DensityTierAwareBatchSampler(Sampler):
         density_tail_percentile: float = 80.0,
         density_rare_percentile: float = 70.0,
         density_medium_percentile: float = 70.0,
-        verbose: bool = True
+        verbose: bool = True,
+        precomputed_density_pools: Optional[dict] = None
     ):
         """
         Args:
@@ -6505,8 +6610,23 @@ class DensityTierAwareBatchSampler(Sampler):
         assert total_quota <= batch_size, \
             f"Combined quotas ({total_quota}) exceed batch_size ({batch_size})"
         
-        self._build_tier_indices(code_frequencies, percentile_boundaries)
-        self._build_density_pools(verbose)
+        if precomputed_density_pools is not None:
+            self.tier_code_indices = precomputed_density_pools['tier_code_indices']
+            self.tier_thresholds = precomputed_density_pools['tier_thresholds']
+            self.samples_with_medium = precomputed_density_pools['samples_with_medium']
+            self.samples_with_rare = precomputed_density_pools['samples_with_rare']
+            self.samples_with_tail = precomputed_density_pools['samples_with_tail']
+            self.general_samples = list(range(self.num_samples))
+            self._density_stats = precomputed_density_pools.get('density_stats', {})
+            if verbose:
+                print(f"DensityTierAwareBatchSampler: Using pre-computed density pools")
+                print(f"  Tail pool: {len(self.samples_with_tail):,}")
+                print(f"  Rare pool: {len(self.samples_with_rare):,}")
+                print(f"  Medium pool: {len(self.samples_with_medium):,}")
+        else:
+            self._build_tier_indices(code_frequencies, percentile_boundaries)
+            self._build_density_pools(verbose)
+        
         self._calculate_num_batches()
     
     def _build_tier_indices(
@@ -11911,7 +12031,7 @@ def compute_code_frequencies(
 
 # #### Experiment run utils
 
-# In[46]:
+# In[72]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -11975,7 +12095,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[47]:
+# In[73]:
 
 
 # ============================================================================
@@ -12088,7 +12208,8 @@ def prepare_data_once(
     val_data: pd.DataFrame,
     config: Optional[BaseConfig] = None,
     device: torch.device = None,
-    code_freq_sample_fraction: float = 1.0
+    code_freq_sample_fraction: float = 1.0,
+    use_lazy: bool = False
 ) -> PreparedData:
     """
     Prepare datasets and code frequencies ONCE for reuse across multiple experiments.
@@ -12138,23 +12259,30 @@ def prepare_data_once(
     # ============================================================
     # STEP 1: Create Datasets
     # ============================================================
-    print("\n[1/3] Creating training dataset... and clean df_train")
-    train_dataset = ClinicalDataset(train_data, config)
+    DatasetClass = ClinicalDatasetLazy if use_lazy else ClinicalDataset
+    
+    print(f"\n[1/3] Creating training dataset ({'lazy' if use_lazy else 'eager'})...")
+    train_dataset = DatasetClass(train_data, config)
     del train_data
     gc.collect()    
-    print("\n[2/3] Creating validation dataset... and clean df_val")
-    val_dataset = ClinicalDataset(val_data, config)
+    print(f"\n[2/3] Creating validation dataset ({'lazy' if use_lazy else 'eager'})...")
+    val_dataset = DatasetClass(val_data, config)
     del val_data
     gc.collect()    
     # ============================================================
     # STEP 2: Compute Code Frequencies
     # ============================================================
     print("\n[3/3] Computing code frequencies...")
-    code_frequencies = _compute_code_frequencies_from_dataset(
-        train_dataset, 
-        config,
-        sample_fraction=code_freq_sample_fraction
-    )
+    if use_lazy:
+        code_frequencies = _compute_code_frequencies_from_strings(
+            train_dataset.target_strs, config,
+            sample_fraction=code_freq_sample_fraction
+        )
+    else:
+        code_frequencies = _compute_code_frequencies_from_dataset(
+            train_dataset, config,
+            sample_fraction=code_freq_sample_fraction
+        )
     
     elapsed = time.time() - start_time
     print(f"\n✅ Data preparation complete in {elapsed:.1f}s")
@@ -12217,17 +12345,292 @@ def _compute_code_frequencies_from_dataset(
     
     return code_frequencies
 
+
+def _compute_code_frequencies_from_strings(
+    target_strs: list,
+    config: BaseConfig,
+    sample_fraction: float = 1.0
+) -> np.ndarray:
+    """
+    Compute code frequencies directly from raw target strings.
+    Used with ClinicalDatasetLazy to avoid triggering full __getitem__ parsing.
+    
+    Matches _compute_code_frequencies_from_dataset behavior:
+    - Skips code_idx=0 (consistent with `if code != 0` in the existing function)
+    - 0-indexed code values from conv_target's code_val-1 mapping
+    """
+    code_frequencies = np.zeros(config.target_cd_cnt, dtype=np.int64)
+    
+    n = len(target_strs)
+    if sample_fraction < 1.0:
+        n_process = int(n * sample_fraction)
+        indices = np.random.choice(n, n_process, replace=False)
+    else:
+        n_process = n
+        indices = range(n)
+    
+    print(f"  Computing code frequencies from {n_process:,} target strings...")
+    
+    for count, idx in enumerate(indices):
+        target_str = target_strs[idx]
+        if not target_str or pd.isna(target_str):
+            continue
+        
+        for day_str in target_str.split('*')[:config.len_dy]:
+            if not day_str:
+                continue
+            for code_str in day_str.split(','):
+                try:
+                    code_val = int(code_str) if code_str else 0
+                    if 0 < code_val <= config.target_cd_cnt:
+                        code_idx = code_val - 1
+                        if code_idx == 0:
+                            continue
+                        code_frequencies[code_idx] += 1
+                except ValueError:
+                    pass
+        
+        if (count + 1) % 1_000_000 == 0:
+            print(f"    {count + 1:,}/{n_process:,} processed...")
+    
+    non_zero = np.sum(code_frequencies > 0)
+    print(f"  Found {non_zero:,} unique codes")
+    return code_frequencies
+
+
+def build_tier_indices_streaming(
+    dataset,
+    code_frequencies: np.ndarray,
+    percentile_boundaries: Tuple[float, float, float] = (20, 50, 80)
+) -> dict:
+    """
+    Stream through ClinicalDatasetLazy.target_strs to build tier membership indices.
+    Memory: ~50 MB (index lists only) vs ~176 GB (full targets list).
+    
+    Matches TierAwareBatchSampler._build_sample_tier_mapping behavior:
+    - Uses get_target_codes_for_member which skips code_idx=0
+    """
+    freq_nz = code_frequencies[code_frequencies > 0]
+    if len(freq_nz) == 0:
+        raise ValueError("No non-zero frequencies found")
+    
+    percentiles = np.percentile(freq_nz, list(percentile_boundaries))
+    
+    tier_code_indices = {
+        'common': set(np.where(code_frequencies > percentiles[2])[0]),
+        'medium': set(np.where(
+            (code_frequencies <= percentiles[2]) & (code_frequencies > percentiles[1])
+        )[0]),
+        'rare': set(np.where(
+            (code_frequencies <= percentiles[1]) & (code_frequencies > percentiles[0])
+        )[0]),
+        'tail': set(np.where(
+            (code_frequencies <= percentiles[0]) & (code_frequencies > 0)
+        )[0]),
+    }
+    
+    medium_codes = tier_code_indices['medium']
+    rare_codes = tier_code_indices['rare']
+    tail_codes = tier_code_indices['tail']
+    
+    samples_with_medium = []
+    samples_with_rare = []
+    samples_with_tail = []
+    
+    n = len(dataset)
+    print(f"  Streaming tier classification for {n:,} members...")
+    
+    for idx in range(n):
+        positive_codes = dataset.get_target_codes_for_member(idx)
+        
+        if positive_codes & medium_codes:
+            samples_with_medium.append(idx)
+        if positive_codes & rare_codes:
+            samples_with_rare.append(idx)
+        if positive_codes & tail_codes:
+            samples_with_tail.append(idx)
+        
+        if (idx + 1) % 1_000_000 == 0:
+            print(f"    {idx + 1:,}/{n:,} classified...")
+    
+    print(f"  Members with medium: {len(samples_with_medium):,} ({len(samples_with_medium)/n:.1%})")
+    print(f"  Members with rare: {len(samples_with_rare):,} ({len(samples_with_rare)/n:.1%})")
+    print(f"  Members with tail: {len(samples_with_tail):,} ({len(samples_with_tail)/n:.1%})")
+    
+    return {
+        'samples_with_medium': samples_with_medium,
+        'samples_with_rare': samples_with_rare,
+        'samples_with_tail': samples_with_tail,
+        'tier_code_indices': tier_code_indices,
+        'tier_thresholds': {
+            'tail_upper': percentiles[0],
+            'rare_upper': percentiles[1],
+            'medium_upper': percentiles[2],
+        }
+    }
+
+
+def build_density_pools_streaming(
+    dataset,
+    code_frequencies: np.ndarray,
+    percentile_boundaries: Tuple[float, float, float] = (20, 50, 80),
+    density_tail_percentile: float = 80.0,
+    density_rare_percentile: float = 70.0,
+    density_medium_percentile: float = 70.0,
+    verbose: bool = True
+) -> dict:
+    """
+    Stream through ClinicalDatasetLazy to build density-aware tier pools.
+    Replaces DensityTierAwareBatchSampler._build_density_pools for lazy datasets.
+    
+    Matches existing _build_density_pools behavior:
+    - Skips code_idx=0 (consistent with `if code == 0: continue` at line 6587)
+    - Counts per-tier occurrences (not just unique codes) for density scoring
+    """
+    freq_nz = code_frequencies[code_frequencies > 0]
+    if len(freq_nz) == 0:
+        raise ValueError("No non-zero frequencies found")
+    
+    percentiles = np.percentile(freq_nz, list(percentile_boundaries))
+    
+    tier_code_indices = {
+        'common': set(np.where(code_frequencies > percentiles[2])[0]),
+        'medium': set(np.where(
+            (code_frequencies <= percentiles[2]) & (code_frequencies > percentiles[1])
+        )[0]),
+        'rare': set(np.where(
+            (code_frequencies <= percentiles[1]) & (code_frequencies > percentiles[0])
+        )[0]),
+        'tail': set(np.where(
+            (code_frequencies <= percentiles[0]) & (code_frequencies > 0)
+        )[0]),
+    }
+    
+    medium_codes = tier_code_indices['medium']
+    rare_codes = tier_code_indices['rare']
+    tail_codes = tier_code_indices['tail']
+    
+    n = len(dataset)
+    tail_densities = np.zeros(n, dtype=np.float32)
+    rare_densities = np.zeros(n, dtype=np.float32)
+    medium_densities = np.zeros(n, dtype=np.float32)
+    tail_counts = np.zeros(n, dtype=np.int32)
+    rare_counts = np.zeros(n, dtype=np.int32)
+    medium_counts = np.zeros(n, dtype=np.int32)
+    total_counts = np.zeros(n, dtype=np.int32)
+    
+    if verbose:
+        print(f"  Computing density scores for {n:,} members (streaming)...")
+    
+    for idx in range(n):
+        if verbose and idx > 0 and idx % 1_000_000 == 0:
+            print(f"    {idx:,}/{n:,} processed...")
+        
+        target_str = dataset.target_strs[idx]
+        if not target_str or pd.isna(target_str):
+            continue
+        
+        member_tail = 0
+        member_rare = 0
+        member_medium = 0
+        member_total = 0
+        
+        for day_str in target_str.split('*')[:dataset.config.len_dy]:
+            if not day_str:
+                continue
+            for code_str in day_str.split(','):
+                try:
+                    code_val = int(code_str) if code_str else 0
+                    if 0 < code_val <= dataset.config.target_cd_cnt:
+                        code_idx = code_val - 1
+                        if code_idx == 0:
+                            continue
+                        member_total += 1
+                        if code_idx in tail_codes:
+                            member_tail += 1
+                        elif code_idx in rare_codes:
+                            member_rare += 1
+                        elif code_idx in medium_codes:
+                            member_medium += 1
+                except ValueError:
+                    pass
+        
+        total_counts[idx] = member_total
+        tail_counts[idx] = member_tail
+        rare_counts[idx] = member_rare
+        medium_counts[idx] = member_medium
+        
+        if member_total > 0:
+            tail_densities[idx] = member_tail / member_total
+            rare_densities[idx] = member_rare / member_total
+            medium_densities[idx] = member_medium / member_total
+    
+    tail_mask = tail_counts > 0
+    rare_mask = rare_counts > 0
+    medium_mask = medium_counts > 0
+    
+    tail_density_thresh = (
+        np.percentile(tail_densities[tail_mask], density_tail_percentile)
+        if tail_mask.sum() > 0 else 0.0
+    )
+    rare_density_thresh = (
+        np.percentile(rare_densities[rare_mask], density_rare_percentile)
+        if rare_mask.sum() > 0 else 0.0
+    )
+    medium_density_thresh = (
+        np.percentile(medium_densities[medium_mask], density_medium_percentile)
+        if medium_mask.sum() > 0 else 0.0
+    )
+    
+    samples_with_tail = np.where(
+        (tail_densities >= tail_density_thresh) & (tail_counts > 0)
+    )[0].tolist()
+    samples_with_rare = np.where(
+        (rare_densities >= rare_density_thresh) & (rare_counts > 0)
+    )[0].tolist()
+    samples_with_medium = np.where(
+        (medium_densities >= medium_density_thresh) & (medium_counts > 0)
+    )[0].tolist()
+    
+    if verbose:
+        print(f"  Density thresholds: tail>={tail_density_thresh:.4f}, "
+              f"rare>={rare_density_thresh:.4f}, medium>={medium_density_thresh:.4f}")
+        print(f"  Tail pool: {len(samples_with_tail):,} ({len(samples_with_tail)/n:.1%})")
+        print(f"  Rare pool: {len(samples_with_rare):,} ({len(samples_with_rare)/n:.1%})")
+        print(f"  Medium pool: {len(samples_with_medium):,} ({len(samples_with_medium)/n:.1%})")
+    
+    return {
+        'samples_with_medium': samples_with_medium,
+        'samples_with_rare': samples_with_rare,
+        'samples_with_tail': samples_with_tail,
+        'tier_code_indices': tier_code_indices,
+        'tier_thresholds': {
+            'tail_upper': percentiles[0],
+            'rare_upper': percentiles[1],
+            'medium_upper': percentiles[2],
+        },
+        'density_stats': {
+            'tail_density_threshold': float(tail_density_thresh),
+            'rare_density_threshold': float(rare_density_thresh),
+            'medium_density_threshold': float(medium_density_thresh),
+            'tail_pool_size': len(samples_with_tail),
+            'rare_pool_size': len(samples_with_rare),
+            'medium_pool_size': len(samples_with_medium),
+        }
+    }
+
+
 def _create_dataloaders(
     train_data: Union[pd.DataFrame, ClinicalDataset],
     val_data: Union[pd.DataFrame, ClinicalDataset],
     config: BaseConfig,
     use_bucketing: bool,
-    train_data_df: Optional[pd.DataFrame] = None,  # Needed for bucketing sampler
+    train_data_df: Optional[pd.DataFrame] = None,
     world_size: int = 1,
     logger: Optional[logging.Logger] = None,
-    # Add tier_aware batching for imbalance issue
     optimize_config: Optional[OptimizeConfig] = None,
-    code_frequencies: Optional[np.ndarray] = None
+    code_frequencies: Optional[np.ndarray] = None,
+    precomputed_tier_indices: Optional[dict] = None
     
 ) -> Tuple[DataLoader, DataLoader]:
     """
@@ -12300,7 +12703,8 @@ def _create_dataloaders(
                 density_tail_percentile=optimize_config.density_tail_percentile,
                 density_rare_percentile=optimize_config.density_rare_percentile,
                 density_medium_percentile=optimize_config.density_medium_percentile,
-                verbose=True
+                verbose=True,
+                precomputed_density_pools=precomputed_tier_indices
             )
         else:
             if logger:
@@ -12318,7 +12722,8 @@ def _create_dataloaders(
                 tail_quota=optimize_config.tier_tail_quota,
                 shuffle=True,
                 drop_last=True,
-                verbose=True
+                verbose=True,
+                precomputed_tier_indices=precomputed_tier_indices
             )
         
         train_loader = DataLoader(
@@ -12552,7 +12957,7 @@ def _build_final_results(
 
 # #### Run experimentation
 
-# In[48]:
+# In[74]:
 
 
 def run_single_experiment(
@@ -12750,15 +13155,42 @@ def run_single_experiment(
     # CONVERT DATASET TO DATALOADER 
     # Have to come after the config.batch_size = effective_batch_size gets updated
     # ============================================================
+    # pre-computation block 
+    precomputed_tier = None
+    is_lazy = isinstance(train_dataset, ClinicalDatasetLazy)
+    use_tier_aware = (
+        optimize_config is not None and 
+        optimize_config.use_tier_aware_batching
+    )
+    if is_lazy and use_tier_aware:
+        use_density = (
+            optimize_config is not None and
+            getattr(optimize_config, 'use_density_aware_batching', False)
+        )
+        if use_density:
+            logger.info("Pre-computing density pools for lazy dataset...")
+            precomputed_tier = build_density_pools_streaming(
+                train_dataset, code_frequencies,
+                density_tail_percentile=optimize_config.density_tail_percentile,
+                density_rare_percentile=optimize_config.density_rare_percentile,
+                density_medium_percentile=optimize_config.density_medium_percentile
+            )
+        else:
+            logger.info("Pre-computing tier indices for lazy dataset...")
+            precomputed_tier = build_tier_indices_streaming(
+                train_dataset, code_frequencies
+            )
+    
     train_loader, val_loader = _create_dataloaders(
         train_data=train_dataset, 
         val_data=val_dataset, 
-        config = config, 
-        use_bucketing = use_bucketing, 
-        train_data_df = train_data_df, 
+        config=config, 
+        use_bucketing=use_bucketing, 
+        train_data_df=train_data_df, 
         logger=logger,
         optimize_config=optimize_config,
-        code_frequencies=code_frequencies
+        code_frequencies=code_frequencies,
+        precomputed_tier_indices=precomputed_tier
     )
     # ============================================================
     # 4. OPTIMIZER SETUP
@@ -15996,7 +16428,7 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_40pct_6_8
 input_data = client.query(input_sql3).to_dataframe() 
 
 
-# In[51]:
+# In[59]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -16006,7 +16438,7 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[52]:
+# In[82]:
 
 
 ## Split training and validation dataset
@@ -16020,24 +16452,20 @@ train_df, val_df = train_test_split(
     stratify=df_unique['lob'],  # Preserves LOB proportions
     random_state=RANDOM_SEED
 )
+# del df_unique
+gc.collect()
 
 
-# In[57]:
-
-
-input_data
-
-
-# In[53]:
+# In[63]:
 
 
 df_unique.columns
 
 
-# In[54]:
+# In[65]:
 
 
-print(f"""1.5M d_cnt > 10 and 10% of the entire pop:
+print(f"""{len(df_unique)} d_cnt > 5 and 40% of the entire pop:
       {'LOB':<15} {'Total':>12} {'Original %':>12} {'Train %':>12} {'Val %':>12}""")
 for lob in df_unique['lob'].unique():
     total_n = (df_unique['lob'] == lob).sum()
@@ -16057,14 +16485,16 @@ data_prepared_1p5M = prepare_data_once(
 )
 
 
-# In[ ]:
+# In[83]:
 
 
 data_prepared_6p8M = prepare_data_once(
     train_data=train_df,
     val_data=val_df,
-    device=device
+    device=device,
+    use_lazy=True
 )
+gc.collect()
 
 
 # In[ ]:
@@ -16493,8 +16923,11 @@ dense_baseline_results = run_single_experiment(
 #     - v2: this is the standard exp2b model for the round 5 for downstream evaluation
 #     - v3: this is a version trained with pos_weight_max = 200 to address learning plateau issues, with gradient analyssi done (Jan 21)
 #     - v4: this is a version trained only for getting v2 gradient analysis to be baseline. (Jan 24)
+#     - V5: this is a version dedicated to resolving learning plateau issues with focal loss and dense sampler;
+#     - V6: using 3.4M members for training or using 6.8M members for training
+#     - V7: using 512 dimensions
 
-# In[133]:
+# In[80]:
 
 
 # Get predefined experiment configs
@@ -16506,10 +16939,11 @@ moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
 EPOCHS = 1  # Start small for testing
 EMBEDDING_SIZE = 256  # 256, 384, or 512
 # "exp_round5_1-5M_3lobs_pretrain_multi_gpu_test_v2"
-EXPERIMENT_ROUND = "exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
+# EXPERIMENT_ROUND = "exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
+EXPERIMENT_ROUND = "exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
 
 
-# In[84]:
+# In[79]:
 
 
 optimize_config = OptimizeConfig(
@@ -16521,15 +16955,16 @@ optimize_config = OptimizeConfig(
     min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
     use_pos_weight=True,            # Enable weighted BCE
     pos_weight_method='log_scaled',     # or 'log_scaled', 'ens', 'inverse'
-    pos_weight_max=35,   # Change from 50 to 35 to stablize the training; in v3 change to 200 to increase neg weights
+    pos_weight_max=200,   # Change from 50 to 35 to stablize the training; in v3, V6 and v5(6.8M) change to 200 to increase neg weights
     use_focal_loss=False,
-    focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
-    focal_alpha=0.25,
-    enable_gradient_tier_analysis=True,
-    use_tier_aware_batching = True,   # Enable tier-aware batch sampler
-    tier_medium_quota = 10,              # Min members with medium codes per batch
-    tier_rare_quota = 20,                # Min members with rare codes per batch
-    tier_tail_quota = 16               # Min members with tail codes per batch    
+    # focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
+    # focal_alpha=0.25,
+    # enable_gradient_tier_analysis=True,
+    # use_density_aware_batching=False,
+    # use_tier_aware_batching = False,   # Enable tier-aware batch sampler
+    # tier_medium_quota = 10,              # Min members with medium codes per batch
+    # tier_rare_quota = 20,                # Min members with rare codes per batch
+    # tier_tail_quota = 16               # Min members with tail codes per batch    
     
 )
 
@@ -16540,16 +16975,16 @@ optimize_config = OptimizeConfig(
 # Remember to change batchsize back to 32 for flashattention 
 
 
-# In[85]:
+# In[ ]:
 
 
 # cleanup_gpu_memory_hard()
 torch.cuda.empty_cache()
-exp2b_baseline_results = run_single_experiment(
+exp2b_baseline_results_6p8M = run_single_experiment(
     exp_name=EXP_NAME,
     moe_config=moe_config,
     use_learnt_att_pool=use_learnt_att_pool,
-    prepared_data = data_prepared_1p5M,
+    prepared_data = data_prepared_6p8M,
     train_data=train_df,
     val_data=val_df,
     device=device,
@@ -16560,6 +16995,12 @@ exp2b_baseline_results = run_single_experiment(
     save_model=True,
     optimize_config=optimize_config
 )
+
+
+
+# In[ ]:
+
+
 
 
 
