@@ -191,7 +191,7 @@
 # ============================================================================
 
 
-# In[2]:
+# In[1]:
 
 
 import pandas as pd
@@ -207,7 +207,7 @@ import pandas as pd
 df_train.columns
 
 
-# In[3]:
+# In[5]:
 
 
 """
@@ -254,7 +254,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-# In[4]:
+# In[6]:
 
 
 # import for downstream evaluation
@@ -280,7 +280,7 @@ from datetime import datetime
 
 # ### Configurations
 
-# In[63]:
+# In[7]:
 
 
 # ============================================================================
@@ -347,7 +347,7 @@ def setup_experiment_logging(
     return logger
 
 
-# In[64]:
+# In[8]:
 
 
 @dataclass
@@ -564,7 +564,7 @@ class OptimizeConfig:
     
 
 
-# In[65]:
+# In[9]:
 
 
 def get_legacy_optimize_config() -> OptimizeConfig:
@@ -600,7 +600,7 @@ def get_legacy_optimize_config() -> OptimizeConfig:
     )
 
 
-# In[66]:
+# In[10]:
 
 
 def get_experiment_configs() -> Dict[str, Tuple[Optional[MoEConfig], bool]]:
@@ -1047,7 +1047,7 @@ def sync_metrics(metrics: Dict[str, float], device: torch.device) -> Dict[str, f
 
 # ### Data parellelism
 
-# In[67]:
+# In[11]:
 
 
 class DataParallelWrapper(nn.Module):
@@ -1302,7 +1302,7 @@ print(f"Predictions shape: {extras['predictions'].shape}")
 
 # ### RPE and Swiglu
 
-# In[68]:
+# In[12]:
 
 
 class RotaryPositionEmbedding(nn.Module):
@@ -1460,7 +1460,7 @@ test_swiglu_forward()
 
 # ### Flash attention
 
-# In[69]:
+# In[13]:
 
 
 class FlashAttentionLayer(nn.Module):
@@ -1726,7 +1726,7 @@ test_flash_attention_layer_fallback()
 
 # ### Learned Attention Pooling for daily encoder (Optional and only apply to MOE experimentation set up)
 
-# In[70]:
+# In[14]:
 
 
 class LearnedAttentionPooling(nn.Module):
@@ -1827,7 +1827,7 @@ test_learned_attention_pooling()
 
 # ### MOE components
 
-# In[74]:
+# In[15]:
 
 
 # ============================================================================
@@ -2274,7 +2274,7 @@ test_moe_layer_forward()
 
 # #### Baseline transformer
 
-# In[71]:
+# In[16]:
 
 
 # ============================================================================
@@ -2455,7 +2455,7 @@ class BaselineTransformer(nn.Module):
 
 # #### Flash attention transformer
 
-# In[72]:
+# In[17]:
 
 
 # ============================================================================
@@ -2678,7 +2678,7 @@ class FlashAttentionTransformer(nn.Module):
 
 # #### Flash attention + MOE transformer
 
-# In[77]:
+# In[18]:
 
 
 # ============================================================================
@@ -3158,7 +3158,7 @@ test_model_forward_with_lob()
 
 # #### Preprocess data with data loader
 
-# In[73]:
+# In[19]:
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -3249,7 +3249,7 @@ class PreparedData:
                 f"code_frequencies_shape={self.code_frequencies.shape})")
 
 
-# In[74]:
+# In[20]:
 
 
 from functools import partial
@@ -3386,7 +3386,7 @@ print(f"dt_cnt type: {type(batch['dt_cnt'])}")  # Should be torch.Tensor
 
 # #### Data preparation
 
-# In[75]:
+# In[21]:
 
 
 def conv_cd(ipt: str, len_dy: int, len_cd: int) -> List[List[int]]:
@@ -3663,7 +3663,7 @@ def create_multihot_targets_vectorized(
 
 # #### Loss function (Legacy, used only in test)
 
-# In[76]:
+# In[22]:
 
 
 def compute_loss(
@@ -4195,7 +4195,7 @@ test_conv_lob()
 
 # #### AsymmetricLoss
 
-# In[77]:
+# In[23]:
 
 
 class AsymmetricLoss(nn.Module):
@@ -4301,7 +4301,7 @@ class AsymmetricLoss(nn.Module):
 
 # #### Focal loss
 
-# In[78]:
+# In[24]:
 
 
 class FocalLoss(nn.Module):
@@ -4403,7 +4403,7 @@ class FocalLoss(nn.Module):
 
 # #### Weighted loss function(weighted + Focal loss)
 
-# In[79]:
+# In[25]:
 
 
 # ============================================================
@@ -4682,7 +4682,7 @@ def create_criterion(
 
 # #### Loss logger
 
-# In[80]:
+# In[26]:
 
 
 class LossTracker:
@@ -4806,7 +4806,7 @@ class LossTracker:
         return recent_worse
 
 
-# In[81]:
+# In[27]:
 
 
 class ValidationTracker:
@@ -4842,7 +4842,7 @@ class ValidationTracker:
 
 # #### Optimizer
 
-# In[82]:
+# In[28]:
 
 
 import math
@@ -5019,7 +5019,7 @@ def create_scheduler(
     return scheduler, desc
 
 
-# In[83]:
+# In[29]:
 
 
 def create_optimizer(
@@ -5094,7 +5094,7 @@ def create_optimizer(
 
 # #### Gradient tier inspection
 
-# In[84]:
+# In[30]:
 
 
 # ============================================================
@@ -5368,7 +5368,7 @@ class GradientTierAnalyzer:
 
 # #### Train epoch
 
-# In[85]:
+# In[31]:
 
 
 def _model_has_moe(model):
@@ -5858,7 +5858,7 @@ def train_epoch(
 
 # #### Tier-aware batch sampler
 
-# In[86]:
+# In[32]:
 
 
 from torch.utils.data import Sampler, Dataset, DataLoader
@@ -5939,7 +5939,7 @@ class TierAwareBatchSampler(Sampler):
                                    - Common: freq > 80th percentile
             verbose: Print initialization statistics
         """
-        super().__init__(dataset)
+        super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
         self.medium_quota = medium_quota
@@ -6185,7 +6185,7 @@ class TierAwareBatchSampler(Sampler):
         return self.num_batches
 
 
-# In[87]:
+# In[33]:
 
 
 def create_tier_aware_dataloader(
@@ -6433,7 +6433,7 @@ def _create_dataloaders_with_tier_aware(
 
 # #### Dense tier aware batch sampler
 
-# In[88]:
+# In[34]:
 
 
 class DensityTierAwareBatchSampler(Sampler):
@@ -6488,7 +6488,7 @@ class DensityTierAwareBatchSampler(Sampler):
             density_medium_percentile: Percentile threshold for medium member pool
             verbose: Print initialization statistics
         """
-        super().__init__(dataset)
+        super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
         self.medium_quota = medium_quota
@@ -6811,7 +6811,7 @@ class DensityTierAwareBatchSampler(Sampler):
 
 # #### Bucketing batch sampler
 
-# In[89]:
+# In[35]:
 
 
 class BucketingBatchSampler:
@@ -6930,7 +6930,7 @@ def create_bucketing_dataloader(
 
 # #### Validate
 
-# In[90]:
+# In[36]:
 
 
 def evaluate(
@@ -7257,7 +7257,7 @@ test_evaluate_smoke()
 
 # ### Training save and reload
 
-# In[91]:
+# In[37]:
 
 
 def save_checkpoint(
@@ -7822,7 +7822,7 @@ test_checkpoint_resume_integration()
 
 # #### Metrics Logger
 
-# In[92]:
+# In[38]:
 
 
 class MetricsLogger:
@@ -7952,7 +7952,7 @@ class MetricsLogger:
 
 # #### Batch-based metrics
 
-# In[93]:
+# In[39]:
 
 
 def compute_batch_metrics_lightweight(
@@ -8416,7 +8416,7 @@ def compute_router_gradient_metrics(
 
 # #### Resource metrics
 
-# In[94]:
+# In[40]:
 
 
 def compute_moe_performance_metrics(
@@ -8834,7 +8834,7 @@ def compute_training_time_metrics(
 
 # #### Primary functional metrics
 
-# In[95]:
+# In[41]:
 
 
 """
@@ -9466,7 +9466,7 @@ def compute_ablation_metrics(
 
 # #### Comprehensive evaluation metrics
 
-# In[96]:
+# In[42]:
 
 
 def comprehensive_evaluation(
@@ -9748,7 +9748,7 @@ def comprehensive_evaluation(
 
 # #### Streaming Metrics for evaluation
 
-# In[97]:
+# In[43]:
 
 
 from dataclasses import dataclass, field
@@ -11634,7 +11634,7 @@ test_downstream_evaluator_with_real_data()
 
 # ### Save and load trained TE
 
-# In[98]:
+# In[44]:
 
 
 def generate_model_name(
@@ -11836,7 +11836,7 @@ def load_trained_model(
 
 # #### Legacy (deprecated soon)
 
-# In[29]:
+# In[45]:
 
 
 def compute_code_frequencies(
@@ -11911,7 +11911,7 @@ def compute_code_frequencies(
 
 # #### Experiment run utils
 
-# In[99]:
+# In[46]:
 
 
 def _calculate_model_dimensions(embedding_size: int, 
@@ -11975,7 +11975,7 @@ def _calculate_model_dimensions(embedding_size: int,
     }
 
 
-# In[100]:
+# In[47]:
 
 
 # ============================================================================
@@ -12552,7 +12552,7 @@ def _build_final_results(
 
 # #### Run experimentation
 
-# In[101]:
+# In[48]:
 
 
 def run_single_experiment(
@@ -13309,7 +13309,7 @@ test_run_single_experiment_with_downstream()
 
 # ### GPU usage tracking
 
-# In[102]:
+# In[49]:
 
 
 class GPUMemoryTracker:
@@ -13399,7 +13399,7 @@ class GPUMemoryTracker:
 
 # ### Memory management
 
-# In[103]:
+# In[53]:
 
 
 import torch
@@ -13698,7 +13698,7 @@ def cleanup_checkpoints_after_training(
 
 # ### Time and cost estimation
 
-# In[104]:
+# In[54]:
 
 
 import numpy as np
@@ -13881,7 +13881,7 @@ for n in [1, 2, 4]:
 
 # #### Test
 
-# In[28]:
+# In[52]:
 
 
 scenarios = [
@@ -15568,7 +15568,7 @@ results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-m
 
 # ### 3LOB training
 
-# In[112]:
+# In[55]:
 
 
 import google.auth
@@ -15986,13 +15986,17 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_10pct_sam
 input_data = client.query(input_sql2).to_dataframe() 
 
 
-# In[48]:
+# In[58]:
 
 
-input_data.shape
+input_sql3 = """
+select * from
+edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_40pct_6_8M_sample
+"""
+input_data = client.query(input_sql3).to_dataframe() 
 
 
-# In[49]:
+# In[51]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -16002,7 +16006,7 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[50]:
+# In[52]:
 
 
 ## Split training and validation dataset
@@ -16018,13 +16022,19 @@ train_df, val_df = train_test_split(
 )
 
 
-# In[51]:
+# In[57]:
+
+
+input_data
+
+
+# In[53]:
 
 
 df_unique.columns
 
 
-# In[52]:
+# In[54]:
 
 
 print(f"""1.5M d_cnt > 10 and 10% of the entire pop:
@@ -16045,6 +16055,22 @@ data_prepared_1p5M = prepare_data_once(
     val_data=val_df,
     device=device
 )
+
+
+# In[ ]:
+
+
+data_prepared_6p8M = prepare_data_once(
+    train_data=train_df,
+    val_data=val_df,
+    device=device
+)
+
+
+# In[ ]:
+
+
+
 
 
 # In[54]:
@@ -16468,7 +16494,7 @@ dense_baseline_results = run_single_experiment(
 #     - v3: this is a version trained with pos_weight_max = 200 to address learning plateau issues, with gradient analyssi done (Jan 21)
 #     - v4: this is a version trained only for getting v2 gradient analysis to be baseline. (Jan 24)
 
-# In[56]:
+# In[133]:
 
 
 # Get predefined experiment configs
@@ -16537,10 +16563,99 @@ exp2b_baseline_results = run_single_experiment(
 
 
 
+# ##### Exp2: Explore the use of 512 dimensions
+
+# - Going back to regular configurations 
+
+# In[134]:
+
+
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp2b_flash_learned_pool'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 512  # 256, 384, or 512
+# "exp_round5_1-5M_3lobs_pretrain_multi_gpu_test_v2"
+EXPERIMENT_ROUND = "exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim"
+
+
+# In[137]:
+
+
+optimize_config = OptimizeConfig(
+    # scheduler_type='onecycle',      # OneCycleLR for faster convergence
+    # onecycle_pct_start=0.30,
+    warmup_pct=0.15,
+    scheduler_type='linear',       # Linear warmup + plateau + decay
+    plateau_pct=0.45,             # 45% at peak (total 60% before decay)
+    min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
+    use_pos_weight=True,            # Enable weighted BCE
+    pos_weight_method='log_scaled',     # or 'log_scaled', 'ens', 'inverse'
+    pos_weight_max=200,   # Change from 50 to 35 to stablize the training; in v3 change to 200 to increase neg weights
+    use_focal_loss=False,
+    # focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
+    # focal_alpha=0.25,
+    # enable_gradient_tier_analysis=True,
+    # use_tier_aware_batching = True,   # Enable tier-aware batch sampler
+    # tier_medium_quota = 10,              # Min members with medium codes per batch
+    # tier_rare_quota = 20,                # Min members with rare codes per batch
+    # tier_tail_quota = 16               # Min members with tail codes per batch    
+)
+
+
+# In[138]:
+
+
+# cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
+exp2b_512dim_results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    prepared_data = data_prepared_1p5M,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    experiment_round=EXPERIMENT_ROUND,
+    embedding_size=EMBEDDING_SIZE,
+    log_dir='logs',
+    save_model=True,
+    optimize_config=optimize_config
+)
+
+
 # In[ ]:
 
 
-v
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
 
 
 # ##### Exp2: Resuming comprehensive evaluation and model saving (legacy for exp2b_flash_learned_pool_fragile_v1)
@@ -17288,6 +17403,84 @@ exp2b_asl_results = run_single_experiment(
     log_metrics_every=500,
     save_model=True,
     optimize_config=optimize_config_asl,
+)
+
+
+# ##### Exp2: ASL + Density-Based Tier-Aware Batching
+
+# In[127]:
+
+
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp2b_flash_learned_pool'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 256  # 256, 384, or 512
+# "exp_round5_1-5M_3lobs_pretrain_multi_gpu_test_v2"
+EXPERIMENT_ROUND = "exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
+
+
+# In[128]:
+
+
+optimize_config_dense_batch_asl = OptimizeConfig(
+    # scheduler_type='onecycle',      # OneCycleLR for faster convergence
+    # onecycle_pct_start=0.30,
+    warmup_pct=0.15,
+    scheduler_type='linear',       # Linear warmup + plateau + decay
+    plateau_pct=0.45,             # 45% at peak (total 60% before decay)
+    min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
+    
+    # ASL — the sole intervention
+    use_asl=True,
+    asl_gamma_pos=0.0,     # Preserve ALL positive gradients
+    asl_gamma_neg=4.0,     # Aggressively down-weight easy negatives
+    asl_clip=0.05,         # Zero out negatives with p < 0.05
+
+    # NO pos_weight (per focal loss analysis: don't stack reweighting mechanisms)
+    use_pos_weight=False,
+    use_focal_loss=False,
+
+    # DENSITY-AWARE TIER BATCHING — the sole new intervention
+    use_tier_aware_batching=True,
+    use_density_aware_batching=True,
+    tier_medium_quota=0,       # No medium quota (focus budget on tail/rare)
+    tier_rare_quota=0,         # 0 high-density rare members per batch
+    tier_tail_quota=20,        # 20 high-density tail members per batch
+    density_tail_percentile=80.0,    # Top 20% by tail density
+    density_rare_percentile=70.0,    # Top 30% by rare density
+    density_medium_percentile=70.0,  # Top 30% by medium density,
+
+    # Gradient diagnostic — MUST be ON to verify ASL is working
+    enable_gradient_tier_analysis=True,
+    
+)
+
+
+# In[129]:
+
+
+cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
+
+exp2b_dense_batch_asl_results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    prepared_data=data_prepared_1p5M,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    experiment_round=EXPERIMENT_ROUND,
+    embedding_size=EMBEDDING_SIZE,
+    log_dir='logs',
+    log_metrics_every=500,
+    save_model=True,
+    optimize_config=optimize_config_dense_batch_asl,
 )
 
 

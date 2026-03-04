@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[111]:
 
 
 import os
@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 
 
-# In[2]:
+# In[70]:
 
 
 import os
@@ -21,7 +21,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"  # preset only 2 to the embedding
 import torch
 
 
-# In[7]:
+# In[71]:
 
 
 # Import everything from the core module
@@ -272,7 +272,7 @@ df_exp_round5_results.T.to_excel("experiment_logs/exp_round5_3lobs_1-5M_1epoch_3
 
 # ### Model reconstruction
 
-# In[8]:
+# In[67]:
 
 
 def load_model_from_checkpoint(
@@ -430,7 +430,7 @@ def load_model_from_checkpoint(
     return model, config, moe_config, use_mixed_precision, model_type
 
 
-# In[9]:
+# In[68]:
 
 
 from torch.utils.data import Dataset
@@ -502,7 +502,7 @@ MODEL_PATHS
 
 # ### Generate embeddings
 
-# In[10]:
+# In[112]:
 
 
 import time
@@ -901,7 +901,7 @@ def _generate_embeddings_multi_gpu(
 
 # #### Save embeddings
 
-# In[11]:
+# In[113]:
 
 
 def save_embeddings(
@@ -964,7 +964,7 @@ def save_embeddings(
     return npz_path
 
 
-# In[12]:
+# In[114]:
 
 
 from google.cloud import bigquery
@@ -1106,7 +1106,7 @@ result_table = save_embeddings_to_bigquery(
 
 # ### Commercial IP downstream
 
-# In[16]:
+# In[122]:
 
 
 import google.auth
@@ -1146,7 +1146,7 @@ df_cm_sample = pd.concat([df_cm_b4_oct_sample,
 
 # #### Embedding generation
 
-# In[25]:
+# In[117]:
 
 
 MODEL_PATHS = {
@@ -1171,12 +1171,17 @@ MODEL_PATHS = {
     #     'exp6_auxiliary_free_v3/saved_models/'
     #     'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_20251231_152438_final.pt',
     
-    # Experiment 2b
+    # Experiment 2b: Flash Attention + Learned Pooling (no MoE) + focalloss_dense_sampler
+    # 'exp2b_flash_learned_pool': 
+    # 'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
+    # 'exp2b_flash_learned_pool_v5_asym_focalloss_dense_sampler/saved_models/'
+    # 'exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260226_014755_final.pt'
+    
+    # Experiment 2: exp round 7 with 512 dimensions; regular BCE with weights 200
     'exp2b_flash_learned_pool': 
-    'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
-    'exp2b_flash_learned_pool_v4_asym_focalloss/saved_models/'
-    'exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260221_120056_final.pt'
-
+    'logs/exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim/'
+    'exp2b_flash_learned_pool/saved_models/'
+    'exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim_exp2b_flash_learned_pool_bs128_ep1_d512_20260303_023717_final.pt'
     
     # Round 5; 
     # 'exp2b_flash_learned_pool': 
@@ -1186,42 +1191,42 @@ MODEL_PATHS = {
 }
 
 
-# In[26]:
+# In[124]:
 
 
 results = {}
 batch_size = 64
 # output_dir = "embedding_output/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2"
-output_dir = "embedding_output/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
+# output_dir = "embedding_output/exp_round6_3lobs_3-4M_pretrain_multi_gpu_test_v2"
 PROJECT_ID = "edp-prod-storage"
 DATASET_ID = "edp_ent_sdoheir_cns"
 LOB = 'commercial'
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 for exp_name, model_path in tqdm(MODEL_PATHS.items()):
-    cleanup_gpu_memory(verbose=False)
-    model, config, moe_config, use_mixed_precision, model_type = load_model_from_checkpoint(
-        model_path=MODEL_PATHS[exp_name],
-        device=device,
-        verbose=True
-    )
-    inference_start_time = time.time()
-    embeddings, individual_ids, index_dts = generate_embeddings(
-        model=model,
-        config=config,
-        data=df_cm_sample,
-        device=device,
-        id_column='individual_id',  # Commercial uses individual_id
-        lob_value=None,              # Commercial data already has lob column
-        desc_prefix='Commercial',
-        batch_size=batch_size,
-        use_mixed_precision=use_mixed_precision,
-        verbose=True,
-        multi_gpu=True,           
-        moe_config=moe_config, 
-    )
-    inference_duration = time.time() - inference_start_time
-    print(f"Inference duration for {exp_name}: {round(inference_duration/3600, 2):.2f} hr)")
+    # cleanup_gpu_memory(verbose=False)
+    # model, config, moe_config, use_mixed_precision, model_type = load_model_from_checkpoint(
+    #     model_path=MODEL_PATHS[exp_name],
+    #     device=device,
+    #     verbose=True
+    # )
+    # inference_start_time = time.time()
+    # embeddings, individual_ids, index_dts = generate_embeddings(
+    #     model=model,
+    #     config=config,
+    #     data=df_cm_sample,
+    #     device=device,
+    #     id_column='individual_id',  # Commercial uses individual_id
+    #     lob_value=None,              # Commercial data already has lob column
+    #     desc_prefix='Commercial',
+    #     batch_size=batch_size,
+    #     use_mixed_precision=use_mixed_precision,
+    #     verbose=True,
+    #     multi_gpu=True,           
+    #     moe_config=moe_config, 
+    # )
+    # inference_duration = time.time() - inference_start_time
+    # print(f"Inference duration for {exp_name}: {round(inference_duration/3600, 2):.2f} hr)")
     # exp_output_dir = os.path.join(output_dir, exp_name)
     # embeddings_path = save_embeddings(
     #     embeddings=embeddings,
@@ -1235,10 +1240,10 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
     #         'use_mixed_precision': use_mixed_precision,
     #     }
     # )
-    add_info = "_asym_focalloss"
+    add_info = "weight200"
     safe_exp_name = exp_name.replace('-', '_').replace('.', '_') + add_info
     
-    table_name = f"a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_{LOB}_all_sample_embedding"
+    table_name = f"a964286_te4exp_3lob_exp_round7_512emb_{safe_exp_name}_{LOB}_all_sample_embedding"
     bq_table_path = save_embeddings_to_bigquery(
         embeddings=embeddings,
         individual_ids=individual_ids,
@@ -1261,15 +1266,15 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
     }
 
     # Free model memory
-    del model
-    del embeddings
+    # del model
+    # del embeddings
     torch.cuda.empty_cache()
 
 
-# In[ ]:
+# In[125]:
 
 
-
+embeddings.shape
 
 
 # #### Replicate IP model pipeline
@@ -1301,7 +1306,7 @@ import time
 from dataclasses import dataclass
 
 
-# In[33]:
+# In[74]:
 
 
 # constant
@@ -1311,9 +1316,12 @@ DATASET_ID = "edp_ent_sdoheir_cns"
 
 # BigQuery embedding table pattern (matches save_embeddings_to_bigquery output)
 # Template: a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_commercial_all_sample_embedding
-def get_commercial_embedding_table(exp_name: str) -> str:
-    """Build the full BigQuery table ID for a commercial embedding experiment."""
-    safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
+def get_commercial_embedding_table(exp_name: str, add_info: str = '') -> str:
+    """Build the full BigQuery table ID for a commercial embedding experiment.
+    edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_commercial_all_sample_embedding
+    edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_densesampler_commercial_all_sample_embedding
+    """
+    safe_exp_name = exp_name.replace('-', '_').replace('.', '_') + add_info
     table_name = f"a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_commercial_all_sample_embedding"
     return f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
 
@@ -1322,7 +1330,8 @@ EXPERIMENT_NAMES = [
     # 'exp1_dense_baseline_opt_config',
     # 'exp1_dense_baseline_pure_legacy', 
     # 'exp2b_flash_learned_pool', 
-    'exp2b_flash_learned_pool_v4_asym_focalloss'
+    # 'exp2b_flash_learned_pool_v4_asym_focalloss'
+    'exp2b_flash_learned_pool_v5_asym_focalloss_dense_sampler'
     # 'exp2b_flash_learned_pool_v2', 
     # 'exp6_auxiliary_free_v3'
     
@@ -1374,7 +1383,7 @@ APPLY_DOWNSAMPLING = True  # Set to False to disable downsampling
 # 5	5: 6-12 months	100909	1.44	0.10750279955207313	-334	334
 
 
-# In[32]:
+# In[75]:
 
 
 # =============================================================================
@@ -1432,7 +1441,7 @@ def compute_split_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, f
     }
 
 
-# In[34]:
+# In[76]:
 
 
 # =============================================================================
@@ -1734,7 +1743,7 @@ def prepare_features(
 
 
 
-# In[35]:
+# In[77]:
 
 
 from dataclasses import dataclass
@@ -1898,7 +1907,7 @@ def prepare_evaluation_data(
     )
 
 
-# In[36]:
+# In[78]:
 
 
 # =============================================================================
@@ -1996,7 +2005,7 @@ def evaluate_model_on_splits(
     return results
 
 
-# In[37]:
+# In[79]:
 
 
 def evaluate_with_prepared_data(
@@ -2129,7 +2138,7 @@ def evaluate_all_experiments(
     return pd.DataFrame(results)
 
 
-# In[38]:
+# In[80]:
 
 
 lr_model = LogisticRegression(
@@ -2173,23 +2182,25 @@ catboost_model_legacy = CatBoostClassifier(
 )
 
 
-# In[39]:
+# In[81]:
 
 
+# embedding_path = 'edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_commercial_all_sample_embedding'
+embedding_path = 'edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_densesampler_commercial_all_sample_embedding'
 experiment_configs = [
     # These 3 share (exp1 path, embedding_only) - data prepared ONCE
-    # {
-    #     'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline_pure_legacy",
-    #     'ml_model_object': catboost_model,
-    #     'exp_name': "exp1_legacy_catboost_emb_only",
-    #     'feature_set': 'embedding_only',
-    #     'apply_scaling': False
-    # },
+    {
+        'embedding_location_path': f"{EMBEDDING_BASE}/exp1_dense_baseline_pure_legacy",
+        'ml_model_object': catboost_model,
+        'exp_name': "exp1_legacy_catboost_emb_only",
+        'feature_set': 'embedding_only',
+        'apply_scaling': False
+    },
     {
         # 'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool", # exp_round6
-        'embedding_location_path': get_commercial_embedding_table('exp2b_flash_learned_pool_v4_asym_focalloss'), #edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_commercial_all_sample_embedding
+        'embedding_location_path': embedding_path,
         'ml_model_object': catboost_model,
-        'exp_name': "exp_round6_exp2b_v4_asym_focalloss_catboost_emb_only",
+        'exp_name': "exp_round6_exp2b_v4_asym_focalloss_densesampler_catboost_emb_only",
         'feature_set': 'embedding_only',
         'apply_scaling': False
     },
@@ -2224,10 +2235,10 @@ experiment_configs = [
     # },
     {
         # 'embedding_location_path': f"{EMBEDDING_BASE}/exp2b_flash_learned_pool",
-        'embedding_location_path': get_commercial_embedding_table('exp2b_flash_learned_pool_v4_asym_focalloss'), #edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_commercial_all_sample_embedding
+        'embedding_location_path': embedding_path,
 
         'ml_model_object': catboost_model,
-        'exp_name': "exp_round6_exp2b_v4_asym_focalloss_catboost_hybrid",
+        'exp_name': "exp_round6_exp2b_v4_asym_focalloss_densesampler_catboost_hybrid",
         'feature_set': 'hybrid',
         'apply_scaling': False
     },
@@ -2258,7 +2269,7 @@ experiment_configs = [
 
 # ##### import feature tables
 
-# In[41]:
+# In[82]:
 
 
 import google.auth
@@ -2272,7 +2283,7 @@ from tqdm.notebook import tqdm
 client = bigquery.Client()
 
 
-# In[40]:
+# In[83]:
 
 
 feature_sql = f"""
@@ -2281,19 +2292,19 @@ FROM `{FEATURES_TABLE}`
 """
 
 
-# In[ ]:
+# In[42]:
 
 
 df_ip_features = client.query(feature_sql).to_dataframe()
 
 
-# In[ ]:
+# In[84]:
 
 
 df_ip_features['ip6'].value_counts()
 
 
-# In[ ]:
+# In[85]:
 
 
 df_ip_features['index_dt'] = pd.to_datetime(df_ip_features['index_dt']).dt.strftime('%Y-%m-%d')
@@ -2302,10 +2313,10 @@ df_ip_features['index_dt'] = pd.to_datetime(df_ip_features['index_dt']).dt.strft
 
 # #### Evaluate
 
-# In[115]:
+# In[86]:
 
 
-results_df_exp_round6 = evaluate_all_experiments(experiment_configs, df_ip_features, downsample_ratio=10.0)
+results_df_exp_round5 = evaluate_all_experiments(experiment_configs, df_ip_features, downsample_ratio=10.0)
 
 
 # In[168]:
@@ -2320,48 +2331,33 @@ results_df.T
 results_df_fulltabular.T
 
 
-# In[5]:
+# In[58]:
 
 
-import pandas as pd
-import numpy as np
-
-# Set a seed for reproducibility (optional)
-np.random.seed(42)
-
-# Create a DataFrame with 100 rows and 4 columns ('A', 'B', 'C', 'D')
-# Integers will be between 0 (inclusive) and 100 (exclusive)
-df = pd.DataFrame(
-    np.random.randint(0, 100, size=(100, 4)),
-    columns=list('ABCD')
-)
+results_df_exp_round5.T.to_excel("experiment_logs/exp_round5_3lob_1-5M_1epoch_128batch_dim256_commercial_ip_downstream_eval_asym_focalloss.xlsx")
 
 
-# In[6]:
+# In[88]:
 
 
-df
+results_df_exp_round5.T.to_excel("experiment_logs/exp_round5_3lob_1-5M_1epoch_128batch_dim256_commercial_ip_downstream_eval_asym_focalloss_densesampler.xlsx")
 
 
-# In[10]:
+# In[106]:
 
 
-# Initialize BigQuery client
-# client = bigquery.Client(project=project_id)
+df_commercial_downstream = pd.read_excel("experiment_logs/commercial_ip_1-5M_30pctsample_downstream.xlsx")
 
-# Configure job
-job_config = bigquery.LoadJobConfig(
-    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
-)
-full_table_id = "edp-prod-storage.edp_ent_sdoheir_cns.a964286_test_load_table_to_bigquery"
-# Load data
-job = client.load_table_from_dataframe(df, full_table_id, job_config=job_config)
-job.result()  # Wait for completion
+
+# In[109]:
+
+
+df_commercial_downstream.columns
 
 
 # ### Medicare embedding generation
 
-# In[126]:
+# In[89]:
 
 
 import google.auth
@@ -2375,7 +2371,7 @@ from tqdm.notebook import tqdm
 client = bigquery.Client()
 
 
-# In[128]:
+# In[90]:
 
 
 # import members not in the trainingset of the transformer
@@ -2386,13 +2382,13 @@ select * from edp-prod-storage.edp_ent_sdoheir_cns.a834793_Medicare_holdout_memb
 df_me = client.query(medicare_sql_code).to_dataframe()
 
 
-# In[151]:
+# In[91]:
 
 
 df_me['lob'] = 'Medicare'
 
 
-# In[152]:
+# In[92]:
 
 
 # sample before and after 2023-10-16 (post part will be used for oot validation)
@@ -2406,42 +2402,49 @@ df_me_sample = pd.concat([df_me_b4_oct_sample,
                          df_me_after_oct_sample])
 
 
-# In[156]:
+# In[93]:
 
 
 df_me_sample.head()
 
 
-# In[ ]:
+# In[94]:
 
 
 del df_me, df_me_b4_oct, df_me_after_oct, df_me_b4_oct_sample, df_me_after_oct_sample
 
 
-# In[154]:
+# In[103]:
 
 
 MODEL_PATHS = {
-    # Experiment 1: Dense Baseline (no Flash Attention, no MoE)
-    'exp1_dense_baseline_pure_legacy': 
-        'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp1_dense_baseline_pure_legacy/saved_models/'
-        'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp1_dense_baseline_bs128_ep1_d256_20251230_055716_final.pt', 
+#     # Experiment 1: Dense Baseline (no Flash Attention, no MoE)
+#     'exp1_dense_baseline_pure_legacy': 
+#         'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp1_dense_baseline_pure_legacy/saved_models/'
+#         'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp1_dense_baseline_bs128_ep1_d256_20251230_055716_final.pt', 
     
-    # Experiment 1b: Dense Baseline (same opt config as 2b and 6)
-    'exp1_dense_baseline_opt_config': 
-        'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp1_dense_baseline_opt_config/saved_models/'
-        'exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp1_dense_baseline_bs64_ep1_d256_20260108_183616_final.pt',
+#     # Experiment 1b: Dense Baseline (same opt config as 2b and 6)
+#     'exp1_dense_baseline_opt_config': 
+#         'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp1_dense_baseline_opt_config/saved_models/'
+#         'exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp1_dense_baseline_bs64_ep1_d256_20260108_183616_final.pt',
 
-    # Experiment 2b: Flash Attention + Learned Pooling (no MoE)
-    'exp2b_flash_learned_pool_v2': 
-        'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool_v2/saved_models/'
-        'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20251230_114137_final.pt',
+#     # Experiment 2b: Flash Attention + Learned Pooling (no MoE)
+#     'exp2b_flash_learned_pool_v2': 
+#         'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/exp2b_flash_learned_pool_v2/saved_models/'
+#         'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20251230_114137_final.pt',
+
     
-    # Experiment 6: Flash + MoE with DeepSeek auxiliary-free balancing
-    'exp6_auxiliary_free_v3': 
-        'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
-        'exp6_auxiliary_free_v3/saved_models/'
-        'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_20251231_152438_final.pt',
+    # Experiment 2b: Flash Attention + Learned Pooling (no MoE) + (focalloss / focalloss_dense_sampler)
+    'exp2b_flash_learned_pool': 
+    'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
+    'exp2b_flash_learned_pool_v4_asym_focalloss/saved_models/'
+    'exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2_exp2b_flash_learned_pool_bs128_ep1_d256_20260221_120056_final.pt'
+    
+#     # Experiment 6: Flash + MoE with DeepSeek auxiliary-free balancing
+#     'exp6_auxiliary_free_v3': 
+#         'logs/exp_round5_3lobs_1-5M_pretrain_multi_gpu_test_v2/'
+#         'exp6_auxiliary_free_v3/saved_models/'
+#         'exp_round5_3lobs_pretrain_multi_gpu_test_v2_exp6_auxiliary_free_bs128_ep1_d256_20251231_152438_final.pt',
     
     # Round 6; 
     # 'exp2b_flash_learned_pool': 
@@ -2451,7 +2454,7 @@ MODEL_PATHS = {
 }
 
 
-# In[ ]:
+# In[104]:
 
 
 import time
@@ -2502,7 +2505,8 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
     #         'use_mixed_precision': use_mixed_precision,
     #     }
     # )
-    safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
+    add_info = "_asym_focalloss"
+    safe_exp_name = exp_name.replace('-', '_').replace('.', '_') + add_info
     table_name = f"a964286_te4exp_3lob_exp_round5_v2_{safe_exp_name}_{LOB}_all_sample_embedding"
     bq_table_path = save_embeddings_to_bigquery(
         embeddings=embeddings,
@@ -2516,7 +2520,7 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
         if_exists="replace"
     )
     results[exp_name] = {
-        'embeddings_path': embeddings_path,
+        'embeddings_path': bq_table_path,
         'embedding_shape': embeddings.shape,
         'model_type': model_type,
         'model_path': model_path,
@@ -2530,10 +2534,11 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
     torch.cuda.empty_cache()
 
 
-# In[ ]:
+# In[110]:
 
 
-
+import sklearn
+print("The scikit-learn version is", sklearn.__version__)
 
 
 # ### Medicaid embedding generation
