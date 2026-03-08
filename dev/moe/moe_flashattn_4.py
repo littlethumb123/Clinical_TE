@@ -16000,7 +16000,7 @@ results_df_3.to_excel("experiment_logs/exp3_320k_1epoch_32batch_dim512_kaiming-m
 
 # ### 3LOB training
 
-# In[55]:
+# In[97]:
 
 
 import google.auth
@@ -16428,7 +16428,17 @@ edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_40pct_6_8
 input_data = client.query(input_sql3).to_dataframe() 
 
 
-# In[59]:
+# In[98]:
+
+
+input_sql4 = """
+select * from
+edp-prod-storage.edp_ent_sdoheir_cns.a834793_Combined_All_LOB_o3_train_ending
+"""
+input_data = client.query(input_sql4).to_dataframe() 
+
+
+# In[99]:
 
 
 # Clean up data, eliminate members with more than 1 record
@@ -16438,12 +16448,18 @@ df_unique = input_data[input_data['individual_id'].isin(single_record_members)].
 del input_data
 
 
-# In[82]:
+# In[100]:
+
+
+df_unique.shape
+
+
+# In[101]:
 
 
 ## Split training and validation dataset
 # Set your desired train/validation split ratio
-TRAIN_RATIO = 0.9  # 80% train, 10% validation
+TRAIN_RATIO = 0.99  # 80% train, 10% validation
 RANDOM_SEED = 42   # For reproducibility
 # Stratified split by LOB
 train_df, val_df = train_test_split(
@@ -16462,7 +16478,7 @@ gc.collect()
 df_unique.columns
 
 
-# In[65]:
+# In[102]:
 
 
 print(f"""{len(df_unique)} d_cnt > 5 and 40% of the entire pop:
@@ -16497,6 +16513,18 @@ data_prepared_6p8M = prepare_data_once(
 gc.collect()
 
 
+# In[103]:
+
+
+data_prepared_11M = prepare_data_once(
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    use_lazy=True
+)
+gc.collect()
+
+
 # In[ ]:
 
 
@@ -16519,24 +16547,6 @@ data_prepared_1p5M_mini = prepare_data_once(
 
 
 del data_prepared_1p5M 
-
-
-# In[72]:
-
-
-# Prepared data for experimentation
-# del data_prepared_mini
-data_prepared = prepare_data_once(
-    train_data=train_df,
-    val_data=val_df,
-    device=device
-)
-
-
-# In[ ]:
-
-
-
 
 
 # ##### frequency tier prevalanece
@@ -16975,7 +16985,7 @@ optimize_config = OptimizeConfig(
 # Remember to change batchsize back to 32 for flashattention 
 
 
-# In[ ]:
+# In[84]:
 
 
 # cleanup_gpu_memory_hard()
@@ -17008,7 +17018,7 @@ exp2b_baseline_results_6p8M = run_single_experiment(
 
 # - Going back to regular configurations 
 
-# In[134]:
+# In[85]:
 
 
 # Get predefined experiment configs
@@ -17069,28 +17079,73 @@ exp2b_512dim_results = run_single_experiment(
 )
 
 
-# In[ ]:
+# ##### Exp2 512 + 6.2M members
+
+# In[91]:
 
 
+# Get predefined experiment configs
+all_configs = get_experiment_configs()
+# Choose experiment: 'exp2b_flash_learned_pool' is a good starting point
+EXP_NAME = 'exp2b_flash_learned_pool'
+moe_config, use_learnt_att_pool = all_configs[EXP_NAME]
+# Training parameters
+EPOCHS = 1  # Start small for testing
+EMBEDDING_SIZE = 512  # 256, 384, or 512
+# "exp_round5_1-5M_3lobs_pretrain_multi_gpu_test_v2"
+EXPERIMENT_ROUND = "exp_round8_3lobs_6-8M_pretrain_multi_gpu_test_v3_512dim"
 
 
-
-# In[ ]:
-
+# In[92]:
 
 
+optimize_config = OptimizeConfig(
+    # scheduler_type='onecycle',      # OneCycleLR for faster convergence
+    # onecycle_pct_start=0.30,
+    warmup_pct=0.15,
+    scheduler_type='linear',       # Linear warmup + plateau + decay
+    plateau_pct=0.45,             # 45% at peak (total 60% before decay)
+    min_lr_ratio=0.2,             # End at 20% of peak (not 1%)
+    use_pos_weight=True,            # Enable weighted BCE
+    pos_weight_method='log_scaled',     # or 'log_scaled', 'ens', 'inverse'
+    pos_weight_max=200,   # Change from 50 to 35 to stablize the training; in v3 change to 200 to increase neg weights
+    use_focal_loss=False,
+    # focal_gamma=2.5,                # 2.0-3.0 for extreme imbalance
+    # focal_alpha=0.25,
+    # enable_gradient_tier_analysis=True,
+    # use_tier_aware_batching = True,   # Enable tier-aware batch sampler
+    # tier_medium_quota = 10,              # Min members with medium codes per batch
+    # tier_rare_quota = 20,                # Min members with rare codes per batch
+    # tier_tail_quota = 16               # Min members with tail codes per batch    
+)
 
 
-# In[ ]:
+# In[93]:
 
 
+# cleanup_gpu_memory_hard()
+torch.cuda.empty_cache()
+exp2b_512dim_results = run_single_experiment(
+    exp_name=EXP_NAME,
+    moe_config=moe_config,
+    use_learnt_att_pool=use_learnt_att_pool,
+    prepared_data = data_prepared_6p8M,
+    train_data=train_df,
+    val_data=val_df,
+    device=device,
+    epochs=EPOCHS,
+    experiment_round=EXPERIMENT_ROUND,
+    embedding_size=EMBEDDING_SIZE,
+    log_dir='logs',
+    save_model=True,
+    optimize_config=optimize_config
+)
 
 
-
-# In[ ]:
-
+# In[90]:
 
 
+train_df.shape
 
 
 # In[ ]:

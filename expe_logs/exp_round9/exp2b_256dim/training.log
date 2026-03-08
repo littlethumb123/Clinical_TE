@@ -1,0 +1,216 @@
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - 
+================================================================================
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - EXPERIMENT: exp2b_flash_learned_pool
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - Model: Flash Attention Transformer (FP16)
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -   d_model=256, nhid=704, nhead=8
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -   Daily Encoder: Learned Attention Pooling
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - Total parameters: 25,325,209
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - ✅ Using pre-prepared data
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - Using BCEWithLogitsLoss
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -   With pos_weight method: log_scaled
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -  Enabling DataParallel with 4 GPUs
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    Per-GPU batch size: 32
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    Effective batch size: 128
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    Base learning rate: 0.0002
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    Scaled learning rate: 8.00e-04
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    DataParallel output_device: 0
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO -    ✅ Using DataParallelWrapper for integrated loss
+2026-03-08 08:04:20 - exp2b_flash_learned_pool - INFO - Bucketing is ENABLED via BatchSampler.
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Train loader: 12,335 batches
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Val loader: 1,371 batches
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Using DataLoader with 4 workers.
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Optimizer: AdamW: lr=8.00e-04, weight_decay=0.01
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Scheduler: LinearPlateau: warmup=1850 steps (15%), plateau until 60%, decay to 1.60e-04
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Optimizer: AdamW: lr=8.00e-04, weight_decay=0.01
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Scheduler: LinearPlateau: warmup=1850 steps (15%), plateau until 60%, decay to 1.60e-04
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - 📊 Gradient Tier Analysis ENABLED
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - Training for 1 epochs...
+2026-03-08 08:04:23 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 1/1 ---
+2026-03-08 08:04:33 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.7954 | R@10: 0.003 | R@20: 0.007 | μR@10: 0.001 | P@10: 0.000 | NDCG@20: 0.001 | PosBrier: 0.3299
+2026-03-08 08:04:33 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 17.9% | Tail: 18.4%
+2026-03-08 08:10:00 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0161 | R@10: 0.539 | R@20: 0.595 | μR@10: 0.243 | P@10: 0.118 | NDCG@20: 0.180 | PosBrier: 0.8893
+2026-03-08 08:10:00 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 16.9% | Tail: 18.3%
+2026-03-08 08:15:28 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0053 | R@10: 0.479 | R@20: 0.598 | μR@10: 0.217 | P@10: 0.093 | NDCG@20: 0.172 | PosBrier: 0.9135
+2026-03-08 08:15:28 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 22.8% | Tail: 17.0%
+2026-03-08 08:20:53 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0045 | R@10: 0.605 | R@20: 0.705 | μR@10: 0.254 | P@10: 0.123 | NDCG@20: 0.224 | PosBrier: 0.8710
+2026-03-08 08:20:53 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 43.7% | Tail: 12.2%
+2026-03-08 08:26:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0041 | R@10: 0.654 | R@20: 0.776 | μR@10: 0.294 | P@10: 0.141 | NDCG@20: 0.271 | PosBrier: 0.8459
+2026-03-08 08:26:20 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 58.3% | Tail: 7.6%
+2026-03-08 08:31:48 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.701 | R@20: 0.793 | μR@10: 0.344 | P@10: 0.162 | NDCG@20: 0.309 | PosBrier: 0.8228
+2026-03-08 08:31:48 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 70.3% | Tail: 4.9%
+2026-03-08 08:37:16 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0038 | R@10: 0.684 | R@20: 0.770 | μR@10: 0.341 | P@10: 0.160 | NDCG@20: 0.303 | PosBrier: 0.8022
+2026-03-08 08:37:16 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 73.9% | Tail: 3.4%
+2026-03-08 08:42:47 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.755 | R@20: 0.835 | μR@10: 0.380 | P@10: 0.179 | NDCG@20: 0.351 | PosBrier: 0.7919
+2026-03-08 08:42:47 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 81.5% | Tail: 2.2%
+2026-03-08 08:48:15 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0036 | R@10: 0.747 | R@20: 0.836 | μR@10: 0.376 | P@10: 0.180 | NDCG@20: 0.346 | PosBrier: 0.7706
+2026-03-08 08:48:15 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 83.9% | Tail: 1.7%
+2026-03-08 08:53:46 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.736 | R@20: 0.823 | μR@10: 0.403 | P@10: 0.183 | NDCG@20: 0.354 | PosBrier: 0.7577
+2026-03-08 08:53:46 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 82.0% | Tail: 1.7%
+2026-03-08 08:59:19 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.756 | R@20: 0.837 | μR@10: 0.417 | P@10: 0.195 | NDCG@20: 0.377 | PosBrier: 0.7431
+2026-03-08 08:59:19 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 86.1% | Tail: 1.1%
+2026-03-08 09:04:49 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.800 | R@20: 0.869 | μR@10: 0.444 | P@10: 0.184 | NDCG@20: 0.404 | PosBrier: 0.7348
+2026-03-08 09:04:49 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 86.4% | Tail: 0.8%
+2026-03-08 09:10:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.803 | R@20: 0.873 | μR@10: 0.410 | P@10: 0.192 | NDCG@20: 0.393 | PosBrier: 0.7394
+2026-03-08 09:10:20 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 87.1% | Tail: 0.6%
+2026-03-08 09:15:50 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.804 | R@20: 0.873 | μR@10: 0.418 | P@10: 0.198 | NDCG@20: 0.402 | PosBrier: 0.7309
+2026-03-08 09:15:50 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 87.9% | Tail: 0.5%
+2026-03-08 09:21:20 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.811 | R@20: 0.871 | μR@10: 0.416 | P@10: 0.194 | NDCG@20: 0.399 | PosBrier: 0.7327
+2026-03-08 09:21:20 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 86.2% | Tail: 0.3%
+2026-03-08 09:26:54 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.778 | R@20: 0.869 | μR@10: 0.428 | P@10: 0.190 | NDCG@20: 0.392 | PosBrier: 0.7359
+2026-03-08 09:26:54 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 82.5% | Tail: 0.3%
+2026-03-08 09:32:25 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0033 | R@10: 0.847 | R@20: 0.898 | μR@10: 0.432 | P@10: 0.210 | NDCG@20: 0.430 | PosBrier: 0.7157
+2026-03-08 09:32:25 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 85.9% | Tail: 0.3%
+2026-03-08 09:38:02 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.799 | R@20: 0.881 | μR@10: 0.467 | P@10: 0.202 | NDCG@20: 0.414 | PosBrier: 0.7076
+2026-03-08 09:38:02 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 88.0% | Tail: 0.2%
+2026-03-08 09:43:41 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.817 | R@20: 0.880 | μR@10: 0.454 | P@10: 0.210 | NDCG@20: 0.424 | PosBrier: 0.7047
+2026-03-08 09:43:41 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 89.2% | Tail: 0.2%
+2026-03-08 09:49:19 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0031 | R@10: 0.787 | R@20: 0.867 | μR@10: 0.454 | P@10: 0.206 | NDCG@20: 0.406 | PosBrier: 0.7074
+2026-03-08 09:49:19 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 85.0% | Tail: 0.2%
+2026-03-08 09:54:57 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0034 | R@10: 0.822 | R@20: 0.877 | μR@10: 0.425 | P@10: 0.212 | NDCG@20: 0.412 | PosBrier: 0.7140
+2026-03-08 09:54:57 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 86.4% | Tail: 0.2%
+2026-03-08 10:00:33 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.835 | R@20: 0.892 | μR@10: 0.456 | P@10: 0.195 | NDCG@20: 0.428 | PosBrier: 0.7047
+2026-03-08 10:00:33 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 87.5% | Tail: 0.1%
+2026-03-08 10:06:14 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0032 | R@10: 0.830 | R@20: 0.894 | μR@10: 0.443 | P@10: 0.210 | NDCG@20: 0.420 | PosBrier: 0.7095
+2026-03-08 10:06:14 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 87.5% | Tail: 0.1%
+2026-03-08 10:11:53 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.843 | R@20: 0.895 | μR@10: 0.472 | P@10: 0.213 | NDCG@20: 0.440 | PosBrier: 0.6857
+2026-03-08 10:11:53 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 87.2% | Tail: 0.1%
+2026-03-08 10:17:35 - exp2b_flash_learned_pool - DEBUG -     Loss: 0.0030 | R@10: 0.831 | R@20: 0.893 | μR@10: 0.468 | P@10: 0.214 | NDCG@20: 0.438 | PosBrier: 0.6813
+2026-03-08 10:17:35 - exp2b_flash_learned_pool - DEBUG -     [GradTier] Common: 86.1% | Tail: 0.1%
+2026-03-08 10:21:20 - exp2b_flash_learned_pool - INFO - 
+  📊 GRADIENT TIER ANALYSIS (Epoch 1)
+  ────────────────────────────────────────────────────────────
+  Tier            Codes    Gradient Fraction
+  ────────────────────────────────────────────────────────────
+  Common           1141                74.0%
+  Medium           1711                12.4%
+  Rare             1705                 5.8%
+  Tail             1148                 3.7%
+  Zero-freq         592                 4.1%
+  ────────────────────────────────────────────────────────────
+  TOTAL            6297               100.0%
+  ⚠️  Among POSITIVE codes: Common receives 77.2% of positive-tier gradient
+       Tail receives only 3.9% - gradient starvation likely
+
+2026-03-08 10:21:20 - exp2b_flash_learned_pool - INFO -   Using batch-averaged training metrics (no re-evaluation)
+2026-03-08 10:24:51 - exp2b_flash_learned_pool - INFO -     Val loss: 0.0031, R@10: 0.825
+2026-03-08 10:24:51 - exp2b_flash_learned_pool - INFO -   Final epoch: Running comprehensive evaluation...
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 1 Summary ---
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO -   Train loss: 0.0130 → 0.0030
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO -   Val loss: 0.0031, Recall@10: 0.813, μRecall@10: 0.457, NDCG@20: 0.425
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO - 
+================================================================================
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO - ENTERING STAGE 2: DECOUPLED DECODER RE-TRAINING
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-03-08 10:49:14 - exp2b_flash_learned_pool - INFO -   Running pre-Stage2 logit diagnostics...
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO -     PRE-S2 common_pos_logit: -2.41, margin: 6.72
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO -     PRE-S2 medium_pos_logit: -7.33, margin: 5.09
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO -     PRE-S2 rare_pos_logit: -11.62, margin: 2.97
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO -     PRE-S2 tail_pos_logit: -13.49, margin: 2.01
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO - STAGE 2: DECOUPLED DECODER RE-TRAINING
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO -   Frozen parameters: 23,706,880
+2026-03-08 10:56:19 - exp2b_flash_learned_pool - INFO -   Trainable parameters (decoder only): 1,618,329
+2026-03-08 11:46:33 - exp2b_flash_learned_pool - INFO -   Stage 2 DataLoader: 1068 batches/epoch
+2026-03-08 11:46:33 - exp2b_flash_learned_pool - INFO -   Optimizer: sgd (lr=5e-05)
+2026-03-08 11:46:33 - exp2b_flash_learned_pool - INFO -   Scheduler: cosine with 320 warmup steps, 3204 total
+2026-03-08 11:46:33 - exp2b_flash_learned_pool - INFO - 
+  --- Stage 2 Epoch 1/3 ---
+2026-03-08 11:46:37 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:46:37 - exp2b_flash_learned_pool - INFO -     Batch 0/1068 | Loss: 0.5147 | LR: 5.14e-06
+2026-03-08 11:47:42 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:47:42 - exp2b_flash_learned_pool - INFO -     Batch 100/1068 | Loss: 0.5179 | LR: 1.92e-05
+2026-03-08 11:48:47 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:48:47 - exp2b_flash_learned_pool - INFO -     Batch 200/1068 | Loss: 0.5162 | LR: 3.33e-05
+2026-03-08 11:49:51 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.7%
+2026-03-08 11:49:51 - exp2b_flash_learned_pool - INFO -     Batch 300/1068 | Loss: 0.5166 | LR: 4.73e-05
+2026-03-08 11:50:55 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:50:55 - exp2b_flash_learned_pool - INFO -     Batch 400/1068 | Loss: 0.5139 | LR: 4.99e-05
+2026-03-08 11:51:59 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:51:59 - exp2b_flash_learned_pool - INFO -     Batch 500/1068 | Loss: 0.5149 | LR: 4.95e-05
+2026-03-08 11:53:02 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:53:02 - exp2b_flash_learned_pool - INFO -     Batch 600/1068 | Loss: 0.5124 | LR: 4.88e-05
+2026-03-08 11:54:06 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:54:06 - exp2b_flash_learned_pool - INFO -     Batch 700/1068 | Loss: 0.5170 | LR: 4.79e-05
+2026-03-08 11:55:10 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:55:10 - exp2b_flash_learned_pool - INFO -     Batch 800/1068 | Loss: 0.5149 | LR: 4.66e-05
+2026-03-08 11:56:14 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.7%
+2026-03-08 11:56:14 - exp2b_flash_learned_pool - INFO -     Batch 900/1068 | Loss: 0.5154 | LR: 4.52e-05
+2026-03-08 11:57:19 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.7%
+2026-03-08 11:57:19 - exp2b_flash_learned_pool - INFO -     Batch 1000/1068 | Loss: 0.5148 | LR: 4.34e-05
+2026-03-08 11:58:01 - exp2b_flash_learned_pool - INFO -   Stage 2 Epoch 1 avg loss: 0.5148
+2026-03-08 11:58:01 - exp2b_flash_learned_pool - INFO - 
+  --- Stage 2 Epoch 2/3 ---
+2026-03-08 11:58:03 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:58:03 - exp2b_flash_learned_pool - INFO -     Batch 0/1068 | Loss: 0.5128 | LR: 4.21e-05
+2026-03-08 11:59:06 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 11:59:06 - exp2b_flash_learned_pool - INFO -     Batch 100/1068 | Loss: 0.5125 | LR: 4.00e-05
+2026-03-08 12:00:10 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:00:10 - exp2b_flash_learned_pool - INFO -     Batch 200/1068 | Loss: 0.5118 | LR: 3.78e-05
+2026-03-08 12:01:15 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.5%
+2026-03-08 12:01:15 - exp2b_flash_learned_pool - INFO -     Batch 300/1068 | Loss: 0.5091 | LR: 3.54e-05
+2026-03-08 12:02:19 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:02:19 - exp2b_flash_learned_pool - INFO -     Batch 400/1068 | Loss: 0.5113 | LR: 3.28e-05
+2026-03-08 12:03:22 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:03:22 - exp2b_flash_learned_pool - INFO -     Batch 500/1068 | Loss: 0.5102 | LR: 3.02e-05
+2026-03-08 12:04:25 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:04:25 - exp2b_flash_learned_pool - INFO -     Batch 600/1068 | Loss: 0.5103 | LR: 2.75e-05
+2026-03-08 12:05:28 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:05:28 - exp2b_flash_learned_pool - INFO -     Batch 700/1068 | Loss: 0.5064 | LR: 2.48e-05
+2026-03-08 12:06:31 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:06:31 - exp2b_flash_learned_pool - INFO -     Batch 800/1068 | Loss: 0.5081 | LR: 2.21e-05
+2026-03-08 12:07:34 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:07:34 - exp2b_flash_learned_pool - INFO -     Batch 900/1068 | Loss: 0.5093 | LR: 1.94e-05
+2026-03-08 12:08:36 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:08:36 - exp2b_flash_learned_pool - INFO -     Batch 1000/1068 | Loss: 0.5109 | LR: 1.68e-05
+2026-03-08 12:09:18 - exp2b_flash_learned_pool - INFO -   Stage 2 Epoch 2 avg loss: 0.5108
+2026-03-08 12:09:18 - exp2b_flash_learned_pool - INFO - 
+  --- Stage 2 Epoch 3/3 ---
+2026-03-08 12:09:22 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:09:22 - exp2b_flash_learned_pool - INFO -     Batch 0/1068 | Loss: 0.5101 | LR: 1.51e-05
+2026-03-08 12:10:24 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:10:24 - exp2b_flash_learned_pool - INFO -     Batch 100/1068 | Loss: 0.5088 | LR: 1.26e-05
+2026-03-08 12:11:28 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:11:28 - exp2b_flash_learned_pool - INFO -     Batch 200/1068 | Loss: 0.5071 | LR: 1.03e-05
+2026-03-08 12:12:34 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:12:34 - exp2b_flash_learned_pool - INFO -     Batch 300/1068 | Loss: 0.5080 | LR: 8.23e-06
+2026-03-08 12:13:39 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:13:39 - exp2b_flash_learned_pool - INFO -     Batch 400/1068 | Loss: 0.5078 | LR: 6.31e-06
+2026-03-08 12:14:45 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:14:45 - exp2b_flash_learned_pool - INFO -     Batch 500/1068 | Loss: 0.5099 | LR: 4.62e-06
+2026-03-08 12:15:48 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:15:48 - exp2b_flash_learned_pool - INFO -     Batch 600/1068 | Loss: 0.5087 | LR: 3.17e-06
+2026-03-08 12:16:51 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:16:51 - exp2b_flash_learned_pool - INFO -     Batch 700/1068 | Loss: 0.5065 | LR: 1.97e-06
+2026-03-08 12:17:57 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:17:57 - exp2b_flash_learned_pool - INFO -     Batch 800/1068 | Loss: 0.5057 | LR: 1.05e-06
+2026-03-08 12:19:02 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:19:02 - exp2b_flash_learned_pool - INFO -     Batch 900/1068 | Loss: 0.5111 | LR: 4.13e-07
+2026-03-08 12:20:06 - exp2b_flash_learned_pool - INFO -     [GradTier] Common: 0.1% | Tail: 40.6%
+2026-03-08 12:20:06 - exp2b_flash_learned_pool - INFO -     Batch 1000/1068 | Loss: 0.5078 | LR: 6.66e-08
+2026-03-08 12:20:49 - exp2b_flash_learned_pool - INFO -   Stage 2 Epoch 3 avg loss: 0.5092
+2026-03-08 12:20:50 - exp2b_flash_learned_pool - INFO -   Running post-Stage2 logit diagnostics...
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO -     POST-S2 common_pos_logit: -2.41, margin: 6.73
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO -     POST-S2 medium_pos_logit: -7.33, margin: 5.10
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO -     POST-S2 rare_pos_logit: 0.25, margin: 0.32
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO -     POST-S2 tail_pos_logit: -0.30, margin: -0.28
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - Stage 2 complete: final_loss=0.5092
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - 
+Training completed in 15868.6s
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO -   Using cached comprehensive evaluation from final epoch
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - Model saved as: exp_round9_3lobs_1-5M_decoupled_training_embedding_v4_256dim_exp2b_flash_learned_pool_bs128_ep1_d256_20260308_122852
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 0.85 GB
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - Complete results saved to logs/exp_round9_3lobs_1-5M_decoupled_training_embedding_v4_256dim/exp2b_flash_learned_pool/final_results.json
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - 
+================================================================================
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - EXPERIMENT COMPLETE: exp2b_flash_learned_pool
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - ================================================================================
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - Final Recall@10: 0.813
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - Best Val Loss: 0.0000
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - Training Time: 15868.6s
+2026-03-08 12:28:52 - exp2b_flash_learned_pool - INFO - ================================================================================
+
