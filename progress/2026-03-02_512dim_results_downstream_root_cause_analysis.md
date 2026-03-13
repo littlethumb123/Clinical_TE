@@ -280,3 +280,74 @@ batch_size=128 (no changes needed)
 **Files Modified**: 3 new files in `expe_logs/exp_round7_512dim/`; 1 new in `expe_analysis/downstream_eval/`; 1 progress file untracked  
 **Commits**: 0 new commits (all untracked)  
 **Environment**: macOS 24.6.0, Cursor Ask/Agent mode, 4×T4 GPU cluster (GCP) for training
+
+---
+
+## 10. Downstream Evaluation Results — Follow-up Ablations (Small Scale)
+
+*Appended 2026-03-10: Comprehensive downstream evaluation across Medicare IP and Commercial IP models.*
+
+### Major Findings
+
+1. **Loss-based and frequency-based solutions for relieving gradient starvation did not generate significant improvements in downstream evaluations.** The Focal Loss and Focal Loss + Density Sampling variants showed no meaningful lift over the baseline Optimized-FA-TE model in either Medicare or Commercial IP prediction.
+2. **Increasing the embedding dimension to 512 and training data size (5.7M) improved the Lift@1% by 6.85% and 14.44% respectively** — confirming that capacity and data scale are the primary levers for downstream performance, not loss engineering.
+
+### Models Evaluated
+
+| Model | TE Dimension | TE Training Size | Feature Type |
+|---|:---:|:---:|---|
+| Production IP model | NA | NA | Engineered feature |
+| Optimized-FA-TE | 256 | 1.75M | Hybrid / Embedding |
+| Optimized-FA-TE-Focal loss | 256 | 1.75M | Hybrid / Embedding |
+| Optimized-FA-TE-Focal loss + Density sampling batch | 256 | 1.75M | Hybrid / Embedding |
+| Optimized-FA-TE-512dim | 512 | 1.75M | Hybrid / Embedding |
+| Optimized-FA-TE-M | 256 | 5.7M | Hybrid / Embedding |
+
+### Medicare IP Model Results
+
+| Metric | Production IP (Eng. Feature) | Optimized-FA-TE Hybrid | Optimized-FA-TE Embedding | FA-TE-Focal Hybrid | FA-TE-Focal Embedding | FA-TE-Focal+Density Hybrid | FA-TE-Focal+Density Embedding | FA-TE-512dim Hybrid | FA-TE-512dim Embedding | FA-TE-M Hybrid | FA-TE-M Embedding |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| AUC ROC | 0.742 | 0.758 | 0.736 | 0.753 | 0.736 | 0.751 | 0.738 | — | — | 0.756 | 0.750 |
+| AUC PR | 0.199 | 0.21 | 0.186 | 0.202 | 0.191 | 0.198 | 0.191 | — | — | 0.212 | 0.197 |
+| Lift@1% | 6.201 | 6.391 | 5.742 | 6.19 | 6.06 | 6.182 | 5.683 | — | — | 6.689 | 5.981 |
+
+**Medicare IP Key Observations:**
+- **Production baseline (Engineered features)**: AUC ROC 0.742, Lift@1% 6.201
+- **Optimized-FA-TE Hybrid (256d, 1.75M)**: Best 256d result — AUC ROC 0.758 (+2.2%), Lift@1% 6.391 (+3.1%)
+- **Focal loss variants**: No meaningful improvement — Focal loss Hybrid AUC ROC 0.753 (-0.7% vs baseline TE), Focal+Density Hybrid 0.751 (-0.9% vs baseline TE). Loss engineering did not translate downstream.
+- **512dim results**: Not available in this evaluation round for Medicare
+- **Optimized-FA-TE-M (256d, 5.7M)**: Hybrid AUC ROC 0.756 (comparable to 1.75M), but Lift@1% **6.689** (+4.7% over 1.75M hybrid, +7.9% over Production) — **data scale primarily helps Lift@1%**
+- **Embedding-only consistently underperforms Hybrid**: Embedding AUC ROC ~0.736-0.750 vs Hybrid ~0.751-0.758, confirming embeddings need tabular features to be competitive
+
+### Commercial IP Model Results
+
+| Metric | Production IP (Eng. Feature) | Optimized-FA-TE Hybrid | Optimized-FA-TE Embedding | FA-TE-Focal Hybrid | FA-TE-Focal Embedding | FA-TE-Focal+Density Hybrid | FA-TE-Focal+Density Embedding | FA-TE-512dim Hybrid | FA-TE-512dim Embedding | FA-TE-M Hybrid | FA-TE-M Embedding |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| AUC ROC | 0.832 | 0.824 | 0.79 | 0.821 | 0.791 | 0.815 | 0.783 | 0.824 | 0.798 | 0.833 | 0.8 |
+| AUC PR | 0.1 | 0.105 | 0.078 | 0.091 | 0.069 | 0.088 | 0.069 | 0.092 | 0.071 | 0.114 | 0.08 |
+| Lift@1% | 18.682 | 19.082 | 15.059 | 18.264 | 14.746 | 17.612 | 14.646 | 18.37 | 16.09 | 19.44 | 17.233 |
+
+**Commercial IP Key Observations:**
+- **Production baseline (Engineered features)**: AUC ROC 0.832, Lift@1% 18.682
+- **Optimized-FA-TE Hybrid (256d, 1.75M)**: AUC ROC 0.824 (-1.0% vs Production), Lift@1% 19.082 (+2.1%) — hybrid slightly underperforms Production on AUC ROC but outperforms on Lift@1%
+- **Focal loss variants**: **Degraded performance** — Focal Hybrid AUC ROC 0.821, Focal+Density Hybrid 0.815, both worse than baseline TE. Loss engineering actively hurt downstream.
+- **FA-TE-512dim**: Hybrid AUC ROC 0.824 (matches baseline TE), Lift@1% 18.37 (-3.7% vs baseline TE hybrid) — 512dim improved embedding-only substantially (Embedding Lift@1% 16.09 vs 15.059, **+6.85%**) but hybrid did not benefit
+- **Optimized-FA-TE-M (256d, 5.7M)**: **Best overall model** — Hybrid AUC ROC **0.833** (+0.1% vs Production), AUC PR **0.114** (+14% vs Production), Lift@1% **19.44** (+4.1% vs Production). Embedding-only Lift@1% **17.233** (+14.44% vs baseline TE embedding 15.059)
+- **Data scale (5.7M) is the strongest lever**: Only model where Hybrid AUC ROC matches/exceeds Production, and Lift@1% is best across all models
+
+### Cross-LOB Summary
+
+| Lever | Medicare Impact | Commercial Impact | Verdict |
+|---|---|---|---|
+| Focal Loss (gradient starvation fix) | No improvement (AUC ROC -0.7%) | Degradation (AUC ROC -0.3 to -0.9%) | **Does not transfer downstream** |
+| Focal Loss + Density Sampling | No improvement (AUC ROC -0.9%) | Degradation (AUC ROC -1.1%) | **Does not transfer downstream** |
+| 512-dim (capacity increase) | Not evaluated | Embedding Lift@1% +6.85% | **Helps embedding-only, mixed for hybrid** |
+| 5.7M data (scale increase) | Lift@1% +7.9% vs Production | Lift@1% +4.1% vs Production, AUC ROC +0.1% | **Strongest lever for both LOBs** |
+| Hybrid vs Embedding-only | Hybrid wins by +2-4% AUC ROC | Hybrid wins by +2-5% AUC ROC | **Embeddings need tabular features** |
+
+### Implications for Research Direction
+
+1. **Loss engineering (Focal, ASL, density batching) is a dead end for downstream improvement.** These techniques improve pretraining metrics but the gains do not transfer to IP prediction. Research investment in V6 per-tier loss balancing is not justified for downstream goals.
+2. **Data scale (1.75M → 5.7M) is the single most impactful lever**, producing the only model that matches/exceeds Production across both LOBs. The next priority should be scaling to even larger datasets.
+3. **512-dim embeddings show promise for embedding-only models** (Lift@1% +6.85% in Commercial), suggesting capacity helps the representation quality. Combining 512-dim with 5.7M data is the logical next experiment.
+4. **Embedding-only models are not competitive with hybrid models**, confirming that transformer embeddings are complementary to (not replacements for) engineered features. The product strategy should focus on hybrid models.

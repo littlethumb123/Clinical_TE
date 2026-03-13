@@ -1,0 +1,32 @@
+# Experiment Hygiene
+
+Always-on guidance ensuring experimental rigor in ML training.
+
+## Requirements for Every Experiment
+
+Every experiment MUST have:
+- **Hypothesis**: What do you expect and why? (even if uncertain)
+- **Single variable**: Only ONE thing changes (if multiple, split into sequential experiments)
+- **Expected outcome**: What result would confirm the hypothesis?
+- **Refutation criterion**: What result would disprove the hypothesis?
+
+## The 30-Minute Rule
+
+If a diagnostic experiment costs <4 GPU-hours, run it BEFORE consulting any expert.
+
+Common cheap diagnostics: overfit single batch (~5 min), loss at initialization (~1 min), gradient norms per layer (~30 min), logit histograms (~10 min), loss decomposition by group (~10 min).
+
+## Reminders
+
+- Before running: "Has a pre-registration doc been written?" (invoke /pre-experiment)
+- After results: "Has a post-mortem been written?" (invoke /post-experiment)
+- Before next experiment: "What did I learn from the last one?"
+
+## Baseline Gate
+
+Before complex model experiments: does a simple baseline exist?
+- Trivial predictor (frequency-based, random)
+- Simple model (logistic regression, MLP)
+- Production reference (existing system)
+
+If no baseline exists, establishing one IS the next experiment.

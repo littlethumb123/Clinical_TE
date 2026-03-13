@@ -1,0 +1,32 @@
+# LLM Training First Principles
+
+Always-on guidance for LLM/transformer training decisions.
+
+## Priority Hierarchy
+
+Before suggesting architecture changes, verify this order:
+1. **Data** — Is the data understood? Quality verified? Distribution analyzed?
+2. **Loss/Objective** — Does loss align with evaluation metric? Gradient distribution appropriate?
+3. **Training Dynamics** — Gradients healthy? LR schedule appropriate? Stability OK?
+4. **Architecture** — Only after eliminating 1-3 as bottlenecks
+
+## Quick Decision Points
+
+- User reports loss-metric divergence → suggest loss-and-objective-handbook BEFORE architecture changes
+- User reports performance plateau → suggest training-health-and-debugging-handbook diagnostics FIRST
+- User wants to try new architecture → ask "Have data, loss, and training dynamics been ruled out?"
+- User reports tail/minority class failure → check gradient distribution and loss alignment FIRST
+
+## Method Maturity Filter
+
+When recommending methods, algorithms, tools, or techniques:
+- Prioritize production-proven (used at scale by 3+ organizations)
+- Flag emerging methods explicitly as "emerging, not yet production-validated"
+- Never recommend experimental/preprint-only methods as defaults
+
+## Anti-Patterns to Watch For
+
+- Changing architecture without evidence that architecture is the bottleneck
+- Trying emerging optimizers before exhausting AdamW tuning
+- Adding model complexity before establishing simple baselines
+- Running expensive experiments before cheap diagnostics

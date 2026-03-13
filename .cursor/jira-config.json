@@ -1,0 +1,127 @@
+{
+  "projectKey": "TLCSDIS",
+  "cloudId": "c08225c2-3ed9-4a44-8526-4f5589f2b403",
+  "statusWorkflows": {
+    "Story": {
+      "statuses": ["Pending Approval", "Ready To Start", "In Progress", "Dev Complete", "Test Complete", "Accepted"],
+      "terminal": "Accepted",
+      "devComplete": "Dev Complete",
+      "testComplete": "Test Complete",
+      "readyToStart": "Ready To Start",
+      "inProgress": "In Progress",
+      "cancel": "Cancel"
+    },
+    "Sub-task": {
+      "statuses": ["Not Started", "In Progress", "Done", "Verifying"],
+      "terminal": "Done",
+      "devComplete": "Verifying",
+      "inProgress": "In Progress",
+      "cancel": "Cancel"
+    },
+    "Feature": {
+      "statuses": ["Pending Approval", "Ready To Start", "In Progress", "Dev Complete", "Test Complete", "Accepted"],
+      "terminal": "Accepted",
+      "devComplete": "Dev Complete",
+      "testComplete": "Test Complete",
+      "readyToStart": "Ready To Start",
+      "inProgress": "In Progress",
+      "cancel": "Cancel"
+    }
+  },
+  "semanticStatusMap": {
+    "_description": "Maps business concepts to actual Jira status names per issue type. Use getTransitionsForJiraIssue to resolve transition IDs at runtime.",
+    "taskCompleted": {
+      "Story": "Dev Complete",
+      "Sub-task": "Verifying",
+      "Feature": "Dev Complete"
+    },
+    "codeReviewed": {
+      "Story": "Test Complete",
+      "Sub-task": "Verifying",
+      "Feature": "Test Complete"
+    },
+    "fullyDone": {
+      "Story": "Accepted",
+      "Sub-task": "Done",
+      "Feature": "Accepted"
+    },
+    "bugFixed": {
+      "Story": "Dev Complete",
+      "Sub-task": "Verifying",
+      "Feature": "Dev Complete"
+    },
+    "startWork": {
+      "Story": "Ready To Start",
+      "Sub-task": "In Progress",
+      "Feature": "Ready To Start"
+    }
+  },
+  "squadModel": {
+    "squadName": "__SQUAD_NAME__",
+    "sprintCadenceWeeks": 3,
+    "roles": {
+      "lead": {
+        "accountId": "__LEAD_ACCOUNT_ID__",
+        "name": "__LEAD_NAME__"
+      },
+      "captains": [
+        {
+          "accountId": "__CAPTAIN_ACCOUNT_ID__",
+          "name": "__CAPTAIN_NAME__",
+          "discipline": "__DISCIPLINE__"
+        }
+      ],
+      "members": [
+        {
+          "accountId": "__MEMBER_ACCOUNT_ID__",
+          "name": "__MEMBER_NAME__",
+          "discipline": "__DISCIPLINE__"
+        }
+      ]
+    },
+    "forums": {
+      "sprintPlanning": {
+        "weekOfSprint": 1,
+        "dayOfWeek": "Monday"
+      },
+      "workingSession": {
+        "weekOfSprint": 2,
+        "daysOfWeek": ["Tuesday", "Thursday"]
+      },
+      "demo": {
+        "weekOfSprint": 3,
+        "dayOfWeek": "Thursday"
+      }
+    }
+  },
+  "transitionIdMap": {
+    "_description": "Maps transition IDs to status names per issue type. Used by hooks for tier classification. IDs from getTransitionsForJiraIssue.",
+    "Story": {
+      "11": "Pending Approval",
+      "21": "Ready To Start",
+      "31": "In Progress",
+      "41": "Dev Complete",
+      "51": "Test Complete",
+      "61": "Accepted",
+      "71": "Cancel",
+      "81": "Defining"
+    },
+    "Sub-task": {
+      "11": "Not Started",
+      "21": "In Progress",
+      "31": "Done",
+      "41": "Cancel",
+      "51": "Verifying"
+    },
+    "Feature": {
+      "11": "Pending Approval",
+      "21": "Ready To Start",
+      "31": "In Progress",
+      "41": "Dev Complete",
+      "51": "Test Complete",
+      "61": "Accepted",
+      "71": "Cancel",
+      "81": "Defining"
+    }
+  }
+}
