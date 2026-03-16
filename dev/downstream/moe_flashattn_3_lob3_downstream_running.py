@@ -1383,6 +1383,177 @@ APPLY_DOWNSAMPLING = True  # Set to False to disable downsampling
 # 5	5: 6-12 months	100909	1.44	0.10750279955207313	-334	334
 
 
+# In[ ]:
+
+
+# =============================================================================
+# SHARED FEATURE IMPORTANCE MODULE (SHAP — Model-Agnostic)
+# =============================================================================
+# Used by both Commercial and Medicaid sections.
+# Goal: quantify what proportion of top-N important features are embeddings.
+
+import shap
+
+def compute_shap_feature_importance(
+    fitted_model,
+    X_eval: pd.DataFrame,
+    feature_cols: List[str],
+    embedding_features: List[str],
+    top_k_list: List[int] = [10, 20, 50],
+    max_samples: int = 2000,
+    random_state: int = 42,
+    model_name: str = "",
+    verbose: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Compute SHAP feature importance and analyze embedding feature proportions.
+
+    Works with any model that has a predict_proba method (LogisticRegression,
+    CatBoost, XGBoost, LightGBM, etc.).
+
+    Args:
+        fitted_model: A TRAINED model with predict_proba().
+        X_eval: Evaluation DataFrame (use val or test split, NOT train).
+        feature_cols: Ordered list of feature column names matching X_eval columns.
+        embedding_features: List of embedding column names (subset of feature_cols).
+        top_k_list: List of top-K cutoffs for proportion analysis (default [10, 20, 50]).
+        max_samples: Cap on background/eval samples for SHAP speed (default 2000).
+        random_state: Seed for sampling reproducibility.
+        model_name: Label for output (e.g. "CatBoost_hybrid").
+        verbose: Print progress.
+
+    Returns:
+        shap_summary_df: DataFrame with columns [feature, mean_abs_shap, rank, is_embedding]
+                         sorted by mean_abs_shap descending.
+        proportion_df:   DataFrame with columns [model_name, top_k, n_embedding_in_top_k,
+                         proportion_embedding, n_tabular_in_top_k, proportion_tabular]
+    """
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"SHAP FEATURE IMPORTANCE: {model_name or type(fitted_model).__name__}")
+        print(f"{'='*70}")
+
+    X_sample = X_eval
+    if len(X_eval) > max_samples:
+        X_sample = X_eval.sample(n=max_samples, random_state=random_state)
+        if verbose:
+            print(f"  Sampled {max_samples} rows from {len(X_eval)} for SHAP computation")
+
+    model_type = type(fitted_model).__name__
+
+    if model_type in ('CatBoostClassifier',):
+        explainer = shap.TreeExplainer(fitted_model)
+        shap_values = explainer.shap_values(X_sample)
+    elif model_type in ('XGBClassifier', 'LGBMClassifier'):
+        explainer = shap.TreeExplainer(fitted_model)
+        shap_values = explainer.shap_values(X_sample)
+    elif model_type == 'LogisticRegression':
+        background = shap.sample(X_sample, min(100, len(X_sample)))
+        explainer = shap.LinearExplainer(fitted_model, background)
+        shap_values = explainer.shap_values(X_sample)
+    else:
+        background = shap.sample(X_sample, min(100, len(X_sample)))
+        explainer = shap.KernelExplainer(
+            fitted_model.predict_proba, background
+        )
+        shap_values = explainer.shap_values(X_sample)
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]
+
+    if isinstance(shap_values, list):
+        shap_values = shap_values[1]
+
+    mean_abs_shap = np.abs(shap_values).mean(axis=0)
+
+    embedding_set = set(embedding_features)
+    shap_summary_df = pd.DataFrame({
+        'feature': feature_cols,
+        'mean_abs_shap': mean_abs_shap,
+        'is_embedding': [f in embedding_set for f in feature_cols],
+    }).sort_values('mean_abs_shap', ascending=False).reset_index(drop=True)
+    shap_summary_df['rank'] = range(1, len(shap_summary_df) + 1)
+
+    proportion_rows = []
+    for k in top_k_list:
+        k_actual = min(k, len(shap_summary_df))
+        top_k_df = shap_summary_df.head(k_actual)
+        n_emb = int(top_k_df['is_embedding'].sum())
+        n_tab = k_actual - n_emb
+        proportion_rows.append({
+            'model_name': model_name or model_type,
+            'top_k': k,
+            'n_embedding_in_top_k': n_emb,
+            'proportion_embedding': round(n_emb / k_actual, 4),
+            'n_tabular_in_top_k': n_tab,
+            'proportion_tabular': round(n_tab / k_actual, 4),
+        })
+
+    proportion_df = pd.DataFrame(proportion_rows)
+
+    if verbose:
+        print(f"\n  Top 20 features by mean |SHAP|:")
+        print(shap_summary_df[['rank', 'feature', 'mean_abs_shap', 'is_embedding']].head(20).to_string(index=False))
+        print(f"\n  Embedding Proportion Analysis:")
+        print(proportion_df.to_string(index=False))
+
+    return shap_summary_df, proportion_df
+
+
+def run_shap_for_all_feature_sets(
+    fitted_models: Dict[str, Any],
+    prepared_data_dict: Dict[str, Any],
+    top_k_list: List[int] = [10, 20, 50],
+    max_samples: int = 2000,
+    verbose: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Run SHAP analysis across multiple (model, feature_set) combos.
+
+    Args:
+        fitted_models: Dict mapping label -> fitted model (must already be trained).
+        prepared_data_dict: Dict mapping same labels -> prepared data objects
+                            (PreparedData or MedicaidPreparedData).
+        top_k_list: Top-K cutoffs.
+        max_samples: SHAP sample cap.
+        verbose: Print progress.
+
+    Returns:
+        all_shap_df: Concatenated SHAP summaries with 'experiment' column.
+        all_proportion_df: Concatenated proportion summaries.
+    """
+    all_shap = []
+    all_proportion = []
+
+    for label, model in fitted_models.items():
+        pd_obj = prepared_data_dict[label]
+
+        if hasattr(pd_obj, 'X_splits'):
+            X_eval = pd_obj.X_splits.get('test', pd_obj.X_splits.get('val'))
+        elif hasattr(pd_obj, 'X_test'):
+            X_eval = pd_obj.X_test
+        else:
+            raise ValueError(f"Cannot find evaluation data in {type(pd_obj)}")
+
+        feature_cols = pd_obj.feature_cols
+        embedding_features = pd_obj.embedding_features
+
+        shap_df, prop_df = compute_shap_feature_importance(
+            fitted_model=model,
+            X_eval=X_eval,
+            feature_cols=feature_cols,
+            embedding_features=embedding_features,
+            top_k_list=top_k_list,
+            max_samples=max_samples,
+            model_name=label,
+            verbose=verbose,
+        )
+        shap_df['experiment'] = label
+        all_shap.append(shap_df)
+        all_proportion.append(prop_df)
+
+    return pd.concat(all_shap, ignore_index=True), pd.concat(all_proportion, ignore_index=True)
+
+
 # In[75]:
 
 
@@ -2355,6 +2526,67 @@ df_commercial_downstream = pd.read_excel("experiment_logs/commercial_ip_1-5M_30p
 df_commercial_downstream.columns
 
 
+# ### Commercial: SHAP Feature Importance Analysis
+
+# In[ ]:
+
+
+# =============================================================================
+# COMMERCIAL: SHAP Feature Importance Analysis
+# =============================================================================
+# Demonstrates the additional value of embeddings via SHAP
+# Uses the hybrid feature set to see embedding vs tabular importance
+
+embedding_path_shap = 'edp-prod-storage.edp_ent_sdoheir_cns.a964286_te4exp_3lob_exp_round5_v2_exp2b_flash_learned_pool_asym_focalloss_densesampler_commercial_all_sample_embedding'
+
+prepared_hybrid_commercial = prepare_evaluation_data(
+    df_features=df_ip_features,
+    embedding_location_path=embedding_path_shap,
+    feature_set='hybrid',
+    downsample_ratio=10.0
+)
+
+# Train CatBoost on hybrid and capture the fitted model
+from sklearn.base import clone as sk_clone
+
+catboost_shap = sk_clone(catboost_model)
+cat_indices = prepared_hybrid_commercial.cat_feature_indices if prepared_hybrid_commercial.cat_feature_indices else []
+from catboost import Pool
+train_pool_shap = Pool(
+    prepared_hybrid_commercial.X_splits['train'],
+    prepared_hybrid_commercial.y_splits['train'],
+    cat_features=cat_indices,
+)
+val_pool_shap = Pool(
+    prepared_hybrid_commercial.X_splits['val'],
+    prepared_hybrid_commercial.y_splits['val'],
+    cat_features=cat_indices,
+)
+catboost_shap.fit(train_pool_shap, eval_set=val_pool_shap, verbose=0)
+print("Commercial CatBoost (hybrid) trained for SHAP analysis")
+
+
+# In[ ]:
+
+
+# Run SHAP
+commercial_shap_df, commercial_proportion_df = compute_shap_feature_importance(
+    fitted_model=catboost_shap,
+    X_eval=prepared_hybrid_commercial.X_splits['test'],
+    feature_cols=prepared_hybrid_commercial.feature_cols,
+    embedding_features=prepared_hybrid_commercial.embedding_features,
+    top_k_list=[10, 20, 50],
+    max_samples=2000,
+    model_name="commercial_catboost_hybrid",
+    verbose=True,
+)
+
+# Save results
+commercial_shap_df.to_excel("experiment_logs/commercial_shap_feature_importance.xlsx", index=False)
+commercial_proportion_df.to_excel("experiment_logs/commercial_shap_embedding_proportions.xlsx", index=False)
+print("\nSHAP results saved to experiment_logs/")
+
+
 # ### Medicare embedding generation
 
 # In[89]:
@@ -2532,6 +2764,95 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items()):
     del model
     del embeddings
     torch.cuda.empty_cache()
+
+
+# ### Medicare: Embedding Generation for Round 10, 9, and 7 Models
+
+# In[ ]:
+
+
+# =============================================================================
+# MEDICARE: Embedding Generation for Round 10, 9, and 7 Models
+# =============================================================================
+
+MODEL_PATHS_NEW_MEDICARE = {
+    'exp_round10_formal_exp2b_flash_learned_pool_d256':
+        'logs/exp_round10_3lobs_formal_training/exp2b_flash_learned_pool/saved_models/'
+        'exp_round10_3lobs_formal_training_exp2b_flash_learned_pool_bs128_ep1_d256_20260312_095916_final.pt',
+
+    'exp_round7_exp2b_flash_learned_pool_d512':
+        'logs/exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim/'
+        'exp2b_flash_learned_poolexp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim_exp2b_flash_learned_pool_bs128_ep1_d512_20260303_023717_final/'
+        'saved_models/'
+        'exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim_exp2b_flash_learned_pool_bs128_ep1_d512_20260303_023717_final.pt',
+
+    'exp_round9_decoupled_exp2b_flash_learned_pool_v2_d256':
+        'logs/exp_round9_3lobs_1-5M_decoupled_training_embedding_v4_256dim/exp2b_flash_learned_pool_v2/saved_models/'
+        'exp_round9_3lobs_1-5M_decoupled_training_embedding_v4_256dim_exp2b_flash_learned_pool_bs128_ep1_d256_20260310_123547_final.pt',
+}
+
+results_new_medicare = {}
+batch_size = 64
+PROJECT_ID = "edp-prod-storage"
+DATASET_ID = "edp_ent_sdoheir_cns"
+LOB = 'medicare'
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+for exp_name, model_path in tqdm(MODEL_PATHS_NEW_MEDICARE.items(), desc="Medicare embedding generation"):
+    cleanup_gpu_memory(verbose=False)
+    model, config, moe_config, use_mixed_precision, model_type = load_model_from_checkpoint(
+        model_path=model_path,
+        device=device,
+        verbose=True
+    )
+
+    inference_start_time = time.time()
+    embeddings, individual_ids, index_dts = generate_embeddings(
+        model=model,
+        config=config,
+        data=df_me_sample,
+        device=device,
+        id_column='individual_id',
+        lob_value=None,
+        desc_prefix='Medicare',
+        batch_size=batch_size,
+        use_mixed_precision=use_mixed_precision,
+        verbose=True,
+        multi_gpu=True,
+        moe_config=moe_config,
+    )
+    inference_duration = time.time() - inference_start_time
+    print(f"Inference duration for {exp_name}: {round(inference_duration/3600, 2):.2f} hr")
+
+    safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
+    table_name = f"a964286_te4exp_3lob_{safe_exp_name}_{LOB}_all_sample_embedding"
+    bq_table_path = save_embeddings_to_bigquery(
+        embeddings=embeddings,
+        individual_ids=individual_ids,
+        index_dts=index_dts,
+        project_id=PROJECT_ID,
+        dataset_id=DATASET_ID,
+        table_name=table_name,
+        exp_name=exp_name,
+        model_type=model_type,
+        if_exists="replace"
+    )
+    results_new_medicare[exp_name] = {
+        'bq_table_path': bq_table_path,
+        'embedding_shape': embeddings.shape,
+        'model_type': model_type,
+        'model_path': model_path,
+        'inference_duration_hr': round(inference_duration / 3600, 2),
+        'status': 'success'
+    }
+
+    del model
+    del embeddings
+    torch.cuda.empty_cache()
+
+print("\n=== Medicare Embedding Generation Summary ===")
+for exp_name, result in results_new_medicare.items():
+    print(f"  {exp_name}: {result['embedding_shape']} -> {result['bq_table_path']}")
 
 
 # In[110]:
@@ -4035,6 +4356,90 @@ for exp_name, model_path in tqdm(MODEL_PATHS.items(), desc="Processing models"):
         print(f"  {exp_name}: {result['embedding_shape']} ({result['inference_duration_hr']:.2f}hr)")
 
 
+# ### Medicaid: Embedding Generation for Round 10, 9, and 7 Models
+
+# In[ ]:
+
+
+# =============================================================================
+# MEDICAID: Embedding Generation for Round 10, 9, and 7 Models
+# =============================================================================
+
+MODEL_PATHS_NEW_MEDICAID = {
+    'exp_round10_formal_exp2b_flash_learned_pool_d256':
+        'logs/exp_round10_3lobs_formal_training/exp2b_flash_learned_pool/saved_models/'
+        'exp_round10_3lobs_formal_training_exp2b_flash_learned_pool_bs128_ep1_d256_20260312_095916_final.pt',
+
+    'exp_round7_exp2b_flash_learned_pool_d512':
+        'logs/exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim/'
+        'exp2b_flash_learned_poolexp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim_exp2b_flash_learned_pool_bs128_ep1_d512_20260303_023717_final/'
+        'saved_models/'
+        'exp_round7_3lobs_1-5M_pretrain_multi_gpu_test_v3_512dim_exp2b_flash_learned_pool_bs128_ep1_d512_20260303_023717_final.pt',
+
+    'exp_round9_decoupled_exp2b_flash_learned_pool_v2_d256':
+        'logs/exp_round9_3lobs_1-5M_decoupled_training_embedding_v4_256dim/exp2b_flash_learned_pool_v2/saved_models/'
+        'exp_round9_3lobs_1-5M_decoupled_training_embedding_v4_256dim_exp2b_flash_learned_pool_bs128_ep1_d256_20260310_123547_final.pt',
+}
+
+results_new_medicaid = {}
+batch_size = 64
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+for exp_name, model_path in tqdm(MODEL_PATHS_NEW_MEDICAID.items(), desc="Medicaid embedding generation"):
+    cleanup_gpu_memory(verbose=False)
+    model, config, moe_config, use_mixed_precision, model_type = load_model_from_checkpoint(
+        model_path=model_path,
+        device=device,
+        verbose=True
+    )
+
+    inference_start_time = time.time()
+    embeddings, member_keys, index_dts = generate_embeddings(
+        model=model,
+        config=config,
+        data=df_te_input,
+        device=device,
+        id_column='asdb_member_key',
+        lob_value='Medicaid',
+        desc_prefix='Medicaid',
+        batch_size=batch_size,
+        use_mixed_precision=use_mixed_precision,
+        verbose=True,
+        multi_gpu=True,
+        moe_config=moe_config,
+    )
+    inference_duration = time.time() - inference_start_time
+    print(f"Inference duration for {exp_name}: {round(inference_duration/3600, 2):.2f} hr")
+
+    safe_exp_name = exp_name.replace('-', '_').replace('.', '_')
+    table_name = f"a964286_te4exp_{safe_exp_name}_medicaid_heldout_embedding"
+    bq_table_path = save_medicaid_embeddings_to_bigquery(
+        embeddings=embeddings,
+        member_keys=member_keys,
+        index_dts=index_dts,
+        table_name=table_name,
+        exp_name=exp_name,
+        model_type=model_type,
+    )
+    results_new_medicaid[exp_name] = {
+        'bq_table_path': bq_table_path,
+        'embedding_shape': embeddings.shape,
+        'model_type': model_type,
+        'model_path': model_path,
+        'inference_duration_hr': round(inference_duration / 3600, 2),
+        'status': 'success'
+    }
+
+    del model
+    del embeddings
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+print("\n=== Medicaid Embedding Generation Summary ===")
+for exp_name, result in results_new_medicaid.items():
+    print(f"  {exp_name}: {result['embedding_shape']} -> {result['bq_table_path']}")
+
+
 # #### Model training
 
 # In[85]:
@@ -4244,4 +4649,62 @@ for fs in ['embedding_only', 'tabular_only', 'hybrid']:
 
 
 df_comparison.to_excel("exp_round5_3lob_1-5M_1epoch_128batch_dim256_medicaid_ip_downstream_eval.xlsx")
+
+
+# ### Medicaid: SHAP Feature Importance Analysis
+
+# In[ ]:
+
+
+# =============================================================================
+# MEDICAID: SHAP Feature Importance Analysis
+# =============================================================================
+# Uses the hybrid feature set to quantify embedding vs tabular importance.
+# Reuses df_merged from the Medicaid evaluation loop above.
+
+prepared_medicaid_hybrid = prepare_medicaid_evaluation_data(
+    df=df_merged,
+    feature_set='hybrid',
+    apply_downsampling=True,
+    downsample_ratio=CATBOOST_UNDERSAMPLE_RATIO,
+    split_random_state=RANDOM_STATE,
+    undersample_random_state=UNDERSAMPLE_RANDOM_STATE,
+    verbose=True,
+)
+
+# Train CatBoost for SHAP
+catboost_medicaid_shap = CatBoostClassifier(**CATBOOST_TUNED_PARAMS)
+train_pool_md_shap = Pool(
+    prepared_medicaid_hybrid.X_train,
+    prepared_medicaid_hybrid.y_train,
+    cat_features=prepared_medicaid_hybrid.cat_feature_indices if prepared_medicaid_hybrid.cat_feature_indices else None,
+)
+val_pool_md_shap = Pool(
+    prepared_medicaid_hybrid.X_val,
+    prepared_medicaid_hybrid.y_val,
+    cat_features=prepared_medicaid_hybrid.cat_feature_indices if prepared_medicaid_hybrid.cat_feature_indices else None,
+)
+catboost_medicaid_shap.fit(train_pool_md_shap, eval_set=val_pool_md_shap, verbose=0)
+print("Medicaid CatBoost (hybrid) trained for SHAP analysis")
+
+
+# In[ ]:
+
+
+# Run SHAP
+medicaid_shap_df, medicaid_proportion_df = compute_shap_feature_importance(
+    fitted_model=catboost_medicaid_shap,
+    X_eval=prepared_medicaid_hybrid.X_test,
+    feature_cols=prepared_medicaid_hybrid.feature_cols,
+    embedding_features=prepared_medicaid_hybrid.embedding_features,
+    top_k_list=[10, 20, 50],
+    max_samples=2000,
+    model_name="medicaid_catboost_hybrid",
+    verbose=True,
+)
+
+# Save results
+medicaid_shap_df.to_excel("experiment_logs/medicaid_shap_feature_importance.xlsx", index=False)
+medicaid_proportion_df.to_excel("experiment_logs/medicaid_shap_embedding_proportions.xlsx", index=False)
+print("\nMedicaid SHAP results saved to experiment_logs/")
 

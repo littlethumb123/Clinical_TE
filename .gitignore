@@ -12,7 +12,9 @@
 *.csv
 *.xlsx
 *.parquet
-
+# DOC and progress files
+# /docs/*
+# /progress/*
 # Python
 __pycache__/
 *.pyc
