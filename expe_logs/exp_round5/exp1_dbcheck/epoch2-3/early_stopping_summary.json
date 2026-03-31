@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "primary_metric": "micro_recall@20",
+  "best_metric": 0.37994487925017967,
+  "best_step": 1000,
+  "total_checks": 6,
+  "stopped_early": false,
+  "checks_without_improvement": 4,
+  "val_history": [
+    {
+      "step": 500,
+      "micro_recall@20": 0.3789403110067083
+    },
+    {
+      "step": 1000,
+      "micro_recall@20": 0.37994487925017967
+    },
+    {
+      "step": 1500,
+      "micro_recall@20": 0.3800079662843098
+    },
+    {
+      "step": 2000,
+      "micro_recall@20": 0.38001526458825813
+    },
+    {
+      "step": 2500,
+      "micro_recall@20": 0.38001637788886045
+    },
+    {
+      "step": 3000,
+      "micro_recall@20": 0.3800184807899981
+    }
+  ]
+}

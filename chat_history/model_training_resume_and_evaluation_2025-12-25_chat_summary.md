@@ -1,0 +1,24 @@
+# Model training resume and evaluation
+
+## Metadata
+
+- **Conversation ID:** afb2402e-2939-4a63-a5a7-0e307ee4fb41
+- **Mode:** chat
+- **Created:** 2025-12-25 11:22:24
+- **Last Updated:** 2025-12-25 13:35:06
+- **Branch:** main
+- **Files Changed:** 0
+- **Lines Added:** 0
+- **Lines Removed:** 0
+- **Summary:** Read moe_flashattn_3.py
+
+---
+
+## Conversation
+
+### ℹ️ System
+
+*This conversation's full transcript was not persisted by Cursor. Only metadata is available.*
+
+**Activity Summary:** Read moe_flashattn_3.py
+

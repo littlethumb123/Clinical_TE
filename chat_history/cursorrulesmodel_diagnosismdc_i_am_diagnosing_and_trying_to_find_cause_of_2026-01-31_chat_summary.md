@@ -1,0 +1,24 @@
+# @.cursor/rules/model_diagnosis.mdc, I am diagnosing and trying to find cause of
+
+## Metadata
+
+- **Conversation ID:** 23db5249-53b3-4a31-a676-13842d0bdff6
+- **Mode:** chat
+- **Created:** 2026-01-31 22:00:40
+- **Last Updated:** 2026-01-31 22:42:21
+- **Branch:** main
+- **Files Changed:** 0
+- **Lines Added:** 0
+- **Lines Removed:** 0
+- **Summary:** Read exp_round5_overall_learning_plateau_general.md, exp_round5_exp2_lr_plateau_percode_diag_tier_aware_batching_jan26.md, exp_round5_overall_learning_plateau_graident_code_starvation_analysis.md, exp_round5_exp2_lr_plateau_gradient_result_expert_interpret_jan24.md, exp_round5_exp2_lr_plateau_gradient_result_nextstep_discussion_jan25.md
+
+---
+
+## Conversation
+
+### ℹ️ System
+
+*This conversation's full transcript was not persisted by Cursor. Only metadata is available.*
+
+**Activity Summary:** Read exp_round5_overall_learning_plateau_general.md, exp_round5_exp2_lr_plateau_percode_diag_tier_aware_batching_jan26.md, exp_round5_overall_learning_plateau_graident_code_starvation_analysis.md, exp_round5_exp2_lr_plateau_gradient_result_expert_interpret_jan24.md, exp_round5_exp2_lr_plateau_gradient_result_nextstep_discussion_jan25.md
+

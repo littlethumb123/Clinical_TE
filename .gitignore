@@ -26,3 +26,6 @@ __pycache__/
 /data_ingestion/*
 !/data_ingestion/TE_pretraining_data_ingestion/
 reference/Practical Recommendations for Gradient-Based Training of Deep Architectures.pdf
+
+# Jira progress journals (local-only session context)
+jira_progress/

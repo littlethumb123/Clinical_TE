@@ -1,0 +1,1847 @@
+{
+  "within_member": {
+    "metric": "within_member_temporal_saturation",
+    "sample_size": 190,
+    "novelty_rate_day_10": 0.24090624476714503,
+    "novelty_rate_day_50": 0.11202099461637106,
+    "novelty_rate_day_100": 0.07284394162906978,
+    "novelty_rate_day_199": null
+  },
+  "cooccurrence_1_5m": {
+    "n_unique_same_day_pairs": 898332,
+    "total_same_day_pair_occurrences": 58660896,
+    "same_day_pair_entropy_bits": 14.634047964061006,
+    "same_day_pair_gini": 0.9339625554863147,
+    "n_unique_temporal_bigrams": 1331348,
+    "temporal_bigram_entropy_bits": 15.04820499023988,
+    "n_unique_skip2grams": 1336540,
+    "skip2gram_entropy_bits": 15.056281674529195,
+    "n_unique_skip3grams": 1334039,
+    "skip3gram_entropy_bits": 15.071408010221035,
+    "tier_pair_diversity": {
+      "('common', 'common')": 416372,
+      "('common', 'medium')": 355668,
+      "('medium', 'medium')": 31442,
+      "('common', 'rare')": 77954,
+      "('medium', 'rare')": 9690,
+      "('rare', 'rare')": 1105,
+      "('common', 'tail')": 5379,
+      "('medium', 'tail')": 552,
+      "('tail', 'tail')": 21,
+      "('rare', 'tail')": 149
+    },
+    "lob_pair_total_occurrences": {
+      "Medicare": 33557891,
+      "Commercial": 23701338,
+      "Medicaid": 1401667
+    },
+    "age_pair_total_occurrences": {
+      "senior": 33305310,
+      "young_adult": 6794599,
+      "pediatric": 2777290,
+      "middle_adult": 15783697
+    },
+    "same_day_pair_concentration": {
+      "top_10_pct_share": 0.916885824587473,
+      "top_1_pct_share": 0.6606038543973144
+    }
+  },
+  "cross_scale": [
+    {
+      "sample_frac": 0.01,
+      "n_members": 79966,
+      "n_nonzero_codes": 4064,
+      "total_occurrences": 8201716,
+      "gini": 0.9337388809349916,
+      "entropy_bits": 7.83320523223005,
+      "max_frequency": 738615,
+      "median_frequency": 41.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 0.6888504753673294,
+        "tail_above_10": 0.0,
+        "common_above_50": 1.0,
+        "medium_above_50": 0.930921052631579,
+        "rare_above_50": 0.0,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 0.6233552631578947,
+        "rare_above_100": 0.0,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 0.05674342105263158,
+        "rare_above_500": 0.0,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 43447,
+        "Medicare": 26137,
+        "Medicaid": 10382
+      },
+      "age_counts": {
+        "senior": 28316,
+        "middle_adult": 25621,
+        "young_adult": 15444,
+        "pediatric": 10585
+      }
+    },
+    {
+      "sample_frac": 0.02,
+      "n_members": 159793,
+      "n_nonzero_codes": 4428,
+      "total_occurrences": 16373476,
+      "gini": 0.9389506971830774,
+      "entropy_bits": 7.833165482803031,
+      "max_frequency": 1475739,
+      "median_frequency": 60.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 0.7531978931527464,
+        "tail_above_10": 0.0,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 0.08803611738148984,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 0.8013646702047005,
+        "rare_above_100": 0.0,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 0.21986353297952996,
+        "rare_above_500": 0.0,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 86328,
+        "Medicare": 52559,
+        "Medicaid": 20906
+      },
+      "age_counts": {
+        "senior": 56956,
+        "middle_adult": 50863,
+        "young_adult": 30840,
+        "pediatric": 21134
+      }
+    },
+    {
+      "sample_frac": 0.05,
+      "n_members": 399997,
+      "n_nonzero_codes": 4861,
+      "total_occurrences": 41080111,
+      "gini": 0.9443236477399108,
+      "entropy_bits": 7.833428627329441,
+      "max_frequency": 3698268,
+      "median_frequency": 102.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 0.96398891966759,
+        "tail_above_10": 0.0,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 0.27354570637119113,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.019390581717451522,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 0.4170124481327801,
+        "rare_above_500": 0.0,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 215842,
+        "Medicare": 131877,
+        "Medicaid": 52278
+      },
+      "age_counts": {
+        "senior": 142709,
+        "middle_adult": 127695,
+        "young_adult": 76709,
+        "pediatric": 52884
+      }
+    },
+    {
+      "sample_frac": 0.1,
+      "n_members": 798404,
+      "n_nonzero_codes": 5142,
+      "total_occurrences": 82009256,
+      "gini": 0.9473193939041231,
+      "entropy_bits": 7.8339914942696405,
+      "max_frequency": 7394843,
+      "median_frequency": 160.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 1.0,
+        "tail_above_10": 0.08090310442144873,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 0.44002650762094103,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.16500994035785288,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 0.5866320571057755,
+        "rare_above_500": 0.0,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 430135,
+        "Medicare": 263267,
+        "Medicaid": 105002
+      },
+      "age_counts": {
+        "senior": 284771,
+        "middle_adult": 254505,
+        "young_adult": 153198,
+        "pediatric": 105930
+      }
+    },
+    {
+      "sample_frac": 0.2,
+      "n_members": 1596171,
+      "n_nonzero_codes": 5359,
+      "total_occurrences": 163958551,
+      "gini": 0.9494364686451104,
+      "entropy_bits": 7.8343553721072325,
+      "max_frequency": 14771119,
+      "median_frequency": 262.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 1.0,
+        "tail_above_10": 0.25577100646352724,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 0.6145181476846058,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.3423028785982478,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 0.7733499377334994,
+        "rare_above_500": 0.0,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 860810,
+        "Medicare": 526043,
+        "Medicaid": 209318
+      },
+      "age_counts": {
+        "senior": 568912,
+        "middle_adult": 508423,
+        "young_adult": 306929,
+        "pediatric": 211907
+      }
+    },
+    {
+      "sample_frac": 0.4,
+      "n_members": 3191891,
+      "n_nonzero_codes": 5423,
+      "total_occurrences": 328250784,
+      "gini": 0.9500047630035056,
+      "entropy_bits": 7.83538788828355,
+      "max_frequency": 29581793,
+      "median_frequency": 486.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 1.0,
+        "tail_above_10": 0.4366453965360073,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 0.8154798761609907,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.5826625386996904,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 0.9920049200492005,
+        "rare_above_500": 0.0,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 1721491,
+        "Medicare": 1051473,
+        "Medicaid": 418925
+      },
+      "age_counts": {
+        "senior": 1137338,
+        "middle_adult": 1016302,
+        "young_adult": 615199,
+        "pediatric": 423049
+      }
+    },
+    {
+      "sample_frac": 0.6,
+      "n_members": 4786979,
+      "n_nonzero_codes": 5429,
+      "total_occurrences": 491199617,
+      "gini": 0.9500989423323254,
+      "entropy_bits": 7.834378886801477,
+      "max_frequency": 44258747,
+      "median_frequency": 736.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 1.0,
+        "tail_above_10": 0.5462794918330308,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 0.9659020458772474,
+        "tail_above_50": 0.0,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.7340359578425294,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 1.0,
+        "rare_above_500": 0.14011159330440173,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 2583574,
+        "Medicare": 1576821,
+        "Medicaid": 626582
+      },
+      "age_counts": {
+        "senior": 1705861,
+        "middle_adult": 1522085,
+        "young_adult": 923845,
+        "pediatric": 635185
+      }
+    },
+    {
+      "sample_frac": 0.8,
+      "n_members": 6383200,
+      "n_nonzero_codes": 5433,
+      "total_occurrences": 655086679,
+      "gini": 0.9501726080482318,
+      "entropy_bits": 7.833081872658301,
+      "max_frequency": 58995328,
+      "median_frequency": 987.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 1.0,
+        "tail_above_10": 0.6166965888689407,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 1.0,
+        "tail_above_50": 0.07809694793536805,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.8276291225886746,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 1.0,
+        "rare_above_500": 0.2445550715619166,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 3445120,
+        "Medicare": 2103327,
+        "Medicaid": 834751
+      },
+      "age_counts": {
+        "senior": 2276910,
+        "middle_adult": 2031127,
+        "young_adult": 1229146,
+        "pediatric": 846015
+      }
+    },
+    {
+      "sample_frac": 1.0,
+      "n_members": 7977199,
+      "n_nonzero_codes": 5431,
+      "total_occurrences": 820061249,
+      "gini": 0.9500852410318563,
+      "entropy_bits": 7.835032194940231,
+      "max_frequency": 73870958,
+      "median_frequency": 1204.0,
+      "tier_coverage": {
+        "common_above_10": 1.0,
+        "medium_above_10": 1.0,
+        "rare_above_10": 1.0,
+        "tail_above_10": 0.711864406779661,
+        "common_above_50": 1.0,
+        "medium_above_50": 1.0,
+        "rare_above_50": 1.0,
+        "tail_above_50": 0.18822479928635147,
+        "common_above_100": 1.0,
+        "medium_above_100": 1.0,
+        "rare_above_100": 0.9210031347962383,
+        "tail_above_100": 0.0,
+        "common_above_500": 1.0,
+        "medium_above_500": 1.0,
+        "rare_above_500": 0.32413793103448274,
+        "tail_above_500": 0.0
+      },
+      "lob_counts": {
+        "Commercial": 4301849,
+        "Medicare": 2630408,
+        "Medicaid": 1044940
+      },
+      "age_counts": {
+        "senior": 2844142,
+        "middle_adult": 2540543,
+        "young_adult": 1534987,
+        "pediatric": 1057525
+      }
+    }
+  ],
+  "cross_scale_divergences": [
+    {
+      "from_frac": 0.01,
+      "to_frac": 0.02,
+      "from_members": 79966,
+      "to_members": 159793,
+      "marginal_members": 79827,
+      "kl_divergence_bits": 0.0013227480349777725,
+      "js_divergence_bits": 0.0003514016897913124,
+      "marginal_entropy_gain_bits": -3.974942701923112e-05,
+      "entropy_per_marginal_member": -4.979446430309434e-10,
+      "gini_delta": 0.005211816248085865
+    },
+    {
+      "from_frac": 0.02,
+      "to_frac": 0.05,
+      "from_members": 159793,
+      "to_members": 399997,
+      "marginal_members": 240204,
+      "kl_divergence_bits": 0.0007502103815342757,
+      "js_divergence_bits": 0.00019476374705330838,
+      "marginal_entropy_gain_bits": 0.00026314452641074126,
+      "entropy_per_marginal_member": 1.0955043480156087e-09,
+      "gini_delta": 0.0053729505568334
+    },
+    {
+      "from_frac": 0.05,
+      "to_frac": 0.1,
+      "from_members": 399997,
+      "to_members": 798404,
+      "marginal_members": 398407,
+      "kl_divergence_bits": 0.0002802212767793235,
+      "js_divergence_bits": 7.306220727761903e-05,
+      "marginal_entropy_gain_bits": 0.000562866940199136,
+      "entropy_per_marginal_member": 1.4127938018135625e-09,
+      "gini_delta": 0.0029957461642122762
+    },
+    {
+      "from_frac": 0.1,
+      "to_frac": 0.2,
+      "from_members": 798404,
+      "to_members": 1596171,
+      "marginal_members": 797767,
+      "kl_divergence_bits": 0.0001525955756772202,
+      "js_divergence_bits": 3.926090591872069e-05,
+      "marginal_entropy_gain_bits": 0.0003638778375920637,
+      "entropy_per_marginal_member": 4.561204431770977e-10,
+      "gini_delta": 0.0021170747409873236
+    },
+    {
+      "from_frac": 0.2,
+      "to_frac": 0.4,
+      "from_members": 1596171,
+      "to_members": 3191891,
+      "marginal_members": 1595720,
+      "kl_divergence_bits": 0.00016527773984351894,
+      "js_divergence_bits": 3.0183866423255694e-05,
+      "marginal_entropy_gain_bits": 0.0010325161763171664,
+      "entropy_per_marginal_member": 6.470534782525546e-10,
+      "gini_delta": 0.0005682943583951161
+    },
+    {
+      "from_frac": 0.4,
+      "to_frac": 0.6,
+      "from_members": 3191891,
+      "to_members": 4786979,
+      "marginal_members": 1595088,
+      "kl_divergence_bits": 0.00016928316338474939,
+      "js_divergence_bits": 3.303749794811074e-05,
+      "marginal_entropy_gain_bits": -0.0010090014820729465,
+      "entropy_per_marginal_member": -6.325679097786118e-10,
+      "gini_delta": 9.417932881983226e-05
+    },
+    {
+      "from_frac": 0.6,
+      "to_frac": 0.8,
+      "from_members": 4786979,
+      "to_members": 6383200,
+      "marginal_members": 1596221,
+      "kl_divergence_bits": 0.00023154986497117666,
+      "js_divergence_bits": 3.921110900040208e-05,
+      "marginal_entropy_gain_bits": -0.0012970141431756232,
+      "entropy_per_marginal_member": -8.125529880734705e-10,
+      "gini_delta": 7.366571590639026e-05
+    },
+    {
+      "from_frac": 0.8,
+      "to_frac": 1.0,
+      "from_members": 6383200,
+      "to_members": 7977199,
+      "marginal_members": 1593999,
+      "kl_divergence_bits": 0.00024289309280905056,
+      "js_divergence_bits": 4.176014613888347e-05,
+      "marginal_entropy_gain_bits": 0.0019503222819299282,
+      "entropy_per_marginal_member": 1.2235404676727703e-09,
+      "gini_delta": -8.73670163754614e-05
+    }
+  ],
+  "conditional_information": {
+    "tier_mi_summary": [
+      {
+        "tier_a": "common",
+        "tier_b": "common",
+        "mean_mi": 0.0052783982663919485,
+        "median_mi": 0.0009177725042288028,
+        "max_mi": 0.12282376123283201,
+        "mean_cooccur": 0.014011333333333334,
+        "n_pairs": 100
+      }
+    ],
+    "overall_mean_mi": 0.0052783982663919485,
+    "overall_median_mi": 0.0009177725042288028,
+    "n_pairs_analyzed": 100
+  },
+  "marginal_member_curve": [
+    {
+      "n_members": 2000,
+      "unique_codes": 2520,
+      "unique_pairs": 164978,
+      "unique_bigrams": 267463,
+      "entropy_bits": 7.972137695310118,
+      "nonzero_codes": 2520,
+      "lob_code_counts": {
+        "Medicare": 1921,
+        "Commercial": 1956,
+        "Medicaid": 882
+      },
+      "age_code_counts": {
+        "senior": 1911,
+        "young_adult": 1342,
+        "pediatric": 1002,
+        "middle_adult": 1716
+      }
+    },
+    {
+      "n_members": 4000,
+      "unique_codes": 2949,
+      "unique_pairs": 241023,
+      "unique_bigrams": 399372,
+      "entropy_bits": 8.00432709919673,
+      "nonzero_codes": 2949,
+      "lob_code_counts": {
+        "Medicare": 2305,
+        "Commercial": 2341,
+        "Medicaid": 1135
+      },
+      "age_code_counts": {
+        "senior": 2320,
+        "young_adult": 1666,
+        "pediatric": 1235,
+        "middle_adult": 2070
+      }
+    },
+    {
+      "n_members": 6000,
+      "unique_codes": 3200,
+      "unique_pairs": 294423,
+      "unique_bigrams": 495844,
+      "entropy_bits": 8.00513360088234,
+      "nonzero_codes": 3200,
+      "lob_code_counts": {
+        "Medicare": 2518,
+        "Commercial": 2565,
+        "Medicaid": 1275
+      },
+      "age_code_counts": {
+        "senior": 2550,
+        "young_adult": 1850,
+        "pediatric": 1393,
+        "middle_adult": 2298
+      }
+    },
+    {
+      "n_members": 8000,
+      "unique_codes": 3372,
+      "unique_pairs": 340410,
+      "unique_bigrams": 577644,
+      "entropy_bits": 8.010616286609219,
+      "nonzero_codes": 3372,
+      "lob_code_counts": {
+        "Medicare": 2673,
+        "Commercial": 2713,
+        "Medicaid": 1400
+      },
+      "age_code_counts": {
+        "senior": 2718,
+        "young_adult": 1981,
+        "pediatric": 1517,
+        "middle_adult": 2437
+      }
+    },
+    {
+      "n_members": 10000,
+      "unique_codes": 3503,
+      "unique_pairs": 377981,
+      "unique_bigrams": 641126,
+      "entropy_bits": 8.007401546980345,
+      "nonzero_codes": 3503,
+      "lob_code_counts": {
+        "Medicare": 2798,
+        "Commercial": 2809,
+        "Medicaid": 1486
+      },
+      "age_code_counts": {
+        "senior": 2838,
+        "young_adult": 2072,
+        "pediatric": 1576,
+        "middle_adult": 2576
+      }
+    },
+    {
+      "n_members": 12000,
+      "unique_codes": 3631,
+      "unique_pairs": 414260,
+      "unique_bigrams": 704582,
+      "entropy_bits": 8.008198896336326,
+      "nonzero_codes": 3631,
+      "lob_code_counts": {
+        "Medicare": 2939,
+        "Commercial": 2925,
+        "Medicaid": 1548
+      },
+      "age_code_counts": {
+        "senior": 2974,
+        "young_adult": 2166,
+        "pediatric": 1658,
+        "middle_adult": 2680
+      }
+    },
+    {
+      "n_members": 14000,
+      "unique_codes": 3726,
+      "unique_pairs": 443881,
+      "unique_bigrams": 756645,
+      "entropy_bits": 8.006981339926956,
+      "nonzero_codes": 3726,
+      "lob_code_counts": {
+        "Medicare": 3051,
+        "Commercial": 2981,
+        "Medicaid": 1600
+      },
+      "age_code_counts": {
+        "senior": 3085,
+        "young_adult": 2244,
+        "pediatric": 1713,
+        "middle_adult": 2737
+      }
+    },
+    {
+      "n_members": 16000,
+      "unique_codes": 3804,
+      "unique_pairs": 470298,
+      "unique_bigrams": 803453,
+      "entropy_bits": 8.006814096568295,
+      "nonzero_codes": 3804,
+      "lob_code_counts": {
+        "Medicare": 3117,
+        "Commercial": 3054,
+        "Medicaid": 1652
+      },
+      "age_code_counts": {
+        "senior": 3160,
+        "young_adult": 2307,
+        "pediatric": 1784,
+        "middle_adult": 2801
+      }
+    },
+    {
+      "n_members": 18000,
+      "unique_codes": 3878,
+      "unique_pairs": 496622,
+      "unique_bigrams": 849255,
+      "entropy_bits": 8.008605138898067,
+      "nonzero_codes": 3878,
+      "lob_code_counts": {
+        "Medicare": 3188,
+        "Commercial": 3105,
+        "Medicaid": 1702
+      },
+      "age_code_counts": {
+        "senior": 3229,
+        "young_adult": 2355,
+        "pediatric": 1845,
+        "middle_adult": 2878
+      }
+    },
+    {
+      "n_members": 20000,
+      "unique_codes": 3931,
+      "unique_pairs": 518867,
+      "unique_bigrams": 889603,
+      "entropy_bits": 8.007695697029623,
+      "nonzero_codes": 3931,
+      "lob_code_counts": {
+        "Medicare": 3253,
+        "Commercial": 3139,
+        "Medicaid": 1738
+      },
+      "age_code_counts": {
+        "senior": 3285,
+        "young_adult": 2398,
+        "pediatric": 1874,
+        "middle_adult": 2938
+      }
+    },
+    {
+      "n_members": 22000,
+      "unique_codes": 3989,
+      "unique_pairs": 541316,
+      "unique_bigrams": 928358,
+      "entropy_bits": 8.008489113990676,
+      "nonzero_codes": 3989,
+      "lob_code_counts": {
+        "Medicare": 3301,
+        "Commercial": 3202,
+        "Medicaid": 1769
+      },
+      "age_code_counts": {
+        "senior": 3348,
+        "young_adult": 2459,
+        "pediatric": 1904,
+        "middle_adult": 2986
+      }
+    },
+    {
+      "n_members": 24000,
+      "unique_codes": 4037,
+      "unique_pairs": 561246,
+      "unique_bigrams": 964656,
+      "entropy_bits": 8.007843668324538,
+      "nonzero_codes": 4037,
+      "lob_code_counts": {
+        "Medicare": 3348,
+        "Commercial": 3246,
+        "Medicaid": 1787
+      },
+      "age_code_counts": {
+        "senior": 3401,
+        "young_adult": 2498,
+        "pediatric": 1935,
+        "middle_adult": 3027
+      }
+    },
+    {
+      "n_members": 26000,
+      "unique_codes": 4068,
+      "unique_pairs": 580959,
+      "unique_bigrams": 1000984,
+      "entropy_bits": 8.009787498009219,
+      "nonzero_codes": 4068,
+      "lob_code_counts": {
+        "Medicare": 3383,
+        "Commercial": 3282,
+        "Medicaid": 1819
+      },
+      "age_code_counts": {
+        "senior": 3432,
+        "young_adult": 2551,
+        "pediatric": 1961,
+        "middle_adult": 3062
+      }
+    },
+    {
+      "n_members": 28000,
+      "unique_codes": 4110,
+      "unique_pairs": 598838,
+      "unique_bigrams": 1033206,
+      "entropy_bits": 8.007461885981092,
+      "nonzero_codes": 4110,
+      "lob_code_counts": {
+        "Medicare": 3418,
+        "Commercial": 3317,
+        "Medicaid": 1860
+      },
+      "age_code_counts": {
+        "senior": 3470,
+        "young_adult": 2575,
+        "pediatric": 1994,
+        "middle_adult": 3105
+      }
+    },
+    {
+      "n_members": 30000,
+      "unique_codes": 4146,
+      "unique_pairs": 617021,
+      "unique_bigrams": 1064732,
+      "entropy_bits": 8.006699073921341,
+      "nonzero_codes": 4146,
+      "lob_code_counts": {
+        "Medicare": 3457,
+        "Commercial": 3355,
+        "Medicaid": 1885
+      },
+      "age_code_counts": {
+        "senior": 3508,
+        "young_adult": 2623,
+        "pediatric": 2026,
+        "middle_adult": 3138
+      }
+    },
+    {
+      "n_members": 32000,
+      "unique_codes": 4181,
+      "unique_pairs": 633220,
+      "unique_bigrams": 1093738,
+      "entropy_bits": 8.004579403513995,
+      "nonzero_codes": 4181,
+      "lob_code_counts": {
+        "Medicare": 3492,
+        "Commercial": 3381,
+        "Medicaid": 1916
+      },
+      "age_code_counts": {
+        "senior": 3540,
+        "young_adult": 2636,
+        "pediatric": 2044,
+        "middle_adult": 3172
+      }
+    },
+    {
+      "n_members": 34000,
+      "unique_codes": 4215,
+      "unique_pairs": 650934,
+      "unique_bigrams": 1123915,
+      "entropy_bits": 8.006129658637885,
+      "nonzero_codes": 4215,
+      "lob_code_counts": {
+        "Medicare": 3524,
+        "Commercial": 3415,
+        "Medicaid": 1936
+      },
+      "age_code_counts": {
+        "senior": 3571,
+        "young_adult": 2664,
+        "pediatric": 2080,
+        "middle_adult": 3213
+      }
+    },
+    {
+      "n_members": 36000,
+      "unique_codes": 4238,
+      "unique_pairs": 666441,
+      "unique_bigrams": 1151946,
+      "entropy_bits": 8.007259914921935,
+      "nonzero_codes": 4238,
+      "lob_code_counts": {
+        "Medicare": 3548,
+        "Commercial": 3449,
+        "Medicaid": 1957
+      },
+      "age_code_counts": {
+        "senior": 3607,
+        "young_adult": 2686,
+        "pediatric": 2092,
+        "middle_adult": 3243
+      }
+    },
+    {
+      "n_members": 38000,
+      "unique_codes": 4262,
+      "unique_pairs": 680673,
+      "unique_bigrams": 1176973,
+      "entropy_bits": 8.007045093421151,
+      "nonzero_codes": 4262,
+      "lob_code_counts": {
+        "Medicare": 3585,
+        "Commercial": 3472,
+        "Medicaid": 1971
+      },
+      "age_code_counts": {
+        "senior": 3646,
+        "young_adult": 2698,
+        "pediatric": 2115,
+        "middle_adult": 3268
+      }
+    },
+    {
+      "n_members": 40000,
+      "unique_codes": 4290,
+      "unique_pairs": 695764,
+      "unique_bigrams": 1203630,
+      "entropy_bits": 8.00715216218784,
+      "nonzero_codes": 4290,
+      "lob_code_counts": {
+        "Medicare": 3614,
+        "Commercial": 3509,
+        "Medicaid": 1996
+      },
+      "age_code_counts": {
+        "senior": 3671,
+        "young_adult": 2720,
+        "pediatric": 2130,
+        "middle_adult": 3303
+      }
+    },
+    {
+      "n_members": 42000,
+      "unique_codes": 4308,
+      "unique_pairs": 710316,
+      "unique_bigrams": 1229609,
+      "entropy_bits": 8.007456397568449,
+      "nonzero_codes": 4308,
+      "lob_code_counts": {
+        "Medicare": 3641,
+        "Commercial": 3542,
+        "Medicaid": 2017
+      },
+      "age_code_counts": {
+        "senior": 3695,
+        "young_adult": 2748,
+        "pediatric": 2152,
+        "middle_adult": 3341
+      }
+    },
+    {
+      "n_members": 44000,
+      "unique_codes": 4344,
+      "unique_pairs": 723427,
+      "unique_bigrams": 1253221,
+      "entropy_bits": 8.007334644266049,
+      "nonzero_codes": 4344,
+      "lob_code_counts": {
+        "Medicare": 3668,
+        "Commercial": 3576,
+        "Medicaid": 2044
+      },
+      "age_code_counts": {
+        "senior": 3733,
+        "young_adult": 2772,
+        "pediatric": 2175,
+        "middle_adult": 3378
+      }
+    },
+    {
+      "n_members": 46000,
+      "unique_codes": 4369,
+      "unique_pairs": 736665,
+      "unique_bigrams": 1276796,
+      "entropy_bits": 8.00802404570304,
+      "nonzero_codes": 4369,
+      "lob_code_counts": {
+        "Medicare": 3694,
+        "Commercial": 3605,
+        "Medicaid": 2061
+      },
+      "age_code_counts": {
+        "senior": 3756,
+        "young_adult": 2799,
+        "pediatric": 2191,
+        "middle_adult": 3406
+      }
+    },
+    {
+      "n_members": 48000,
+      "unique_codes": 4393,
+      "unique_pairs": 749312,
+      "unique_bigrams": 1298820,
+      "entropy_bits": 8.007529159807032,
+      "nonzero_codes": 4393,
+      "lob_code_counts": {
+        "Medicare": 3719,
+        "Commercial": 3636,
+        "Medicaid": 2081
+      },
+      "age_code_counts": {
+        "senior": 3783,
+        "young_adult": 2812,
+        "pediatric": 2220,
+        "middle_adult": 3447
+      }
+    },
+    {
+      "n_members": 50000,
+      "unique_codes": 4413,
+      "unique_pairs": 761628,
+      "unique_bigrams": 1320739,
+      "entropy_bits": 8.007179642216885,
+      "nonzero_codes": 4413,
+      "lob_code_counts": {
+        "Medicare": 3744,
+        "Commercial": 3652,
+        "Medicaid": 2100
+      },
+      "age_code_counts": {
+        "senior": 3802,
+        "young_adult": 2834,
+        "pediatric": 2241,
+        "middle_adult": 3469
+      }
+    },
+    {
+      "n_members": 52000,
+      "unique_codes": 4434,
+      "unique_pairs": 775286,
+      "unique_bigrams": 1343528,
+      "entropy_bits": 8.008040910393417,
+      "nonzero_codes": 4434,
+      "lob_code_counts": {
+        "Medicare": 3770,
+        "Commercial": 3676,
+        "Medicaid": 2116
+      },
+      "age_code_counts": {
+        "senior": 3827,
+        "young_adult": 2848,
+        "pediatric": 2270,
+        "middle_adult": 3499
+      }
+    },
+    {
+      "n_members": 54000,
+      "unique_codes": 4451,
+      "unique_pairs": 786067,
+      "unique_bigrams": 1362938,
+      "entropy_bits": 8.008398096333877,
+      "nonzero_codes": 4451,
+      "lob_code_counts": {
+        "Medicare": 3791,
+        "Commercial": 3689,
+        "Medicaid": 2134
+      },
+      "age_code_counts": {
+        "senior": 3849,
+        "young_adult": 2875,
+        "pediatric": 2280,
+        "middle_adult": 3511
+      }
+    },
+    {
+      "n_members": 56000,
+      "unique_codes": 4464,
+      "unique_pairs": 796132,
+      "unique_bigrams": 1381604,
+      "entropy_bits": 8.007751827773768,
+      "nonzero_codes": 4464,
+      "lob_code_counts": {
+        "Medicare": 3803,
+        "Commercial": 3711,
+        "Medicaid": 2139
+      },
+      "age_code_counts": {
+        "senior": 3864,
+        "young_adult": 2902,
+        "pediatric": 2299,
+        "middle_adult": 3525
+      }
+    },
+    {
+      "n_members": 58000,
+      "unique_codes": 4481,
+      "unique_pairs": 807453,
+      "unique_bigrams": 1401304,
+      "entropy_bits": 8.008867117518545,
+      "nonzero_codes": 4481,
+      "lob_code_counts": {
+        "Medicare": 3824,
+        "Commercial": 3735,
+        "Medicaid": 2150
+      },
+      "age_code_counts": {
+        "senior": 3884,
+        "young_adult": 2915,
+        "pediatric": 2319,
+        "middle_adult": 3553
+      }
+    },
+    {
+      "n_members": 60000,
+      "unique_codes": 4494,
+      "unique_pairs": 818124,
+      "unique_bigrams": 1419649,
+      "entropy_bits": 8.00805071895095,
+      "nonzero_codes": 4494,
+      "lob_code_counts": {
+        "Medicare": 3834,
+        "Commercial": 3751,
+        "Medicaid": 2168
+      },
+      "age_code_counts": {
+        "senior": 3901,
+        "young_adult": 2931,
+        "pediatric": 2325,
+        "middle_adult": 3567
+      }
+    },
+    {
+      "n_members": 62000,
+      "unique_codes": 4510,
+      "unique_pairs": 830047,
+      "unique_bigrams": 1440521,
+      "entropy_bits": 8.009800002236302,
+      "nonzero_codes": 4510,
+      "lob_code_counts": {
+        "Medicare": 3846,
+        "Commercial": 3774,
+        "Medicaid": 2178
+      },
+      "age_code_counts": {
+        "senior": 3920,
+        "young_adult": 2944,
+        "pediatric": 2347,
+        "middle_adult": 3591
+      }
+    },
+    {
+      "n_members": 64000,
+      "unique_codes": 4531,
+      "unique_pairs": 841394,
+      "unique_bigrams": 1460148,
+      "entropy_bits": 8.010218838394637,
+      "nonzero_codes": 4531,
+      "lob_code_counts": {
+        "Medicare": 3865,
+        "Commercial": 3793,
+        "Medicaid": 2194
+      },
+      "age_code_counts": {
+        "senior": 3945,
+        "young_adult": 2952,
+        "pediatric": 2360,
+        "middle_adult": 3605
+      }
+    },
+    {
+      "n_members": 66000,
+      "unique_codes": 4550,
+      "unique_pairs": 851779,
+      "unique_bigrams": 1478294,
+      "entropy_bits": 8.01032374554093,
+      "nonzero_codes": 4550,
+      "lob_code_counts": {
+        "Medicare": 3893,
+        "Commercial": 3808,
+        "Medicaid": 2207
+      },
+      "age_code_counts": {
+        "senior": 3971,
+        "young_adult": 2970,
+        "pediatric": 2384,
+        "middle_adult": 3625
+      }
+    },
+    {
+      "n_members": 68000,
+      "unique_codes": 4561,
+      "unique_pairs": 860827,
+      "unique_bigrams": 1494987,
+      "entropy_bits": 8.010377753453238,
+      "nonzero_codes": 4561,
+      "lob_code_counts": {
+        "Medicare": 3914,
+        "Commercial": 3819,
+        "Medicaid": 2217
+      },
+      "age_code_counts": {
+        "senior": 3979,
+        "young_adult": 2984,
+        "pediatric": 2395,
+        "middle_adult": 3647
+      }
+    },
+    {
+      "n_members": 70000,
+      "unique_codes": 4576,
+      "unique_pairs": 869993,
+      "unique_bigrams": 1511818,
+      "entropy_bits": 8.010625751771062,
+      "nonzero_codes": 4576,
+      "lob_code_counts": {
+        "Medicare": 3930,
+        "Commercial": 3831,
+        "Medicaid": 2230
+      },
+      "age_code_counts": {
+        "senior": 3998,
+        "young_adult": 3000,
+        "pediatric": 2403,
+        "middle_adult": 3663
+      }
+    },
+    {
+      "n_members": 72000,
+      "unique_codes": 4587,
+      "unique_pairs": 878886,
+      "unique_bigrams": 1528383,
+      "entropy_bits": 8.010157600841865,
+      "nonzero_codes": 4587,
+      "lob_code_counts": {
+        "Medicare": 3939,
+        "Commercial": 3844,
+        "Medicaid": 2245
+      },
+      "age_code_counts": {
+        "senior": 4008,
+        "young_adult": 3017,
+        "pediatric": 2414,
+        "middle_adult": 3671
+      }
+    },
+    {
+      "n_members": 74000,
+      "unique_codes": 4598,
+      "unique_pairs": 888815,
+      "unique_bigrams": 1545815,
+      "entropy_bits": 8.010584695182596,
+      "nonzero_codes": 4598,
+      "lob_code_counts": {
+        "Medicare": 3952,
+        "Commercial": 3861,
+        "Medicaid": 2256
+      },
+      "age_code_counts": {
+        "senior": 4015,
+        "young_adult": 3034,
+        "pediatric": 2422,
+        "middle_adult": 3699
+      }
+    },
+    {
+      "n_members": 76000,
+      "unique_codes": 4608,
+      "unique_pairs": 897983,
+      "unique_bigrams": 1561873,
+      "entropy_bits": 8.010749871977618,
+      "nonzero_codes": 4608,
+      "lob_code_counts": {
+        "Medicare": 3973,
+        "Commercial": 3878,
+        "Medicaid": 2263
+      },
+      "age_code_counts": {
+        "senior": 4031,
+        "young_adult": 3044,
+        "pediatric": 2431,
+        "middle_adult": 3720
+      }
+    },
+    {
+      "n_members": 78000,
+      "unique_codes": 4627,
+      "unique_pairs": 907779,
+      "unique_bigrams": 1578340,
+      "entropy_bits": 8.01210880509485,
+      "nonzero_codes": 4627,
+      "lob_code_counts": {
+        "Medicare": 4002,
+        "Commercial": 3894,
+        "Medicaid": 2275
+      },
+      "age_code_counts": {
+        "senior": 4047,
+        "young_adult": 3062,
+        "pediatric": 2447,
+        "middle_adult": 3741
+      }
+    },
+    {
+      "n_members": 80000,
+      "unique_codes": 4637,
+      "unique_pairs": 916844,
+      "unique_bigrams": 1593908,
+      "entropy_bits": 8.011596035121284,
+      "nonzero_codes": 4637,
+      "lob_code_counts": {
+        "Medicare": 4013,
+        "Commercial": 3911,
+        "Medicaid": 2284
+      },
+      "age_code_counts": {
+        "senior": 4057,
+        "young_adult": 3079,
+        "pediatric": 2459,
+        "middle_adult": 3759
+      }
+    },
+    {
+      "n_members": 82000,
+      "unique_codes": 4645,
+      "unique_pairs": 923862,
+      "unique_bigrams": 1607379,
+      "entropy_bits": 8.01116309675687,
+      "nonzero_codes": 4645,
+      "lob_code_counts": {
+        "Medicare": 4019,
+        "Commercial": 3921,
+        "Medicaid": 2293
+      },
+      "age_code_counts": {
+        "senior": 4062,
+        "young_adult": 3087,
+        "pediatric": 2474,
+        "middle_adult": 3774
+      }
+    },
+    {
+      "n_members": 84000,
+      "unique_codes": 4656,
+      "unique_pairs": 932566,
+      "unique_bigrams": 1623203,
+      "entropy_bits": 8.010726080663485,
+      "nonzero_codes": 4656,
+      "lob_code_counts": {
+        "Medicare": 4027,
+        "Commercial": 3931,
+        "Medicaid": 2299
+      },
+      "age_code_counts": {
+        "senior": 4071,
+        "young_adult": 3099,
+        "pediatric": 2487,
+        "middle_adult": 3788
+      }
+    },
+    {
+      "n_members": 86000,
+      "unique_codes": 4666,
+      "unique_pairs": 941133,
+      "unique_bigrams": 1638591,
+      "entropy_bits": 8.01077753523561,
+      "nonzero_codes": 4666,
+      "lob_code_counts": {
+        "Medicare": 4036,
+        "Commercial": 3940,
+        "Medicaid": 2305
+      },
+      "age_code_counts": {
+        "senior": 4082,
+        "young_adult": 3111,
+        "pediatric": 2498,
+        "middle_adult": 3801
+      }
+    },
+    {
+      "n_members": 88000,
+      "unique_codes": 4675,
+      "unique_pairs": 949040,
+      "unique_bigrams": 1653745,
+      "entropy_bits": 8.010343675389615,
+      "nonzero_codes": 4675,
+      "lob_code_counts": {
+        "Medicare": 4044,
+        "Commercial": 3956,
+        "Medicaid": 2314
+      },
+      "age_code_counts": {
+        "senior": 4093,
+        "young_adult": 3127,
+        "pediatric": 2507,
+        "middle_adult": 3814
+      }
+    },
+    {
+      "n_members": 90000,
+      "unique_codes": 4683,
+      "unique_pairs": 957613,
+      "unique_bigrams": 1668436,
+      "entropy_bits": 8.010616184864528,
+      "nonzero_codes": 4683,
+      "lob_code_counts": {
+        "Medicare": 4055,
+        "Commercial": 3971,
+        "Medicaid": 2331
+      },
+      "age_code_counts": {
+        "senior": 4105,
+        "young_adult": 3147,
+        "pediatric": 2514,
+        "middle_adult": 3831
+      }
+    },
+    {
+      "n_members": 92000,
+      "unique_codes": 4699,
+      "unique_pairs": 966806,
+      "unique_bigrams": 1682965,
+      "entropy_bits": 8.010868400736207,
+      "nonzero_codes": 4699,
+      "lob_code_counts": {
+        "Medicare": 4073,
+        "Commercial": 3981,
+        "Medicaid": 2339
+      },
+      "age_code_counts": {
+        "senior": 4123,
+        "young_adult": 3169,
+        "pediatric": 2539,
+        "middle_adult": 3847
+      }
+    },
+    {
+      "n_members": 94000,
+      "unique_codes": 4706,
+      "unique_pairs": 974345,
+      "unique_bigrams": 1696473,
+      "entropy_bits": 8.01050273980149,
+      "nonzero_codes": 4706,
+      "lob_code_counts": {
+        "Medicare": 4084,
+        "Commercial": 3988,
+        "Medicaid": 2348
+      },
+      "age_code_counts": {
+        "senior": 4131,
+        "young_adult": 3183,
+        "pediatric": 2548,
+        "middle_adult": 3861
+      }
+    },
+    {
+      "n_members": 96000,
+      "unique_codes": 4711,
+      "unique_pairs": 982141,
+      "unique_bigrams": 1710063,
+      "entropy_bits": 8.010465538661428,
+      "nonzero_codes": 4711,
+      "lob_code_counts": {
+        "Medicare": 4093,
+        "Commercial": 3993,
+        "Medicaid": 2352
+      },
+      "age_code_counts": {
+        "senior": 4140,
+        "young_adult": 3195,
+        "pediatric": 2554,
+        "middle_adult": 3877
+      }
+    },
+    {
+      "n_members": 98000,
+      "unique_codes": 4722,
+      "unique_pairs": 990704,
+      "unique_bigrams": 1724626,
+      "entropy_bits": 8.011341914816514,
+      "nonzero_codes": 4722,
+      "lob_code_counts": {
+        "Medicare": 4104,
+        "Commercial": 4003,
+        "Medicaid": 2361
+      },
+      "age_code_counts": {
+        "senior": 4150,
+        "young_adult": 3203,
+        "pediatric": 2561,
+        "middle_adult": 3887
+      }
+    },
+    {
+      "n_members": 100000,
+      "unique_codes": 4732,
+      "unique_pairs": 998187,
+      "unique_bigrams": 1737559,
+      "entropy_bits": 8.011916566282723,
+      "nonzero_codes": 4732,
+      "lob_code_counts": {
+        "Medicare": 4118,
+        "Commercial": 4009,
+        "Medicaid": 2369
+      },
+      "age_code_counts": {
+        "senior": 4160,
+        "young_adult": 3209,
+        "pediatric": 2568,
+        "middle_adult": 3904
+      }
+    }
+  ],
+  "saturation_estimates": {
+    "codes": {
+      "a": 549.2837855747214,
+      "b": -1548.5610749082657,
+      "r_squared": 0.9959708922905808,
+      "saturation_99pct": 200000.0
+    },
+    "pairs": {
+      "a": 239306.23236896304,
+      "b": -1809290.250192715,
+      "r_squared": 0.968736935296183,
+      "saturation_99pct": 200000.0
+    },
+    "entropy": {
+      "a": 0.004123939205339645,
+      "b": 7.964493199946095,
+      "r_squared": 0.4385213994912832,
+      "saturation_99pct": 200000.0
+    }
+  },
+  "lob_stratified": {
+    "Commercial": {
+      "n_members": 1070268,
+      "n_nonzero_codes": 3551,
+      "gini": 0.9183431318050557,
+      "entropy_bits": 7.970162956250043,
+      "novelty_rate_day_10": 0.2501968458464373,
+      "novelty_rate_day_50": 0.12387694143124106,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 365995,
+        "total_same_day_pair_occurrences": 7850794,
+        "same_day_pair_entropy_bits": 14.501798493719507,
+        "same_day_pair_gini": 0.8787831901830023,
+        "n_unique_temporal_bigrams": 553844,
+        "temporal_bigram_entropy_bits": 14.971815912905912,
+        "n_unique_skip2grams": 553986,
+        "skip2gram_entropy_bits": 14.974169993399807,
+        "n_unique_skip3grams": 548868,
+        "skip3gram_entropy_bits": 14.990771736060765,
+        "tier_pair_diversity": {
+          "('common', 'common')": 229662,
+          "('common', 'medium')": 112800,
+          "('medium', 'medium')": 6261,
+          "('common', 'rare')": 14901,
+          "('medium', 'rare')": 1299,
+          "('rare', 'rare')": 125,
+          "('common', 'tail')": 842,
+          "('medium', 'tail')": 66,
+          "('rare', 'tail')": 38,
+          "('tail', 'tail')": 1
+        },
+        "lob_pair_total_occurrences": {
+          "Commercial": 7850794
+        },
+        "age_pair_total_occurrences": {
+          "middle_adult": 3997533,
+          "young_adult": 1971643,
+          "senior": 1184739,
+          "pediatric": 696879
+        }
+      }
+    },
+    "Medicaid": {
+      "n_members": 127372,
+      "n_nonzero_codes": 2596,
+      "gini": 0.9160822002578533,
+      "entropy_bits": 7.014048738648327,
+      "novelty_rate_day_10": 0.1472137191232615,
+      "novelty_rate_day_50": 0.046052631578947366,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 203500,
+        "total_same_day_pair_occurrences": 3930033,
+        "same_day_pair_entropy_bits": 13.492458810326463,
+        "same_day_pair_gini": 0.8793225409262542,
+        "n_unique_temporal_bigrams": 340647,
+        "temporal_bigram_entropy_bits": 13.206412391387563,
+        "n_unique_skip2grams": 331124,
+        "skip2gram_entropy_bits": 13.208541983665326,
+        "n_unique_skip3grams": 319366,
+        "skip3gram_entropy_bits": 13.209977741795196,
+        "tier_pair_diversity": {
+          "('common', 'common')": 132691,
+          "('common', 'medium')": 59951,
+          "('medium', 'medium')": 5348,
+          "('common', 'rare')": 4379,
+          "('medium', 'rare')": 758,
+          "('rare', 'rare')": 41,
+          "('common', 'tail')": 278,
+          "('medium', 'tail')": 47,
+          "('rare', 'tail')": 7
+        },
+        "lob_pair_total_occurrences": {
+          "Medicaid": 3930033
+        },
+        "age_pair_total_occurrences": {
+          "pediatric": 1703631,
+          "senior": 410429,
+          "young_adult": 1009108,
+          "middle_adult": 806865
+        }
+      }
+    },
+    "Medicare": {
+      "n_members": 569413,
+      "n_nonzero_codes": 3811,
+      "gini": 0.9276820685192417,
+      "entropy_bits": 7.734094713028043,
+      "novelty_rate_day_10": 0.2477029827558562,
+      "novelty_rate_day_50": 0.1035025274917377,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 537756,
+        "total_same_day_pair_occurrences": 20722895,
+        "same_day_pair_entropy_bits": 14.225258536196021,
+        "same_day_pair_gini": 0.9149006411893492,
+        "n_unique_temporal_bigrams": 708425,
+        "temporal_bigram_entropy_bits": 14.467437858890772,
+        "n_unique_skip2grams": 711048,
+        "skip2gram_entropy_bits": 14.475815365773219,
+        "n_unique_skip3grams": 711152,
+        "skip3gram_entropy_bits": 14.490835454712041,
+        "tier_pair_diversity": {
+          "('common', 'common')": 295671,
+          "('common', 'medium')": 183562,
+          "('medium', 'medium')": 12851,
+          "('common', 'rare')": 38508,
+          "('medium', 'rare')": 4334,
+          "('rare', 'rare')": 571,
+          "('common', 'tail')": 1967,
+          "('medium', 'tail')": 218,
+          "('rare', 'tail')": 68,
+          "('tail', 'tail')": 6
+        },
+        "lob_pair_total_occurrences": {
+          "Medicare": 20722895
+        },
+        "age_pair_total_occurrences": {
+          "middle_adult": 2041687,
+          "senior": 18566772,
+          "young_adult": 114436
+        }
+      }
+    }
+  },
+  "age_stratified": {
+    "middle_adult": {
+      "n_members": 591412,
+      "n_nonzero_codes": 3633,
+      "gini": 0.9225026232676887,
+      "entropy_bits": 7.987678659742941,
+      "novelty_rate_day_10": 0.24728907594214525,
+      "novelty_rate_day_50": 0.12573292123435068,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 398151,
+        "total_same_day_pair_occurrences": 9323770,
+        "same_day_pair_entropy_bits": 14.580160707288966,
+        "same_day_pair_gini": 0.8848352674687241,
+        "n_unique_temporal_bigrams": 563818,
+        "temporal_bigram_entropy_bits": 15.016021567943822,
+        "n_unique_skip2grams": 565165,
+        "skip2gram_entropy_bits": 15.023260218177459,
+        "n_unique_skip3grams": 561675,
+        "skip3gram_entropy_bits": 15.034339468278585,
+        "tier_pair_diversity": {
+          "('common', 'common')": 246386,
+          "('common', 'medium')": 123810,
+          "('medium', 'medium')": 6762,
+          "('common', 'rare')": 18387,
+          "('medium', 'rare')": 1804,
+          "('rare', 'rare')": 185,
+          "('common', 'tail')": 751,
+          "('rare', 'tail')": 19,
+          "('medium', 'tail')": 47
+        },
+        "lob_pair_total_occurrences": {
+          "Commercial": 7144692,
+          "Medicare": 2008523,
+          "Medicaid": 170555
+        },
+        "age_pair_total_occurrences": {
+          "middle_adult": 9323770
+        }
+      }
+    },
+    "pediatric": {
+      "n_members": 197999,
+      "n_nonzero_codes": 2897,
+      "gini": 0.9274312944434433,
+      "entropy_bits": 7.234630530009377,
+      "novelty_rate_day_10": 0.21822235880287208,
+      "novelty_rate_day_50": 0.0825545800667181,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 220746,
+        "total_same_day_pair_occurrences": 5047612,
+        "same_day_pair_entropy_bits": 13.167094885065147,
+        "same_day_pair_gini": 0.8958339790455654,
+        "n_unique_temporal_bigrams": 344026,
+        "temporal_bigram_entropy_bits": 13.356329850286176,
+        "n_unique_skip2grams": 341090,
+        "skip2gram_entropy_bits": 13.368699412092953,
+        "n_unique_skip3grams": 334686,
+        "skip3gram_entropy_bits": 13.383593515116127,
+        "tier_pair_diversity": {
+          "('common', 'common')": 132930,
+          "('common', 'medium')": 72531,
+          "('medium', 'medium')": 6011,
+          "('common', 'rare')": 7712,
+          "('medium', 'rare')": 983,
+          "('common', 'tail')": 464,
+          "('rare', 'tail')": 4,
+          "('medium', 'tail')": 58,
+          "('rare', 'rare')": 52,
+          "('tail', 'tail')": 1
+        },
+        "lob_pair_total_occurrences": {
+          "Commercial": 3966490,
+          "Medicaid": 1081122
+        },
+        "age_pair_total_occurrences": {
+          "pediatric": 5047612
+        }
+      }
+    },
+    "senior": {
+      "n_members": 625786,
+      "n_nonzero_codes": 3778,
+      "gini": 0.9270660483179713,
+      "entropy_bits": 7.787478319620782,
+      "novelty_rate_day_10": 0.24473806505509083,
+      "novelty_rate_day_50": 0.10730889763718941,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 514659,
+        "total_same_day_pair_occurrences": 18892172,
+        "same_day_pair_entropy_bits": 14.274060927925147,
+        "same_day_pair_gini": 0.9120820619975669,
+        "n_unique_temporal_bigrams": 691831,
+        "temporal_bigram_entropy_bits": 14.549080160566783,
+        "n_unique_skip2grams": 694682,
+        "skip2gram_entropy_bits": 14.558638160882413,
+        "n_unique_skip3grams": 694504,
+        "skip3gram_entropy_bits": 14.574088563224905,
+        "tier_pair_diversity": {
+          "('common', 'common')": 286973,
+          "('common', 'medium')": 174482,
+          "('medium', 'medium')": 12082,
+          "('common', 'rare')": 35504,
+          "('medium', 'rare')": 3970,
+          "('rare', 'rare')": 434,
+          "('common', 'tail')": 1120,
+          "('medium', 'tail')": 76,
+          "('rare', 'tail')": 15,
+          "('tail', 'tail')": 3
+        },
+        "lob_pair_total_occurrences": {
+          "Commercial": 1920019,
+          "Medicare": 16887519,
+          "Medicaid": 84634
+        },
+        "age_pair_total_occurrences": {
+          "senior": 18892172
+        }
+      }
+    },
+    "young_adult": {
+      "n_members": 351856,
+      "n_nonzero_codes": 3368,
+      "gini": 0.9289706091953622,
+      "entropy_bits": 7.577182724553117,
+      "novelty_rate_day_10": 0.23696581170220488,
+      "novelty_rate_day_50": 0.11148971605284867,
+      "cooccurrence": {
+        "n_unique_same_day_pairs": 300750,
+        "total_same_day_pair_occurrences": 6610409,
+        "same_day_pair_entropy_bits": 14.1439999296428,
+        "same_day_pair_gini": 0.883186527624757,
+        "n_unique_temporal_bigrams": 443149,
+        "temporal_bigram_entropy_bits": 14.33446529665504,
+        "n_unique_skip2grams": 442564,
+        "skip2gram_entropy_bits": 14.334273013142358,
+        "n_unique_skip3grams": 438367,
+        "skip3gram_entropy_bits": 14.347589432045332,
+        "tier_pair_diversity": {
+          "('common', 'common')": 189451,
+          "('common', 'medium')": 92779,
+          "('medium', 'medium')": 6020,
+          "('common', 'rare')": 10525,
+          "('medium', 'rare')": 1109,
+          "('common', 'tail')": 694,
+          "('rare', 'rare')": 81,
+          "('medium', 'tail')": 77,
+          "('rare', 'tail')": 13,
+          "('tail', 'tail')": 1
+        },
+        "lob_pair_total_occurrences": {
+          "Commercial": 6006814,
+          "Medicaid": 373053,
+          "Medicare": 230542
+        },
+        "age_pair_total_occurrences": {
+          "young_adult": 6610409
+        }
+      }
+    }
+  },
+  "core_vs_marginal": {
+    "dt_cnt": {
+      "core_mean": 30.227066666666666,
+      "core_median": 19.0,
+      "marginal_mean": 29.703097676742445,
+      "marginal_median": 19.0,
+      "mannwhitney_p": 0.5939093112354163,
+      "effect_direction": "core > marginal"
+    },
+    "unique_codes": {
+      "core_mean": 29.914666666666665,
+      "core_median": 23.0,
+      "marginal_mean": 29.821633774669,
+      "marginal_median": 23.0,
+      "mannwhitney_p": 0.42243635301555094,
+      "effect_direction": "core > marginal"
+    },
+    "approx_pairs": {
+      "core_mean": 360.18573333333336,
+      "core_median": 142.0,
+      "marginal_mean": 366.27329502872846,
+      "marginal_median": 139.0,
+      "mannwhitney_p": 0.47784307409247173,
+      "effect_direction": "marginal > core"
+    },
+    "total_occurrences": {
+      "core_mean": 102.34376666666667,
+      "core_median": 66.0,
+      "marginal_mean": 102.00387209592806,
+      "marginal_median": 65.0,
+      "mannwhitney_p": 0.4412458425628658,
+      "effect_direction": "core > marginal"
+    },
+    "codes_per_day": {
+      "core_mean": 4.7641473798150695,
+      "core_median": 2.5673658733360227,
+      "marginal_mean": 4.757955561974108,
+      "marginal_median": 2.544657097288676,
+      "mannwhitney_p": 0.43795308857888393,
+      "effect_direction": "core > marginal"
+    },
+    "code_density": {
+      "core_mean": 1.588008098963099,
+      "core_median": 1.0,
+      "marginal_mean": 1.5720419251733586,
+      "marginal_median": 1.0,
+      "mannwhitney_p": 0.6433316178397914,
+      "effect_direction": "core > marginal"
+    },
+    "lob_composition": {
+      "core": {
+        "Commercial": 0.5394333333333333,
+        "Medicare": 0.3318333333333333,
+        "Medicaid": 0.12873333333333334
+      },
+      "marginal": {
+        "Commercial": 0.5286035473394953,
+        "Medicare": 0.3417436922308269,
+        "Medicaid": 0.12965276042967774
+      }
+    },
+    "age_composition": {
+      "core": {
+        "senior": 0.3567,
+        "middle_adult": 0.3208666666666667,
+        "young_adult": 0.19223333333333334,
+        "pediatric": 0.1302
+      },
+      "marginal": {
+        "senior": 0.36809892580564574,
+        "middle_adult": 0.3040219835123657,
+        "young_adult": 0.1962278291281539,
+        "pediatric": 0.13165126155383464
+      }
+    }
+  }
+}
