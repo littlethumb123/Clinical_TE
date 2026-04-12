@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(jq -r '.cells[318].id // \"\"\"\"no-id\"\"\"\"')",
+      "Bash(jq -r '.cells[317].id // \"\"\"\"no-id\"\"\"\"')",
+      "Bash(jq -r '.cells[311].id // \"\"\"\"no-id\"\"\"\"')",
+      "Bash(NB=\"/Users/a964286/Documents/Projects/Clinical_TE/Clinical_TE/dev/moe/moe_flashattn_5_1.ipynb\" cat \"$NB\")",
+      "Bash(NB=\"/Users/a964286/Documents/Projects/Clinical_TE/Clinical_TE/dev/moe/moe_flashattn_5_1.ipynb\" for i in 314 315 316 317 318)",
+      "Bash(do echo:*)",
+      "Bash(NB=\"/Users/a964286/Documents/Projects/Clinical_TE/Clinical_TE/dev/moe/moe_flashattn_5_1.ipynb\" __NEW_LINE_35f9df93eee95a6c__ echo \"=== STEP 1 \\(Cell 314\\) - Full content ===\" cat \"$NB\")",
+      "Bash(NB=\"/Users/a964286/Documents/Projects/Clinical_TE/Clinical_TE/dev/moe/moe_flashattn_5_1.ipynb\" __NEW_LINE_69a061874b1099e3__ echo \"=== Verify compute_cooccurrence_embeddings signature ===\" cat \"$NB\")"
     ]
   }
 }

@@ -7340,6 +7340,8 @@ def save_checkpoint(
     scheduler: Any,
     scaler: Optional[GradScaler],
     metrics: Dict,
+    config: BaseConfig = None,
+    moe_config: Optional[MoEConfig] = None,
     is_best: bool = False,
     keep_last_n: int = 1,  # Only keep last N epoch checkpoints
     save_optimizer: bool = True  # Option to skip optimizer for final save
@@ -7380,6 +7382,18 @@ def save_checkpoint(
         'metrics': metrics,
         'timestamp': time.time(),
         'model_type': type(actual_model).__name__,
+        'config': {
+            'embedding_size': config.embedding_size,
+            'nhid': config.nhid,
+            'nhead': getattr(config, 'nhead', 8),
+            'nlayers': config.nlayers,
+            'dropout': config.dropout,
+            'use_learnt_att_pool': getattr(config, 'use_learnt_att_pool', False),
+            'use_swiglu': getattr(config, 'use_swiglu', True),
+            'use_rope': getattr(config, 'use_rope', True),
+            'use_flash': getattr(config, 'use_flash', True),
+        } if config else None,
+        'moe_config': vars(moe_config) if moe_config else None,
         'scheduler_config': {
             'type': type(scheduler).__name__,
             'total_steps': getattr(scheduler, '_total_steps', None),  # If you store it
@@ -11218,6 +11232,8 @@ def run_single_experiment(
             scheduler=scheduler,
             scaler=scaler,
             metrics=epoch_history,
+            config=config,
+            moe_config=moe_config,
             is_best=is_best
         )
         

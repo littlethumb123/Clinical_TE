@@ -334,8 +334,19 @@ def load_model_from_checkpoint(
             inferred_d_ff = config_dict.get('nhid', 512)
             if verbose:
                 print(f"Using nhid as d_ff fallback: {inferred_d_ff}")
-        
-        
+
+    # For non-MoE FlashAttention models, infer nhid from dense FFN weight shapes
+    inferred_nhid = None
+    if 'FlashMoE' not in model_type:
+        for key in state_dict.keys():
+            if 'temporal_layers.0.ffn.w_gate.weight' in key:
+                d_ff_adjusted = state_dict[key].shape[0]
+                inferred_nhid = (d_ff_adjusted * 3 + 1) // 2
+                if verbose:
+                    print(f"  Inferred nhid from FFN weights: {inferred_nhid} "
+                          f"(d_ff_adjusted={d_ff_adjusted})")
+                break
+
     # Reconstruct config based on model type
     moe_config = None
     
@@ -387,13 +398,17 @@ def load_model_from_checkpoint(
         
     elif 'FlashAttention' in model_type:
         # Flash Attention model (no MoE)
+        nhid_to_use = inferred_nhid or config_dict.get('nhid', 512)
+        if verbose and config_dict.get('nhid') and inferred_nhid and config_dict['nhid'] != inferred_nhid:
+            print(f"  Warning: config nhid={config_dict['nhid']} vs inferred nhid={inferred_nhid}, "
+                  f"using weight-inferred value")
         config = FlashAttentionConfig(
             embedding_size=config_dict.get('embedding_size', 256),
-            nhid=config_dict.get('nhid', 512),
+            nhid=nhid_to_use,
             nhead=config_dict.get('nhead', 8),
             nlayers=config_dict.get('nlayers', 6),
             dropout=config_dict.get('dropout', 0.1),
-            use_learnt_att_pool=config_dict.get('use_learnt_att_pool', True),
+            use_learnt_att_pool=use_learnt_att_pool_inferred,
             use_swiglu=config_dict.get('use_swiglu', True),
             use_rope=config_dict.get('use_rope', True),
             use_flash=config_dict.get('use_flash', True),
