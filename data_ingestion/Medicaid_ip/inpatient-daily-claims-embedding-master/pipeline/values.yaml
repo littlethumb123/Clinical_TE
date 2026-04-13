@@ -1,0 +1,22 @@
+test:
+  skip: true
+  scan:
+    enabled: false
+build:
+  scan:
+    enabled: false
+#bake:
+#  scan:
+#    enabled: false
+analyze:
+  git:
+    enabled: false
+deploy:
+  defaultModifier: hcb
+  enabled: true
+  type: dag
+  composer:
+    labels:
+      composer-version: 6
+  # type: gcs
+  # source: src

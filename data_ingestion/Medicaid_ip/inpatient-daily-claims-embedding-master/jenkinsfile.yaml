@@ -1,0 +1,4 @@
+// see centralized jenkinsfile repo for available templates!
+// reference: https://github.aetna.com/io-cloud/jenkinsfiles
+
+pipeline_template: jenkinsfile-11.groovy

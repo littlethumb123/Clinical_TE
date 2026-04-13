@@ -1,0 +1,983 @@
+#import nvidia_smi
+#import cupy as cp
+import pandas as pd
+
+#import holoviews
+#from holoviews.core.data.cudf import pandas as pd
+#import cudf
+#import dask_cudf
+#import cudf.pandas
+#cudf.pandas.install()
+
+#import cudf.pandas as pd
+import random
+random.seed(1234)
+import numpy as np
+import gc
+gc.collect()
+from sklearn.model_selection import train_test_split
+import os
+import math
+import torch
+torch.manual_seed(123)
+import torch.nn as nn
+from torch import optim
+import torch.nn.functional as F
+from torch.nn import TransformerEncoder, TransformerEncoderLayer, TransformerDecoderLayer, TransformerDecoder
+import torch.distributed
+from joblib import Parallel, delayed
+import multiprocessing
+from io import open
+import argparse
+import time
+import math
+import torch.onnx
+import os
+import pickle
+#from multiprocessing import cpu_count, Pool
+from datetime import date, timedelta, datetime
+from google.cloud import storage
+import joblib
+from io import BytesIO
+import google.auth
+from google.auth import impersonated_credentials
+import pytz
+import json
+#from pynvml.smi import nvidia_smi
+#nvsmi = nvidia_smi.getInstance()
+
+import traceback
+import warnings
+warnings.filterwarnings("ignore")
+#from .bq_utils import bq_utils
+#from .gs_utils import gs_utils
+
+# Imports Python standard library logging
+import logging
+
+logging.basicConfig(level=logging.INFO)
+pylogger = logging.getLogger(__name__)
+
+
+from google.cloud import bigquery
+#client = bigquery.Client()
+
+credentials, project= google.auth.default()
+print('credentials:', credentials, ', project:', project)
+
+
+########### PROCESS ARGUMENTS ##################
+
+def transformer_embeddings_args(istest):
+    # Instantiate our parser – and supply a description for the help mode
+    parser = argparse.ArgumentParser(description="Python Argparse  for accp_features_ffe")
+    parser.add_argument('--resource_sa=', required=True, type=str, action='store', dest='resource_sa', help="Specify resource service account --resource_sa=<resource_sa> ")
+    parser.add_argument('--bqdb=', required=True, type=str, action='store', dest='bqdb', help="Specify BQ schema argument, e.g.,  --bqdb=clin_analytics_hcb_dev ")
+    parser.add_argument('--tabprefix=', required=True, type=str, action='store', dest='tabprefix', help="Specify tabprefix argument for features, e.g., --tabprefix=cp_ip_pttr .")
+    parser.add_argument('--envtype=', required=True, type=str, action='store', dest='envtype', help="Specify environment type - one of dev | test | prod ")
+    parser.add_argument('--owner=', required=True, type=str, action='store', dest='owner', help="Specify 'owner' argument, e.g., --owner=zhongc_aetna_com ")
+    parser.add_argument('--costcenter=', required=True, type=str, action='store', dest='costcenter', help="Specify costcenter argument, e.g., --costcenter=13070 .")
+    parser.add_argument('--tenant=', required=True, type=str, action='store', dest='tenant', help="Specify tenant argument, e.g.,  --tenant=clin-analytics-hcb ")
+    parser.add_argument('--tgt_bucket_name=', required=True, type=str, action='store', dest='tgt_bucket_name', help="Specify model storage bucket argument, e.g.,  --tgt_bucket_name=clin-analytics-data-hcb-dev ")
+    parser.add_argument('--tgt_model_path=', required=True, type=str, action='store', dest='tgt_model_path', help="Specify model filepath argument, e.g.,  --tgt_model_path=<path> ")
+    parser.add_argument('--tgt_model_name=', required=True, type=str, action='store', dest='tgt_model_name', help="Specify model filename argument, e.g.,  --tgt_model_name=bestModel ")
+    parser.add_argument('--tgt_data_path=', required=True, type=str, action='store', dest='tgt_data_path', help="Specify data filepath argument, e.g.,  --tgt_data_path=<path> ")
+    parser.add_argument('--clustertag=', required=True, type=str, action='store', dest='clustertag', help="Specify data cluster tag argument, e.g., one of g2l4 | a2a100 | vertexai ")
+    parser.add_argument('--mppgpus=', required=True, type=str, action='store', dest='mppgpus', help="Specify number og NVIDIA GPUs in a cluster node, e.g. 1, 2, or 8 ")
+    parser.add_argument('--smpl_tbl=', required=True, type=str, action='store', dest='smpl_tbl', help="Specify Transformer base argument (data input to transformer), e.g., --smpl_tbl=clin_analytics_hcb_dev.daily_claims_transformer_input .")
+    parser.add_argument('--scores_dt=', required=True, type=str, action='store', dest='scores_dt', help="Specify scores_dt suffix of the transformer input table, e.g., --scores_dt=_20220316 .")
+
+    argset = parser.parse_args()
+    argset.smpl_tbl='clin_analytics_hcb_dev.me_rap_daily_clm_transformer_o3_score_ending_tmp'
+    argset.scores_dt=''
+    argset.tabprefix='me_rap_daily_clm_transformer'
+    return argset.resource_sa, argset.bqdb, argset.tabprefix, argset.envtype, argset.owner, argset.costcenter, argset.tenant, \
+        argset.tgt_bucket_name, argset.tgt_model_path, argset.tgt_model_name, argset.tgt_data_path, \
+        argset.clustertag, argset.mppgpus, argset.smpl_tbl, argset.scores_dt
+
+#################################
+
+
+#################################
+### class bq_utils
+#################################
+
+class bq_utils:     ### TODO make referencing accp_utils/bq_utils.py work in Dataproc DAGs
+    @staticmethod
+    def get_bigquery_client(resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com"):
+        credentials, project= google.auth.default()
+        envname = f'{project}'.split('-')[-1]
+        #target_credentials = impersonated_credentials.Credentials(credentials, target_principal=resource_sa, target_scopes = ["https://www.googleapis.com/auth/cloud-platform"])
+        target_credentials = credentials
+        client = bigquery.Client(credentials=target_credentials)
+        return client
+
+    @staticmethod
+    def sql_exec(sql_query, resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com", bqclient = None, run_in_batch=False):
+        if (bqclient == None):
+            bq_client= bq_utils.get_bigquery_client(resource_sa)
+        else:
+            bq_client = bqclient
+        if (run_in_batch):
+            job_config = bigquery.QueryJobConfig(
+                # Run at batch priority, which won't count toward concurrent rate limit.
+                priority=bigquery.QueryPriority.BATCH
+            )
+            query_job = bq_client.query(sql_query,job_config=job_config)
+        else:
+            query_job = bq_client.query(sql_query)
+        return query_job.result()
+
+    @staticmethod
+    def query_db(sql_query, resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com", bqclient = None, run_in_batch=False):
+        if (bqclient == None):
+            bq_client= bq_utils.get_bigquery_client(resource_sa)
+        else:
+            bq_client = bqclient
+        if (run_in_batch):
+            job_config = bigquery.QueryJobConfig(
+                # Run at batch priority, which won't count toward concurrent rate limit.
+                priority=bigquery.QueryPriority.BATCH
+            )
+            query_job = bq_client.query(sql_query,job_config=job_config)
+        else:
+            query_job = bq_client.query(sql_query)
+        result_dataframe = query_job.to_dataframe()
+        return result_dataframe
+
+    @staticmethod
+    def df_to_gbq(pandas_df, bq_tablename,  chunksize, resource_sa):
+        credentials, project= google.auth.default()
+        envname = f'{project}'.split('-')[-1]
+        #target_credentials = impersonated_credentials.Credentials(credentials, target_principal=resource_sa, target_scopes = ["https://www.googleapis.com/auth/cloud-platform"])
+        target_credentials = credentials
+        pandas_df.to_gbq(
+            destination_table=bq_tablename,
+            chunksize=chunksize,
+            project_id=project,
+            if_exists="replace",
+            credentials=target_credentials
+        )
+
+    @staticmethod
+    def read_gbq(bq_tablename, resource_sa):
+        credentials, project= google.auth.default()
+        envname = f'{project}'.split('-')[-1]
+        #target_credentials = impersonated_credentials.Credentials(credentials, target_principal=resource_sa, target_scopes = ["https://www.googleapis.com/auth/cloud-platform"])
+        target_credentials = credentials
+        df_pd = pd.read_gbq(
+            query_or_table=f'{bq_tablename}',
+            dialect="standard",
+            project_id=project,
+            credentials=target_credentials,
+            use_bqstorage_api=True
+        )
+        return df_pd
+
+#################################
+
+#################################
+### class gs_utils
+#################################
+
+class gs_utils:
+    @staticmethod
+    def get_storage_client(resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com"):
+        credentials, project= google.auth.default()
+        #target_credentials = impersonated_credentials.Credentials(credentials, target_principal=resource_sa, target_scopes = ["https://www.googleapis.com/auth/cloud-platform"])
+        client= storage.Client(credentials=credentials)
+        return client
+
+    @staticmethod
+    def get_code_bucket(envname, tenant, resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com"):
+        storage_client = gs_utils.get_storage_client(resource_sa)
+        tenant_str = f"{tenant}-{envname}"
+        bucket_name = tenant_str.replace("-hcb-", "-code-hcb-")
+        bucket = storage_client.get_bucket(bucket_name)
+        return bucket, bucket_name
+
+    @staticmethod
+    def get_data_bucket(envname, tenant, resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com"):
+        storage_client = gs_utils.get_storage_client(resource_sa)
+        tenant_str = f"{tenant}-{envname}"
+        bucket_name = tenant_str.replace("-hcb-", "-data-hcb-")
+        bucket = storage_client.get_bucket(bucket_name)
+        return bucket, bucket_name
+
+    @staticmethod
+    def get_named_bucket(envname, tenant, bucket_name, resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com"):
+        storage_client = gs_utils.get_storage_client(resource_sa)
+        bucket = storage_client.get_bucket(bucket_name)
+        return bucket
+
+    @staticmethod
+    def read_file_from_bucket(bucket, relative_path, file_name):
+        blob = bucket.blob(f'{relative_path}/{file_name}')
+        blob.download_to_filename(file_name)
+        with open(file_name,"r") as f:
+            file_text = f.read()
+        return file_text
+
+    @staticmethod
+    def download_file_from_bucket(bucket_type, relative_path, file_name, local_file_name, envname, tenant, resource_sa, bucket_name):
+        bucket = None
+        if (bucket_type == 'code'):
+            bucket, bname = gs_utils.get_code_bucket(envname, tenant, resource_sa)
+        elif (bucket_type == 'data'):
+            bucket, bname = gs_utils.get_data_bucket(envname, tenant, resource_sa)
+        else:
+            bucket = gs_utils.get_named_bucket(envname, tenant, bucket_name, resource_sa)
+        #
+        if f'{file_name}'.__contains__('/'):
+            blob = bucket.blob(f'{file_name}')
+        else:
+            blob = bucket.blob(f'{relative_path}/{file_name}')
+        blob.download_to_filename(local_file_name)
+
+    @staticmethod
+    def read_file_from_std_bucket(bucket_type, relative_path, file_name, mode, envname, tenant, resource_sa, bucket_name):
+        bucket = None
+        if (bucket_type == 'code'):
+            bucket, bname = gs_utils.get_code_bucket(envname, tenant, resource_sa)
+        elif (bucket_type == 'data'):
+            bucket, bname = gs_utils.get_data_bucket(envname, tenant, resource_sa)
+        else:
+            bucket = gs_utils.get_named_bucket(envname, tenant, bucket_name, resource_sa)
+        #
+        blob = bucket.blob(f'{relative_path}/{file_name}')
+        blob.download_to_filename(file_name)
+        with open(file_name, mode) as f:
+            file_bytes = f.read()
+        return file_bytes
+
+    @staticmethod
+    def joblib_data_dumper(df_head, file_name, bucket_name, envname, tenant, resource_sa):
+        bucket = gs_utils.get_named_bucket(envname, tenant, bucket_name, resource_sa)
+        blob = bucket.blob(file_name)
+        with blob.open("wb", ignore_flush=True) as f:
+            joblib.dump(df_head, f)
+
+
+    @staticmethod
+    def joblib_data_loader(df_head, filename, bucket_name, envname, tenant, resource_sa):
+        bucket = gs_utils.get_named_bucket(envname, tenant, bucket_name, resource_sa)
+        blob = bucket.blob(filename)
+        data = BytesIO()
+        blob.download_to_file(data)
+        data=joblib.load(data)
+        return data
+
+#################################
+
+#################################
+### class pttr_state
+#################################
+
+class pttr_state_singleton(object):
+    _shared_borg_state = {}
+
+    def __new__(cls, *args, **kwargs):
+        obj = super(pttr_state_singleton, cls).__new__(cls, *args, **kwargs)
+        obj.__dict__ = cls._shared_borg_state
+        return obj
+
+
+class pttr_state(pttr_state_singleton):
+    pass
+
+# class pttr_state:
+#     def __new__(cls):
+#         if not hasattr(cls, 'instance'):
+#             cls.instance = super(pttr_state, cls).__new__(cls)
+#         return cls.instance
+#     batch_size = 16
+#     embedding_size = 256
+#     minimum_mth_training = 6   #filter out data points which short month length
+#     len_dy = 200 # how many days in th seq
+#     len_cd = 80 # within a day how many cds.
+#     nhead = 16 # heads of transformer - double transformer share same feature...
+#     nhid = 512 # number of hidden of transformer - double transformer share same feature...
+#     nlayers = 6 # number of layers of transformer - double transformer share same feature...
+#     ndropout = 0.1 # dropout rate of transformer - double transformer share same feature...
+#     cd_cnt = 98041 # numbr of codes used in embedding matrix
+#     target_cd_cnt = 2 # numbr of target codes
+#     entity_id = "individual_id"
+#
+# def get_pttr_state():
+#     global _PTTR_STATE
+#     if _PTTR_STATE is None:
+#         _PTTR_STATE = pttr_state()
+#     return _PTTR_STATE
+
+def pttr_state_init(
+        batch_size,
+        embedding_size,
+        minimum_mth_training,   #filter out data points which short month length
+        len_dy, # how many days in th seq
+        len_cd, # within a day how many cds.
+        nhead, # heads of transformer - double transformer share same feature...
+        nhid, # number of hidden of transformer - double transformer share same feature...
+        nlayers, # number of layers of transformer - double transformer share same feature...
+        ndropout, # dropout rate of transformer - double transformer share same feature...
+        cd_cnt, # numbr of codes used in embedding matrix
+        target_cd_cnt, # numbr of target codes
+        entity_id, # "individual_id"
+        diag_mask # diagnostic MASK
+):
+    PTTR_STATE = pttr_state_singleton()
+    PTTR_STATE.batch_size = batch_size
+    PTTR_STATE.embedding_size = embedding_size
+    PTTR_STATE.minimum_mth_training = minimum_mth_training
+    PTTR_STATE.len_dy = len_dy
+    PTTR_STATE.len_cd = len_cd
+    PTTR_STATE.nhead = nhead
+    PTTR_STATE.nhid = nhid
+    PTTR_STATE.nlayers = nlayers
+    PTTR_STATE.ndropout = ndropout
+    PTTR_STATE.cd_cnt = cd_cnt
+    PTTR_STATE.target_cd_cnt = target_cd_cnt
+    PTTR_STATE.entity_id = entity_id
+    PTTR_STATE.diag_mask = diag_mask
+
+
+_PTTR_STATE = pttr_state()
+#def get_pttr_state():
+#     global _PTTR_STATE
+#     if _PTTR_STATE is None:
+#         _PTTR_STATE = pttr_state()
+#     return _PTTR_STATE
+#################################
+
+MASK0 = 0b0000000000000000
+MASK1 = 0b0000000000000001
+MASK2 = 0b0000000000000010
+MASK3 = 0b0000000000000100
+MASK4 = 0b0000000000001000
+MASK5 = 0b0000000000010000
+MASK6 = 0b0000000000100000
+MASK7 = 0b0000000001000000
+MASK8 = 0b0000000010000000
+MASK9 = 0b0000000100000000
+MASKA = 0b0000001000000000
+MASKB = 0b0000010000000000
+MASKC = 0b0000100000000000
+MASKD = 0b0001000000000000
+MASKE = 0b0010000000000000
+MASKF = 0b0100000000000000
+MASKG = 0b1000000000000000
+SAVE_DT_CNT_LIST = MASK1
+
+
+
+
+
+
+class TransformerModel(nn.Module):
+    def __init__(self, device, nhead, nhid, nlayers, dropout=0.05):
+        super(TransformerModel, self).__init__()
+        self.PTTR_STATE = pttr_state()
+        self.device = device
+        self.embedding_cd = nn.Embedding(self.PTTR_STATE.cd_cnt,self.PTTR_STATE.embedding_size)
+        self.embedding_cd.weight.requires_grad = True
+        self.embedding_gender_cd = nn.Embedding(4,self.PTTR_STATE.embedding_size)
+        self.embedding_gender_cd.weight.requires_grad = True
+        self.embedding_age_in_months = nn.Embedding(1440,self.PTTR_STATE.embedding_size)
+        self.embedding_age_in_months.weight.requires_grad = True
+        encoder_layers_cd = TransformerEncoderLayer(self.PTTR_STATE.embedding_size, 4, self.PTTR_STATE.embedding_size, 0)
+        self.transformer_encoder_cd = TransformerEncoder(encoder_layers_cd, 1)
+        encoder_layers_dy = TransformerEncoderLayer(self.PTTR_STATE.embedding_size, nhead, nhid, dropout)
+        self.transformer_encoder_dy = TransformerEncoder(encoder_layers_dy, nlayers)
+
+        self.mm = nn.GELU()
+        self.decoder_cd = nn.Linear(self.PTTR_STATE.embedding_size, self.PTTR_STATE.target_cd_cnt)
+        self.dropout = nn.Dropout(0.1)
+        self.norm = nn.LayerNorm(self.PTTR_STATE.embedding_size)
+        self.init_weights()
+
+    def _generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def init_weights(self):
+        initrange = 0.1
+        nn.init.zeros_(self.decoder_cd.weight)
+        nn.init.uniform_(self.decoder_cd.weight, -initrange, initrange)
+    def forward(self, x):
+        #device = torch.cuda.current_device()
+        gpu_batchsize = x.shape[0]
+        age_in_months = x[:,:,0]
+        gender_cd = x[:,:,1]
+        gender_cd = self.embedding_gender_cd(gender_cd)
+        age_in_months = self.embedding_age_in_months(age_in_months)
+        cd = x[:,:,2:]
+        cd = self.embedding_cd(cd)
+        cd_res = cd.sum(-2)
+        # print(cd_res.shape)
+        cd = cd.reshape(gpu_batchsize*self.PTTR_STATE.len_dy,self.PTTR_STATE.len_cd,self.PTTR_STATE.embedding_size)
+        cd = torch.swapaxes(cd, 0, 1)
+        cd = self.transformer_encoder_cd(cd)
+        cd = cd.permute(1,2,0)
+        cd = nn.MaxPool1d(self.PTTR_STATE.len_cd)(cd)
+        cd = cd.reshape(gpu_batchsize,self.PTTR_STATE.len_dy,self.PTTR_STATE.embedding_size)
+        # print(cd.shape)
+        cd = cd_res+cd + gender_cd + age_in_months
+        # print(cd.shape)
+        cd = self.mm(cd)
+        cd = self.norm(cd)
+        cd = torch.swapaxes(cd, 0, 1)
+
+        mth_mask = self._generate_square_subsequent_mask(self.PTTR_STATE.len_dy).to(self.device)
+        cd = self.transformer_encoder_dy(cd, mth_mask)
+        cd = torch.swapaxes(cd, 0, 1)
+        cd = self.norm(cd)
+        cd = self.dropout(cd)
+
+        cd = self.decoder_cd(cd)
+        cd = F.log_softmax(cd, dim=-1)
+
+        return cd
+
+
+
+
+
+
+# def dataLoader(fileid, bucket_name, envname, tenant, resource_sa):
+#     gs_client = gs_utils.get_storage_client(resource_sa)
+#     bucket = gs_utils.get_named_bucket(envname, tenant, bucket_name, resource_sa)
+#     file_name = f'{fileid}'.split('-')[-1]
+#     gs_utils.download_file_from_bucket(None, relative_path, file_name, local_file_name, envname, tenant, resource_sa, bucket_name):
+#     blob = storage.Client(credentials=google.auth.default()[0]).bucket(bucket_name).blob(fileid)
+#     data = BytesIO()
+#     blob.download_to_file(data)
+#     data=joblib.load(data)
+#     return data
+
+def currentDateTag():
+    newYorkTz = pytz.timezone("America/New_York")
+    timeInNewYork = datetime.now(newYorkTz)
+    currentDateInNewYork = timeInNewYork.strftime("%Y%m%d")
+    return currentDateInNewYork
+
+def currentTime():
+    newYorkTz = pytz.timezone("America/New_York")
+    timeInNewYork = datetime.now(newYorkTz)
+    currentTimeInNewYork = timeInNewYork.strftime("%D %H:%M:%S")
+    return currentTimeInNewYork
+
+def conv_cd(ipt):
+    ipt = ipt.split('*')
+    ipt = ipt[:_PTTR_STATE.len_dy]
+    ipt = ipt + (_PTTR_STATE.len_dy-len(ipt))*['']
+    ipt = [dy.split(',') for dy in ipt]
+    ipt = [[int(cd) if cd!='' else 0 for cd in dy] for dy in ipt]
+    ipt = [dy + (_PTTR_STATE.len_cd-len(dy))*[0] for dy in ipt]
+    return ipt
+
+def conv_age_gender(ipt):
+    ipt = ipt.split('*')
+    ipt = ipt[:_PTTR_STATE.len_dy]
+    try:
+       ipt1 = [min(int(cd),1439) for cd in ipt]
+    except Exception as e:
+        pylogger.error(f'age error in {ipt}')
+        traceback.print_exc()
+        raise
+    ipt1 = ipt1 + (_PTTR_STATE.len_dy-len(ipt))*[0]
+    return ipt1
+
+def conv_dy(x):
+    x = x.split('*')
+    x = x[:_PTTR_STATE.len_dy]
+    x = [int(cd) for cd in x]
+    return x
+
+def prepare_tensor(batch, device):
+    age_in_months = [conv_age_gender(ipt) for ipt in batch['age_in_months'].tolist()]
+    age_in_months = torch.tensor(age_in_months).to(device)
+    age_in_months = age_in_months.reshape(_PTTR_STATE.batch_size,_PTTR_STATE.len_dy,1)
+    gender_cd = [conv_age_gender(ipt) for ipt in batch['gender_cd'].tolist()]
+    gender_cd = torch.tensor(gender_cd).to(device)
+    gender_cd = gender_cd.reshape(_PTTR_STATE.batch_size,_PTTR_STATE.len_dy,1)
+    #cd = [conv_cd(ipt) for ipt in batch['cd'].tolist()] # This version may result in index out of range
+    cd = [conv_cd(ipt) for ipt in batch['cd'].tolist()]
+    cd = torch.tensor(cd).to(device)
+    x = torch.cat([age_in_months,gender_cd,cd],dim=-1)
+    #
+    dt_cnt = batch['dt_cnt'].tolist()
+    #
+    return dt_cnt, x
+
+#def score(data,filename,model,output_tbl,bq_client, bucket_name, envname, tenant, resource_sa, device_num):
+def score(data, trunkid, ntrunks, model, output_tbl, bq_client, load_config, device_name):
+    gpttr = model.PTTR_STATE
+    result = 'ERROR'
+
+    step = f'### Entering score(), trunkid={str(trunkid)}'
+    try:
+        step = f'### ... score(), trunkid={str(trunkid)} model.eval()'
+        batch_size = gpttr.batch_size
+        #device_name = f"cuda:{device_num}"
+        #device = torch.device(device_name)
+        device = model.device
+        model.eval()
+        activation = {}
+        def get_activation(name):
+            def hook(model, input, output):
+                activation[name] = output.detach()
+            return hook
+
+        step = f'### ... score(), trunkid={str(trunkid)} model.transformer_encoder_dy.register_forward_hook'
+        model.transformer_encoder_dy.register_forward_hook(get_activation('transformer_encoder_dy'))
+
+        # dsize = data.shape[0]
+        # nbatchfloor = int(np.floor(dsize/batch_size))
+        # nbatch = int(np.ceil(dsize/batch_size))
+        # rmod = dsize % batch_size
+        #
+        # pylogger.debug(f'### ... dsize: {str(dsize)}; nbatch: {str(nbatch)}; rmod: {str(rmod)}')
+        #
+        # #print('exec, calc dsize-nbatch*batch_size:', dsize-nbatch*batch_size, dsize, nbatch, batch_size)
+        # step = f'### ... score(), trunkid={str(trunkid)} - appending data...'
+        #
+        # if (rmod > 0) :
+        #     pylogger.debug(f'### ... dsize-nbatch*batch_size = {str(dsize-nbatchfloor*batch_size)}')
+        #     k = batch_size - (dsize - nbatchfloor*batch_size) # fill some records to build last trunk; these will be deleted in the end
+        #     data = pd.concat([data,data.head(k)], ignore_index=True)
+        #     #print('1st appended')
+
+        dsize = data.shape[0]
+        nbatch = int(np.floor(dsize/batch_size))
+
+        pylogger.debug(f'### ... dsize: {str(dsize)}; nbatch: {str(nbatch)}')
+        #print('exec, calc dsize-nbatch*batch_size:', dsize-nbatch*batch_size, dsize, nbatch, batch_size)
+
+        if dsize-nbatch*batch_size>0:
+            k = batch_size - (dsize-nbatch*batch_size) # fill some records to build last trunk; these will be deleted in the end
+            #data = pd.concat([data,data.head(k)])
+            data = pd.concat([data, pd.concat([data.head(1)]* k,  ignore_index=True)])
+            #pylogger.warn(f'### ......  {device_name}: trunk# {trunkid+1} of {ntrunks}, and we should not be executing this logic.' )
+            #print('1st appended', k)
+
+        # data = data.reset_index(drop=True)
+        data.reset_index(drop=True, inplace=True)
+        nbatch = int(data.shape[0]/batch_size)
+
+
+        # # added in case data is less than batch size
+        # if dsize < batch_size:
+        #     k = batch_size - dsize # fill some records to build last trunk; these will be deleted in the end
+        #     data = pd.concat([data, data.loc[data.head(1).index.repeat(k)]]).reset_index(drop=True)
+        #     #print('2nd appended', k)
+
+        step = f'### ... score(), trunkid={str(trunkid)} iterating over {str(nbatch)} batches and appending results'
+        pylogger.debug(f'### ... 2nd dsize: {str(data.shape[0])}; 2nd nbatch: {str(nbatch)}; \n### ... step: {step}')
+
+        ys = []
+        saved_dtlists = []
+        for j in range(nbatch):
+            try:
+                step = f'### ... score() main for loop, entering iter index j: {str(j)}'
+                batch = data.iloc[j*batch_size:j*batch_size+batch_size,:]
+                #print('batch:', batch.shape, i)
+
+                dt_cnt, x = prepare_tensor(batch, device)
+                #model = model(x)
+                opts = model(x)
+                #step = f'### ... score() main for loop, iter index j: {str(j)}; tensor prepared, start activation loop;\n'\
+                #    + f'### ... ... dt_cnt list: {" ".join(map(str, dt_cnt))}'
+                intermedia_output = activation['transformer_encoder_dy']
+                intermedia_output = [intermedia_output[dt_cnt[i],i,:].reshape(1,-1) for i in range(batch_size)]
+                intermedia_output = torch.cat(intermedia_output)
+                #print('intermedia_output:', intermedia_output.shape, i)
+                ys.append(intermedia_output)
+                if gpttr.diag_mask & SAVE_DT_CNT_LIST :
+                    dt_cnt_list = " ".join(map(str, dt_cnt))
+                    saved_dtlists.append(dt_cnt_list)
+
+                del batch,x,opts
+
+            except Exception as efor:
+                pylogger.error(f"### ... ERROR in score() on {device_name}, trunkid={str(trunkid)} at step {step}")
+                pylogger.exception(efor)
+                traceback.print_exc()
+                raise
+
+        ### commented out because throws an error TODO
+        #utilization_pct = torch.cuda.utilization(device_name)
+        #pylogger.info(f'### ......  {device_name}: NVIDIA SMI reports GPU Utilizattion = {utilization_pct}')
+
+        ys = torch.cat(ys).cpu().numpy()
+        ys = pd.DataFrame(ys,columns = ['emb'+str(i) for i in range(gpttr.embedding_size)])
+        ys[gpttr.entity_id] = data[gpttr.entity_id]
+        ys = ys.head(dsize)
+
+
+        # append to table
+        #data = dataLoader(trunkid)
+        load_job = bq_client.load_table_from_dataframe(
+            dataframe = ys,
+            destination = output_tbl,
+            job_config = load_config,
+        )
+
+        if gpttr.diag_mask & SAVE_DT_CNT_LIST :
+            saved_dt_pd = pd.DataFrame(saved_dtlists)
+            output_tbl2 = output_tbl.replace('_embed_scored_tmp', '_saved_dt_cnt_lists_tmp')
+            load_job2 = bq_client.load_table_from_dataframe(
+                dataframe = saved_dt_pd,
+                destination = output_tbl2,
+                job_config = load_config,
+            )
+            pylogger.info(f'### ......  {device_name}: trunk# {trunkid+1} trace of dt_cnt lists appended to {output_tbl2}, result: {load_job2.result()}')
+
+
+        pylogger.info(f'### ......  {device_name}: trunk# {trunkid+1} scored and appended to {output_tbl}, result: {load_job.result()}; [ys.shape: {format(ys.shape)}, dsize: {str(dsize)}]')
+
+        #step = f'### ... score(), filename={filename} dumping results to blob via joblib'
+        # ys = torch.cat(ys).cpu().numpy()
+        # ys = pd.DataFrame(ys,columns = ['emb'+str(i) for i in range(_PTTR_STATE.embedding_size)])
+        # ys[_PTTR_STATE.entity_id] = data[_PTTR_STATE.entity_id]
+        # ys = ys.head(dsize)
+        # gs_utils.joblib_data_dumper(ys, trunkid, bucket_name, envname, tenant, resource_sa)
+        #blob = storage.Client(credentials=google.auth.default()[0]).bucket(bucket_name).blob(filename)
+        #with blob.open("wb", ignore_flush=True) as f:
+        #    joblib.dump(ys, f)
+        result = 'SUCCESS'
+        del ys
+        #
+    except Exception as e:
+        pylogger.error(f"### ...... ERROR in score() on {device_name} scoring trunk {trunkid} at step {step}")
+        pylogger.exception(e)
+        traceback.print_exc()
+        raise
+
+    return result
+
+
+#def score_file(input_tbl, output_tbl, data_path, model, bucket_name, envname, tenant, load_config, resource_sa, device):
+def score_file(input_tbl, output_tbl, model, resource_sa):
+    gpttr = model.PTTR_STATE
+    ts = currentTime()
+    pylogger.info(f'##### TIMESTAMP before reading data from BQ:: {ts}')
+    #print('##### TIMESTAMP before reading data from BQ:', currentTime())
+
+    #data = dataLoader(filename)
+    bq_client = bq_utils.get_bigquery_client(resource_sa)
+    job_labels = {"costcenter": 13070, "owner": "zhongc_aetna_com"}
+    load_config = bigquery.LoadJobConfig(labels=job_labels)
+    bq_client.delete_table(output_tbl, not_found_ok=True)
+
+    if gpttr.diag_mask & SAVE_DT_CNT_LIST :
+        output_tbl2 = output_tbl.replace('_embed_scored_tmp', '_saved_dt_cnt_lists_tmp')
+        bq_client.delete_table(output_tbl2, not_found_ok=True)
+
+    sql = """
+        select *
+        from """ + input_tbl + """
+    """
+    data = bq_client.query(sql).to_dataframe()
+    data['dt_cnt'] = data['dt_cnt'] - 1
+
+    ts = currentTime()
+    pylogger.info(f'##### TIMESTAMP  after after reading data from BQ: {ts}')
+    pylogger.info(f'##### TIMESTAMP all: {format(data.shape)} after reading data from BQ: {currentTime()}')
+
+    trunksize = gpttr.batch_size*_PTTR_STATE.len_cd
+
+    ntrunks = int(np.ceil(data.shape[0]/trunksize))
+    lasttrunksize = gpttr.batch_size * (data.shape[0] % trunksize)
+    device_name = 'cuda:0'
+    num_successes = 0
+
+    for trunk_id in range(ntrunks):
+        #trunkdata = data.iloc[trunk_id*trunksize:(trunk_id+1)*trunksize,]
+        if (trunk_id < ntrunks - 1):
+            trunkdata = data.iloc[trunk_id*trunksize:(trunk_id+1)*trunksize,]
+        else:
+            trunkdata = data.iloc[trunk_id*trunksize:(trunk_id*trunksize+lasttrunksize),]
+        #trunkid = os.path.join(data_path,'trunk'+str(trunk_id)+'.p')
+
+        pylogger.info(f'### ... Scoring trunk {str(trunk_id+1)} of {str(ntrunks)} on GPU {device_name} *** current time: {currentTime()}')
+        #result = score(trunkdata,trunkid,model,bucket_name, envname, tenant, resource_sa, device)
+        result = score(trunkdata, trunk_id, ntrunks, model, output_tbl, bq_client, load_config, device_name)
+        if result == 'SUCCESS':
+            num_successes += 1
+        if False and trunk_id % _PTTR_STATE.len_cd == 71:
+            torch.cuda.empty_cache()
+            gc.collect()
+
+    ts = currentTime()
+    msg = f'##### TIMESTAMP  after score: {ts} after successfully scoring {str(num_successes)} trunks.'
+    pylogger.info(msg)
+
+    # data2 = []
+    # for trunk_id in range(ntrunks):
+    #     trunkid = os.path.join(data_path,'trunk'+str(trunk_id)+'.p')
+    #     data2.append(gs_utils.joblib_data_loader(trunkid, bucket_name, envname, tenant, resource_sa))
+    #     pylogger.info(f'saving trunk_id: {str(trunk_id)} of {str(ntrunks)}')
+    #
+    # data2 = pd.concat(data2, ignore_index=True)
+    #
+    # ts = currentTime()
+    # pylogger.info(f'##### TIMESTAMP  after embedding of size: {format(data2.shape)} is: {ts}')
+
+    sql = """
+        select count(1) as cnt
+        from """ + output_tbl
+
+    cnt = bq_client.query(sql).to_dataframe()['cnt'].tolist()
+
+    pylogger.info(f'###### END OF TRUNK scoring; There are {" ".join(map(str, cnt))} rows in output table name: {output_tbl}')
+    #for trunk_id in range(ntrunks):
+    #    trunkid = os.path.join(data_path,'trunk'+str(trunk_id)+'.p')
+    #    blob = storage.Client(credentials=google.auth.default()[0]).bucket(bucket_name).blob(trunkid)
+    #    blob.delete()
+
+def parallel_score_file(filename, input_tbl, output_tbl_prefix, gpptr, model_bucket, envname, tenant, resource_sa, mpp_gpus, gpu_id):
+    bestModel = gs_utils.joblib_data_loader(None, filename, model_bucket, envname, tenant, resource_sa)
+    output_tbl = f'{output_tbl_prefix}_cuda_{str(gpu_id)}_embed_scored_tmp'
+
+    device_name = f'cuda:{gpu_id}'
+    device = torch.device(device_name)
+    model = TransformerModel(device, gpptr.nhead, gpptr.nhid, gpptr.nlayers, 0)
+    model.load_state_dict(bestModel['model'])
+    model = model.to(device)
+
+    ts = currentTime()
+    pylogger.info(f'##### WORKER {gpu_id}: TIMESTAMP before reading data from BQ:: {ts}')
+    pylogger.info(f'len_dy:{_PTTR_STATE.len_dy},len_cd:{_PTTR_STATE.len_cd}')
+    #print('##### TIMESTAMP before reading data from BQ:', currentTime())
+
+    try:
+
+        #data = dataLoader(filename)
+        bq_client = bq_utils.get_bigquery_client(resource_sa)
+        job_labels = {"costcenter": 13070, "owner": "zhongc_aetna_com"}
+        load_config = bigquery.LoadJobConfig(labels=job_labels)
+        bq_client.delete_table(output_tbl, not_found_ok=True)
+        if gpptr.diag_mask & SAVE_DT_CNT_LIST :
+            output_tbl2 = output_tbl.replace('_embed_scored_tmp', '_saved_dt_cnt_lists_tmp')
+            bq_client.delete_table(output_tbl2, not_found_ok=True)
+
+        sql = f"select * except (dt_cnt ), (dt_cnt -1) as dt_cnt from {input_tbl} where mod(individual_id, {str(mpp_gpus)}) = {str(gpu_id)}"
+        pylogger.info(f'running {sql}')
+        data = bq_client.query(sql).to_dataframe()
+        nlength=data.shape[0]
+        pylogger.info(f'###### read {nlength} rows data from {input_tbl} for GPU:{gpu_id}')
+        #data['dt_cnt'] = data['dt_cnt'] - 1
+
+        ############### EXPERIMENT ####################
+        # data = data.to(device)
+        ###############################################
+
+        ts = currentTime()
+        pylogger.info(f'############# WORKER {gpu_id}: TIMESTAMP  after reading data from BQ: {ts}')
+
+
+        trunksize = gpptr.batch_size * 96
+
+        ntrunks = int(np.ceil(data.shape[0]/trunksize))
+        lasttrunksize = gpptr.batch_size * (data.shape[0] % trunksize)
+        #ndevices = torch.cuda.device_count()
+        num_successes = 0
+
+        for trunk_id in range(ntrunks):
+            pylogger.info(f'### ... WORKER {gpu_id}: Scoring trunk {str(trunk_id+1)} of {str(ntrunks)} on the {device_name} GPU *** current time: {currentTime()}')
+            if (trunk_id < ntrunks - 1):
+                trunkdata = data.iloc[trunk_id*trunksize:(trunk_id+1)*trunksize,]
+            else:
+                trunkdata = data.iloc[trunk_id*trunksize:(trunk_id*trunksize+lasttrunksize),]
+            #trunkid = os.path.join(data_path,'trunk'+str(trunk_id)+'.p')
+
+            #result = score(trunkdata,trunkid,model,bucket_name, envname, tenant, resource_sa, device)
+            result = score(trunkdata, trunk_id, ntrunks, model, output_tbl, bq_client, load_config, device_name)
+            if result == 'SUCCESS':
+                num_successes += 1
+            if False and (trunk_id % 96 == 73):
+                torch.cuda.empty_cache()
+                gc.collect()
+
+    except Exception as e:
+        pylogger.error(f'### EXCEPTION IN WORKER {gpu_id} scoring trunk {str(trunk_id+1)} of {str(ntrunks)} on the {device_name} GPU *** current time: {currentTime()}',
+                       BaseException = e)
+        raise
+
+
+    ts = currentTime()
+    msg = f'############# WORKER {gpu_id}: TIMESTAMP: {ts} AFTER scoring {str(num_successes)} trunks on the {device_name} GPU.'
+    pylogger.info(msg)
+
+    stats_dict = torch.cuda.memory_stats(device_name)
+    pylogger.info(f'\n####################################################\n' \
+                + f'###### GPU MEMORY STATISTICS FOR WORKER {gpu_id}: \n{json.dumps(stats_dict, indent=4)}\n' \
+                + f'\n####################################################\n')
+
+    # data2 = []
+    # for trunk_id in range(ntrunks):
+    #     trunkid = os.path.join(data_path,'trunk'+str(trunk_id)+'.p')
+    #     data2.append(gs_utils.joblib_data_loader(trunkid, bucket_name, envname, tenant, resource_sa))
+    #     pylogger.info(f'saving trunk_id: {str(trunk_id)} of {str(ntrunks)}')
+    #
+    # data2 = pd.concat(data2, ignore_index=True)
+    #
+    # ts = currentTime()
+    # pylogger.info(f'##### TIMESTAMP  after embedding of size: {format(data2.shape)} is: {ts}')
+
+    sql = """
+        select count(1) as cnt
+        from """ + output_tbl
+
+    cnt = bq_client.query(sql).to_dataframe()['cnt'].tolist()
+
+    pylogger.info(f'###### WORKER {gpu_id}: END OF TRUNK scoring; There are {" ".join(map(str, cnt))} rows in output table name: {output_tbl}')
+    #for trunk_id in range(ntrunks):
+    #    trunkid = os.path.join(data_path,'trunk'+str(trunk_id)+'.p')
+    #    blob = storage.Client(credentials=google.auth.default()[0]).bucket(bucket_name).blob(trunkid)
+    #    blob.delete()
+
+
+def combine_scored_files(output_tbl_prefix, output_tbl, resource_sa, ndevices):
+    drop_table_stmt = f"DROP TABLE IF EXISTS {output_tbl}"
+    bq_client = bq_utils.get_bigquery_client(resource_sa)
+    job_labels = {"costcenter": 13070, "owner": "zhongc_aetna_com"}
+    del_result = bq_utils.sql_exec(drop_table_stmt, resource_sa, bq_client)
+
+    create_select_stmt = f'CREATE TABLE {output_tbl} AS SELECT * FROM {output_tbl_prefix}_cuda_0_embed_scored_tmp  '
+    for i in range(ndevices-1):
+        create_select_stmt += f'UNION ALL SELECT * FROM  {output_tbl_prefix}_cuda_{i+1}_embed_scored_tmp '
+
+    cre_result = bq_utils.sql_exec(create_select_stmt, resource_sa, bq_client)
+
+    return "SUCCESS"
+
+def main():
+    credentials, PROJECT_ID= google.auth.default()
+    envname = f'{PROJECT_ID}'.split('-')[-1]
+
+    isTest = False
+    diag_mask = MASK0 # | SAVE_DT_CNT_LIST
+
+    # TODO start measuring %%time
+    str_today = currentDateTag()
+    ts = currentTime()
+    pylogger.info(f'##### TIMESTAMP program START: {ts}')
+    #print('##### program START:', ts)
+
+    model_bucket = "provider-ds-data-hcb-dev"
+    model_path = 'a321276/TransformerV10/Model'
+    model_name = 'bestModel_singlegpu'
+    entity_id = ['individual_id','index_dt']
+
+    (resource_sa, bqdb, tabprefix, envtype, owner, costcenter, tenant, bucket_name,
+        tst_model_path, tsts_model_name, data_path, clustertag, mppgpus, smpl_tbl, scores_dt) \
+        = transformer_embeddings_args(istest=isTest)
+
+    job_labels = {"costcenter": 13070, "owner": "zhongc_aetna_com"}
+    load_config = bigquery.LoadJobConfig(labels=job_labels)
+
+    # maybe further tuning the machine!!!!,
+    #os.environ.["PYTORCH_CUDA_ALLOC_CONF"] = "backend:cudaMallocAsync"
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"]="garbage_collection_threshold:0.8,expandable_segments:True"
+
+    batch_size = 64
+    embedding_size = 256
+    minimum_mth_training = 6   #filter out data points which short month length
+    len_dy = 200 # how many days in th seq
+    len_cd = 80 # within a day how many cds.
+    nhead = 16 # heads of transformer - double transformer share same feature...
+    nhid = 512 # number of hidden of transformer - double transformer share same feature...
+    nlayers = 6 # number of layers of transformer - double transformer share same feature...
+    ndropout = 0.1 # dropout rate of transformer - double transformer share same feature...
+    cd_cnt = 98041 # numbr of codes used in embedding matrix
+    target_cd_cnt = 2 # numbr of target codes
+    criterion = nn.NLLLoss()
+    parallel = True
+    pttr_state_init(batch_size,embedding_size,minimum_mth_training,len_dy,len_cd,nhead,nhid,nlayers,ndropout,cd_cnt,target_cd_cnt,entity_id, diag_mask)
+    gpptr = pttr_state()
+
+    filename = f'{model_path}/{model_name}'
+    bestModel = gs_utils.joblib_data_loader(None, filename, model_bucket, envname, tenant, resource_sa)
+
+    input_table = f'anbc-hcb-dev.{smpl_tbl}'
+    output_table_tmp = f'{bqdb}.{tabprefix}_{clustertag}_embed_scores{scores_dt}_tmp'
+    output_table = f'{tabprefix}_{clustertag}_embed_scores{scores_dt}'
+    qual_output_table = f'{bqdb}.{tabprefix}_{clustertag}_embed_scores{scores_dt}'
+    output_view =f'{bqdb}.{tabprefix}_embed_scores{scores_dt}'
+
+    ndevices = torch.cuda.device_count()
+    device = torch.device("cuda:0")
+
+    if str(ndevices) != mppgpus :
+        err_msg = f'###### ATTENTION!!! WARNING!!! CUDA reports {str(ndevices)} GPUs, but mmpgpus argument is {mppgpus}'
+        if envtype == 'dev':
+            pylogger.error(err_msg)
+            raise ValueError(err_msg)
+        else:
+            pylogger.warning(err_msg)
+
+    if ndevices > 1 :
+
+        output_tbl_prefix = f'{bqdb}.{tabprefix}_{clustertag}'
+        fargs = [filename, input_table, output_tbl_prefix, gpptr, model_bucket, envname, tenant, resource_sa, ndevices]
+
+        processes = []
+        index = 0
+        for idx in range(ndevices):
+            p = multiprocessing.Process(target=parallel_score_file, \
+                                    args = fargs + [idx])
+            p.start()
+            processes.append(p)
+            #index = index + 1
+
+        for p in processes:
+            p.join()
+
+        combine_scored_files(output_tbl_prefix, output_table_tmp, resource_sa, ndevices)
+
+    else:
+
+        bestModel = gs_utils.joblib_data_loader(None, filename, model_bucket, envname, tenant, resource_sa)
+        model = TransformerModel(device, nhead, nhid, nlayers, 0)
+        model.load_state_dict(bestModel['model'])
+        model = model.to(device)
+        model = model.to(model.device)
+
+        score_file(input_table, output_table_tmp, model, resource_sa)
+
+    #data_path = 'a538383/TransformerV10/Data10pcnt'
+    #ipt_name = 'a321276_o3_score_ending0.p'
+    bq_client = bq_utils.get_bigquery_client(resource_sa)
+
+    add_labels_stmt = f'ALTER TABLE {output_table_tmp} ' \
+                      + f'SET OPTIONS ( labels=[("owner", "{owner}"),("costcenter", "{costcenter}")])'
+    labels_result = bq_utils.sql_exec(add_labels_stmt, resource_sa, bq_client)
+    drop_stmt = f'DROP TABLE IF EXISTS {qual_output_table}'
+    del_result = bq_utils.sql_exec(drop_stmt, resource_sa, bq_client)
+    rename_stmt = f'ALTER TABLE {output_table_tmp} RENAME TO {output_table}'
+    rename_result = bq_utils.sql_exec(rename_stmt, resource_sa, bq_client)
+    view_stmt = f'CREATE OR REPLACE VIEW {output_view} ' \
+        + f'OPTIONS ( labels=[("owner", "{owner}"),("costcenter", "{costcenter}")]) ' \
+        + f'AS SELECT * FROM {qual_output_table} '
+    view_result = bq_utils.sql_exec(view_stmt, resource_sa, bq_client)
+
+    ts = currentTime()
+    pylogger.info(f'##### TIMESTAMP program END: {ts}')
+    #print('##### program END:', ts)
+
+
+
+if __name__ == '__main__':
+
+    pylogger.info(f'##### SCORING CP IP TRANSFORMER MODEL USING PYTORCH, START TIMESTAMP: {currentTime()}')
+
+    try:
+        main()
+        pylogger.info(f'##### SUCCESSFULLY SCORED, END TIMESTAMP: {currentTime()}')
+
+    except Exception as e:
+        pylogger.error(f'### EXCEPTION OCCURRED WHEN SCORING {currentTime()}')
+        traceback.print_exc()
+        raise
+

@@ -1,0 +1,248 @@
+import os,sys
+import json
+from datetime import date, timedelta
+from dateutil.relativedelta import relativedelta
+from airflow.utils import dates
+from airflow.utils.dates import days_ago
+from airflow import models
+from airflow.models import DAG
+from airflow.utils.email import send_email
+from airflow.providers.google.cloud.operators.dataproc import (
+    DataprocCreateClusterOperator,
+    DataprocSubmitJobOperator,
+    DataprocDeleteClusterOperator
+)
+from airflow.operators.bash import BashOperator
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from airflow.providers.google.cloud.operators.bigquery import (
+    BigQueryDeleteTableOperator,
+    BigQueryExecuteQueryOperator,
+)
+from airflow.providers.google.cloud.transfers.bigquery_to_gcs import BigQueryToGCSOperator
+def merge(*args):
+    j = {}
+    for i in args:
+        j.update(i)
+    return j
+
+#########################################################
+### get_config.py
+
+PROJECT_ID = os.environ.get("GCP_PROJECT")
+DAG_PATH = os.environ.get('DAGS_FOLDER')
+ENV = PROJECT_ID.split('-')[-1]
+#IMAGE_VERSION = '2.0.56-rocky8'
+
+#RESOURCE_SA = f"gchcb-clin-analytics-ontpd@anbc-hcb-{ENV}.iam.gserviceaccount.com"
+#PIP_PACKAGES = "google-cloud-bigquery==3.10.0,pandas==2.0.1,google-cloud-logging==3.5.0,pyyaml==6.0" #,econml==0.14.0" #,scikit-learn"
+#print(ENV,DAG_PATH)
+
+cp_ip_env_config_path = 'clin-analytics-hcb/cp-ip-transformer/config/'
+#airflow_env_config_path = 'clin-analytics-hcb/cp-ip-transformer/config/'
+py_relative_script_path = 'clin-analytics-hcb/cp-ip-transformer/src/'
+sql_relative_script_path = 'clin-analytics-hcb/cp-ip-transformer/sql/'
+
+
+cp_ip_config_path = os.path.join(DAG_PATH,  cp_ip_env_config_path)
+#airflow_config_path = os.path.join(DAG_PATH,  airflow_env_config_path)
+py_script_path = os.path.join(DAG_PATH,  py_relative_script_path)
+sql_script_path = os.path.join(DAG_PATH,  sql_relative_script_path)
+
+with open(cp_ip_config_path + f'{ENV}_cp_ip_config.json') as f:
+    config = json.load(f)
+
+print(config)
+
+REGION = config['config']['REGION']
+TENANT = config['config']['TENANT']
+TENANT_ID = config['config']['TENANT_ID']
+USER = config['config']['USER']
+USER_EMAIL = f"{USER}"+f"@aetna.com"
+REPO_NAME = config['config']['REPO_NAME']
+REPO_NAME_HYPHENS = config['config']['REPO_NAME_HYPHENS']
+#DAG_POSTFIX_SCORING = config['config']['DAG_POSTFIX_SCORING']
+spark_jars = config['config']['bq_spark_jar']
+CLUSTER_NAME = config['config']['mlgpu_cluster_name']
+MPP_GPUS = config['config']['MPP_GPUS']
+group_name = config['config']['RESOURCE_SA']
+CODE_BUCKET = config['config']['CODE_BUCKET']
+DATA_BUCKET = config['config']['DATA_BUCKET']
+#GS_DAGS_FOLDER = config['config']['DAGS_FOLDER']
+#sql_relative_script_path = f'{REPO_NAME}/sql/'
+#sql_script_path =  f'gs://{CODE_BUCKET}/{sql_relative_script_path}'
+py_relative_script_path = f'{REPO_NAME}/src/'
+py_script_path = f'gs://{CODE_BUCKET}/{py_relative_script_path}'
+
+
+### End of get_config.py
+#########################################################
+
+DAG_ID = "clin-analytics-cp-ip-transformer-scoring-full-population4"
+
+DAGS_FOLDER = os.environ["DAGS_FOLDER"]
+CUR_DIR = os.getcwd()
+
+# config assign
+DATASET = config['config']['bq_dataset']['DATASET']
+SCHEMA = config['config']['bq_dataset']['SCHEMA']
+TBL_PREFIX = config['config']['bq_variable']['TABLE_PREFIX']
+OWNER = config['config']['bq_dataset']['OWNER']
+COST_CENTER = config['config']['bq_dataset']['COSTCENTER']
+BQDATABASE = f"{DATASET}.{SCHEMA}"
+
+bq_dataset = config['config']['bq_dataset']
+project_specific  = config['config']['project_specific']
+params = merge(bq_dataset, project_specific)
+params['COSTCENTER'] = COST_CENTER
+
+DAG_TAGS = [f"tenant: clin-analytics-hcb", f"owner: esterkina@aetna.com"] # TODO: parametrize
+
+RUN_DT=config['config']['run_dt']
+
+GCP_ENV = PROJECT_ID.replace("anbc-", "")
+SUBNET = f"io-{GCP_ENV}-vm"
+email_list = list([f"{USER_EMAIL}"])
+
+connect_sa = "clin-analytics-hcb-connect@anbc-hcb-dev.iam.gserviceaccount.com"
+resource_sa = "gchcb-clin-analytics-ontpd@anbc-hcb-dev.iam.gserviceaccount.com"
+
+if (f"{ENV}" == "test"):
+    resource_sa = "gchcb-clin-analytics-onppq@anbc-hcb-test.iam.gserviceaccount.com"
+    connect_sa = "clin-analytics-hcb-connect@anbc-hcb-test.iam.gserviceaccount.com"
+
+if (f"{ENV}" == "prod"):
+    resource_sa = "gchcb-clin-analytics-onppp@anbc-hcb-prod.iam.gserviceaccount.com"
+    connect_sa = "clin-analytics-hcb-connect@anbc-hcb-prod.iam.gserviceaccount.com"
+
+
+# Prepate date-related variables
+
+RUN_DATE = date.today() - relativedelta(days = 11)
+V_CUR_DT = RUN_DATE.strftime("%Y-%m-%d")
+# if RUN_DT=="":                                                          # ${current_dt}
+#     RUN_DATE = date.today()
+
+run_dt_minus_month = RUN_DATE - relativedelta(months = 1)                      # date_month        ${date_month}
+MM_1MO = run_dt_minus_month.month                                              # date_month        ${date_month}
+run_dt_minus_year = RUN_DATE - relativedelta(months = 1)                       # date_year         ${date_year}
+YYYY_1YR = run_dt_minus_year.year                                              # date_year         ${date_year}
+EOM_1MO = (RUN_DATE.replace(day = 1) - timedelta(days = 1)).strftime("%Y-%m-%d")
+BOM_1MO = (run_dt_minus_month.replace(day = 1)).strftime("%Y-%m-%d")
+FOM_12MO = ((RUN_DATE - relativedelta(months = 12)).replace(day = 1)).strftime("%Y-%m-%d")           # date_12month      ${date_12month}
+FOM_24MO = ((RUN_DATE - relativedelta(months = 24)).replace(day = 1)).strftime("%Y-%m-%d")           # date_24month      ${date_24month}
+
+#MM_1MONTH=MM_1MO,YYYY_1YEAR=YYYY_1YR,DATE_PERIOD_END=EOM_1MO,DATE_12MONTH=FOM_12MO,DATE_24MONTH=FOM_24MO
+
+
+py_script = f"{py_script_path}transformer_embeddings_4_ip.py"
+
+
+
+auto_scaling_policy = (
+    f"projects/{PROJECT_ID}/regions/us-east4/autoscalingPolicies/io-{GCP_ENV}"
+)
+
+def custom_failure_notification(context):
+    dag_run = context.get('dag_run')
+    task_instances = dag_run.get_task_instances()
+    msg = "DAG job run has failed. Please, check a log."
+    subject = str(GCP_ENV).upper()  +" : DAG " + str(task_instances) + " - Failed."
+    send_email(to=email_list,subject=subject, html_content=msg)
+    # this function check
+
+
+def chk_vary():
+    print("CURRENT PATH:", CUR_DIR)
+    print("DAG PATH:", DAG_PATH)
+    print("DATASET NAME", DATASET)
+    print("SCHEMA NAME", SCHEMA)
+    print("costcenter", COST_CENTER)
+    print("Run_date",RUN_DATE)
+
+default_args_value = {
+    "start_date": days_ago(1),
+    "retries": 0,
+    "project_id": PROJECT_ID,
+    "email": ["esterkina@aetna.com"],
+    "email_on_failure": True,
+    "email_on_success": True,
+    "email_on_retry": True,
+    "on_failure_callback": custom_failure_notification,
+    "retry_delay": timedelta(minutes=3)
+}
+
+SQL_CHECK_DATAPROC_IS_UP_JOB = {
+    "placement": {
+        "cluster_name": f'{CLUSTER_NAME}'
+    },
+    "spark_sql_job": {
+        "query_list": {
+            "queries": ["SELECT 'The Dataproc Cluster is up and running'"]
+        },
+        "properties": {
+            "spark.submit.deployMode": "client"
+        },
+    }
+}
+
+tgt_bucket_name = "clin-analytics-data-hcb-dev"
+tgt_model_path = 'CP_IP_transformer/embeding_model'
+tgt_model_name = 'bestModel_singlegpu'
+tgt_data_path = 'CP_IP_transformer/data'
+TBL_PREFIX = 'a455644_cp_ip'
+CLUSTER_TAG = 'mpp_gpu'
+
+
+PYSPARK_JOB = {
+    "placement": {
+        "cluster_name": f'{CLUSTER_NAME}'
+    },
+    "pyspark_job": {
+        "main_python_file_uri": py_script,
+        "properties": {
+            "spark.submit.deployMode": "client",
+            "spark.jars": spark_jars,
+        },
+        "args": [f"--resource_sa={resource_sa}", f"--bqdb={BQDATABASE}", f"--tabprefix={TBL_PREFIX}", f"--envtype={ENV}", \
+                 f"--owner={OWNER}", f"--costcenter={COST_CENTER}", f"--tenant={TENANT}", f"--tgt_bucket_name={DATA_BUCKET}", \
+                 f"--tgt_model_path={tgt_model_path}", f"--tgt_model_name={tgt_model_name}", f"--tgt_data_path={tgt_data_path}",
+                 f"--clustertag={CLUSTER_TAG}", f"--mppgpus={MPP_GPUS}"],
+        "jar_file_uris": [spark_jars]
+    }
+}
+
+
+with models.DAG(
+        DAG_ID,
+        tags=DAG_TAGS,
+        default_args=default_args_value,
+        start_date=dates.days_ago(1),
+        #schedule_interval=None,
+        schedule_interval=None,
+        user_defined_macros=params,
+        description="CPIPTransformerScoringG2SeriesDAG"
+) as dag:
+
+    def greeting():
+        import logging
+        logging.info('Hello World!')
+
+    check_if_mlgpu_cluster_is_running_job = DataprocSubmitJobOperator(
+        task_id="check_if_mlgpu_cluster_is_running_job",
+        project_id=PROJECT_ID,
+        impersonation_chain=connect_sa,
+        region = 'us-east4',
+        job=SQL_CHECK_DATAPROC_IS_UP_JOB,
+    )
+
+
+    cp_ip_transformer_scoring_on_g2_series = DataprocSubmitJobOperator(
+        task_id='cp_ip_transformer_scoring_on_g2_series',
+        project_id=PROJECT_ID,
+        impersonation_chain=connect_sa,
+        region = 'us-east4',
+        job=PYSPARK_JOB,
+    )
+
+
+check_if_mlgpu_cluster_is_running_job >> cp_ip_transformer_scoring_on_g2_series

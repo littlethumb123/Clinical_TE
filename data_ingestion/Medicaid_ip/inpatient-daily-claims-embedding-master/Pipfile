@@ -1,0 +1,52 @@
+[[source]]
+url = "https://pypi.python.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+google-api-core="*"
+google-api-python-client="*"
+google-auth="*"
+google-auth-httplib2="*"
+google-auth-oauthlib="*"
+google-cloud-aiplatform="*"
+google-cloud-bigquery="*"
+google-cloud-bigquery-storage="*"
+google-cloud-core="*"
+google-cloud-datastore="*"
+google-cloud-monitoring="*"
+google-cloud-notebooks="*"
+google-cloud-pubsub="*"
+google-cloud-resource-manager="*"
+google-cloud-storage="*"
+google-crc32c="*"
+google-resumable-media="*"
+googleapis-common-protos="*"
+
+
+jinja2="*"
+click="*"
+pandas="*"
+db-dtypes="*"
+fsspec="*"
+gcsfs="*"
+sqlparse="*"
+parquet="*"
+fastparquet="*"
+protobuf="*"
+pyarrow="*"
+joblib="*"
+scikit-learn="*"
+xgboost="*"
+dynaconf="*"
+torch="*"
+catboost="*"
+spark-rapids-ml="*"
+holoviews="*"
+
+
+[dev-packages]
+pytest = "*"
+
+[requires]
+python_version = "3.10"

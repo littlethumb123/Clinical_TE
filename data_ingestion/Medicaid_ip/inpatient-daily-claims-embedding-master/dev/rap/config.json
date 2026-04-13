@@ -1,0 +1,13 @@
+{
+"config": {
+"COSTCENTER": "13070",
+"USER": "zhongc",
+"REGION": "us-east4",
+"DATASET": "clin_analytics_hcb_{ENV}",
+"DEC_DATASET": "clin_analytics_hcb_{ENV}",
+"bqdataset":{
+    "TARGET_DB": "{PROJECT_ID}.{DATASET}",
+    "DEC_TARGET_DB":"{PROJECT_ID}.{DEC_DATASET}"
+}
+}
+}

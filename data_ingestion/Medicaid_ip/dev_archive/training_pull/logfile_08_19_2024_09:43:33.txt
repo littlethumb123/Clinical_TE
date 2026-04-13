@@ -1,0 +1,6 @@
+Waiting on bqjob_r275d9e85ece987a9_000001916ae0f977_1 ... (0s) Current status: DONE   
+Skipped anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_member_index
+
+Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (1s) Current status: RUNNING                                                                                      Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (2s) Current status: RUNNING                                                                                      Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (3s) Current status: RUNNING                                                                                      Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (4s) Current status: RUNNING                                                                                      Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (5s) Current status: RUNNING                                                                                      Waiting on bqjob_r6f530c9eefd6a205_000001916ae0fe24_1 ... (5s) Current status: DONE   
+Created anbc-hcb-dev.cm_medicaid_hcb_dev.a534354_IP_2024_member_index
+

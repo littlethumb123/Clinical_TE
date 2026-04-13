@@ -1,0 +1,36 @@
+{
+  "config": {
+    "APP_NAME": "inpatient-daily-claims-embedding",
+    "MODEL_VERSION": "12mo",
+    "edw_archive_yr": "Y2020",
+    "CODE_BUCKET": "hcm-cm-de-code-hcb-{ENV}",
+    "DATA_BUCKET": "hcm-cm-de-data-hcb-{ENV}",
+    "REGION": "us-east4",
+    "LOCATION": "us-east4-c",
+    "bq_variable": {
+      "TABLE_PREFIX":"dlyclm_ip",
+      "COHORT_PREFIX": "dlyclm_ip_cohort"
+    },
+    "bq_dataset": {
+      "DATASET": "clin_analytics_hcb_{ENV}",
+      "DEC_DATASET": "clin_analytics_dec_hcb_{ENV}",
+      "SHARE_DATASET": "clin_analytics_share_hcb_{ENV}",
+      "OWNER": "zhongc_aetna_com",
+      "COSTCENTER": "13070",
+      "PREFIX": "dly_clm_ip_transformer_input_me",
+      "EMB_PREFIX": "dly_clm_ip_transformer_me"
+    },
+    "APP_READ_TABLES": {
+    },
+    "COSTCENTER": "13070",
+    "network_tag":"zsccnpuse4",
+    "prod_network_tag":"zsccproduse4",
+    "bq_spark_jar": "gs://spark-lib/bigquery/spark-bigquery-with-dependencies_2.12-0.34.0.jar",
+    "large_cluster_name": "hcm-cm-de-dataproc21large",
+    "medium_cluster_name": "hcm-cm-de-dataproc21medium",
+    "mlgpu_cluster_name": "hcm-cm-de-mlgpu",
+    "mpp_gpu_cluster_name": "transformer-mpp-gpu",
+    "ultragpu_cluster_name": "hcm-cm-de-ultragpu",
+    "deploy_mode": "client"
+  }
+}
