@@ -1,0 +1,11 @@
+2025-12-03 15:14:53 - exp1_dense_baseline - INFO - Starting experiment: exp1_dense_baseline
+2025-12-03 15:14:53 - exp1_dense_baseline - INFO - ⚡ OVERRIDE: embedding_size=512
+2025-12-03 15:14:53 - exp1_dense_baseline - INFO -    Auto-calculated: nhead=8 (head_dim=64), nhid=2048
+2025-12-03 15:14:54 - exp1_dense_baseline - INFO - Model: Baseline Transformer (FP32)
+2025-12-03 15:14:54 - exp1_dense_baseline - INFO -   d_model=512, nhid=2048, nhead=16 (hardcoded)
+2025-12-03 15:14:54 - exp1_dense_baseline - INFO - Total parameters: 68,785,810
+2025-12-03 15:27:54 - exp1_dense_baseline - INFO - Using standard DataLoader (no bucketing).
+2025-12-03 15:27:54 - exp1_dense_baseline - INFO - Using high-performance DataLoader with 48 workers.
+2025-12-03 15:27:54 - exp1_dense_baseline - INFO - Training for 1 epochs...
+2025-12-03 15:27:54 - exp1_dense_baseline - INFO - 
+--- Epoch 1/1 ---

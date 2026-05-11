@@ -1,0 +1,56 @@
+2025-11-30 12:45:53 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Starting experiment: exp3e_moe_swiglu_learned_pool_layer2_aux001
+2025-11-30 12:45:53 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ⚡ OVERRIDE: embedding_size=512
+2025-11-30 12:45:53 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    Auto-calculated: nhead=8 (head_dim=64), nhid=1408
+2025-11-30 12:45:54 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Model: Flash + MoE Transformer (FP16)
+2025-11-30 12:45:54 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   d_model=512, nhid=1408, nhead=8 (head_dim=64)
+2025-11-30 12:45:54 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Daily Encoder: Learned Attention Pooling
+2025-11-30 12:45:54 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   MoE: 8 experts, top-2
+2025-11-30 12:45:54 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Total parameters: 104,650,898
+2025-11-30 12:58:44 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-30 12:58:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Using high-performance DataLoader with 48 workers.
+2025-11-30 12:58:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Training for 1 epochs...
+2025-11-30 12:58:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+--- Epoch 1/1 ---
+2025-11-30 14:50:27 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Evaluating on training subset...
+2025-11-30 14:51:47 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Evaluating on validation set...
+2025-11-30 14:59:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Computing embedding quality...
+2025-11-30 14:59:04 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -     Embedding std: 1.4207
+2025-11-30 14:59:04 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -     NN overlap: 0.141
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Checkpoint saved (epoch 1, step 9999)
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+--- Epoch 1 Summary ---
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Training Progress:
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Loss (learning avg): 0.0101
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Loss (first batch):  0.8884
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Loss (last batch):   0.0034
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Improvement:         0.8850
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+Final Model Performance:
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Train loss (final):  0.0033
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Val loss:            0.0031
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Gap (train-val loss):+0.0002
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Train Top-10:        0.894
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Val Top-10:          0.892
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   ✅ Good generalization (gap = +0.0002)
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+Batch Metrics (during learning):
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Train Recall@10: 0.791
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Train mAP@20: 0.521
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Train Brier: 0.0043
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Embedding std: 1.4207
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - NN overlap: 0.141
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - MoE Load CV: 0.127
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - MoE Collapsed: 0.06
+2025-11-30 14:59:10 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+Training completed in 7224.6s
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Complete results saved to logs/exp_round3_ablation_larger_dim512_trainsize_kaiming-moe-init_nov26_2025/exp3e_moe_swiglu_learned_pool_layer2_aux001/final_results.json
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Metrics saved to logs/exp3e_moe_swiglu_learned_pool_layer2_aux001/
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+================================================================================
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - EXPERIMENT COMPLETE: exp3e_moe_swiglu_learned_pool_layer2_aux001
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ================================================================================
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Final Top-10 Acc in val: 0.892
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Training Time: 7224.6s
+2025-11-30 15:16:02 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ================================================================================
+

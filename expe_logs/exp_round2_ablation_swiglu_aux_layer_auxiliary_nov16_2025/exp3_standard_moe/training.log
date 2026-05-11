@@ -1,0 +1,77 @@
+2025-11-16 21:14:37 - exp3_standard_moe - INFO - Starting experiment: exp3_standard_moe
+2025-11-16 21:14:38 - exp3_standard_moe - INFO - Model: Flash + MoE Transformer (FP16, 8 experts)
+2025-11-16 21:14:38 - exp3_standard_moe - INFO - Total parameters: 35,070,098
+2025-11-16 21:17:11 - exp3_standard_moe - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-16 21:17:11 - exp3_standard_moe - INFO - Using high-performance DataLoader with 16 workers.
+2025-11-16 21:17:11 - exp3_standard_moe - INFO - Training for 2 epochs...
+2025-11-16 21:17:11 - exp3_standard_moe - INFO - 
+--- Epoch 1/2 ---
+2025-11-16 21:52:04 - exp3_standard_moe - INFO -   Evaluating on training subset...
+2025-11-16 21:52:25 - exp3_standard_moe - INFO -   Evaluating on validation set...
+2025-11-16 21:53:05 - exp3_standard_moe - INFO - Computing embedding quality...
+2025-11-16 21:53:07 - exp3_standard_moe - INFO -     Embedding std: 0.0000
+2025-11-16 21:53:07 - exp3_standard_moe - INFO -     NN overlap: 0.000
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - Checkpoint saved (epoch 1, step 3998)
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - 
+--- Epoch 1 Summary ---
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - Training Progress:
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Loss (learning avg): 0.0321
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Loss (first batch):  0.8015
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Loss (last batch):   0.0044
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Improvement:         0.7971
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - 
+Final Model Performance:
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Train loss (final):  0.0040
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Val loss:            0.0039
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Gap (train-val loss):+0.0001
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Train Top-10:        0.815
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   Val Top-10:          0.827
+2025-11-16 21:53:20 - exp3_standard_moe - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - 
+Batch Metrics (during learning):
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - Train Recall@10: 0.739
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - Train mAP@20: 0.508
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - Train Brier: 0.0114
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - Embedding std: 0.0000
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - NN overlap: 0.000
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - MoE Load CV: 0.258
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - MoE Collapsed: 0.075
+2025-11-16 21:53:20 - exp3_standard_moe - INFO - 
+--- Epoch 2/2 ---
+2025-11-16 22:28:16 - exp3_standard_moe - INFO -   Evaluating on training subset...
+2025-11-16 22:28:38 - exp3_standard_moe - INFO -   Evaluating on validation set...
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - Checkpoint saved (epoch 2, step 7996)
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - 
+--- Epoch 2 Summary ---
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - Training Progress:
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Loss (learning avg): 0.0038
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Loss (first batch):  0.0042
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Loss (last batch):   0.0032
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Improvement:         0.0009
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - 
+Final Model Performance:
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Train loss (final):  0.0036
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Val loss:            0.0035
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Gap (train-val loss):+0.0001
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Train Top-10:        0.822
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   Val Top-10:          0.830
+2025-11-16 22:29:31 - exp3_standard_moe - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - 
+Batch Metrics (during learning):
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - Train Recall@10: 0.826
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - Train mAP@20: 0.529
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - Train Brier: 0.0007
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - MoE Load CV: 0.282
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - MoE Collapsed: 0.05
+2025-11-16 22:29:31 - exp3_standard_moe - INFO - 
+Training completed in 4340.2s
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - Metrics saved to logs/exp3_standard_moe/
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - 
+================================================================================
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - EXPERIMENT COMPLETE: exp3_standard_moe
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - ================================================================================
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - Final Top-10 Acc in val: 0.830
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - Training Time: 4340.2s
+2025-11-16 22:30:58 - exp3_standard_moe - INFO - ================================================================================
+

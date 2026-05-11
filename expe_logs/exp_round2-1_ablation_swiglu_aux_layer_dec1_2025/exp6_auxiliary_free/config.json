@@ -1,0 +1,20 @@
+{
+  "experiment": "exp6_auxiliary_free",
+  "parameters": 38247314,
+  "epochs": 2,
+  "batch_size": 32,
+  "learning_rate": 0.0001,
+  "embedding_size": 256,
+  "nhid": 704,
+  "nhead": 8,
+  "head_dim": 32,
+  "use_mixed_precision": true,
+  "use_bucketing": true,
+  "moe": {
+    "num_experts": 8,
+    "top_k": 2,
+    "load_balance": "deepseek",
+    "d_model": 256,
+    "d_ff": 704
+  }
+}

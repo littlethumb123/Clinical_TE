@@ -1,0 +1,49 @@
+2025-12-15 06:26:27 - exp2_dense_flash - INFO - 
+================================================================================
+2025-12-15 06:26:27 - exp2_dense_flash - INFO - EXPERIMENT: exp2_dense_flash
+2025-12-15 06:26:27 - exp2_dense_flash - INFO - ================================================================================
+2025-12-15 06:26:28 - exp2_dense_flash - INFO - Model: Flash Attention Transformer (FP16)
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -   Daily Encoder: Flash Attention + Max-Pool
+2025-12-15 06:26:28 - exp2_dense_flash - INFO - Total parameters: 25,456,537
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -    Per-GPU batch size: 32
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -    Effective batch size: 128
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -    Base learning rate: 0.0001
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -    Scaled learning rate: 2.00e-04
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-15 06:26:28 - exp2_dense_flash - INFO -    DataParallel output_device: 0
+2025-12-15 06:39:08 - exp2_dense_flash - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-15 06:39:09 - exp2_dense_flash - INFO - Using DataLoader with 32 workers.
+2025-12-15 06:39:09 - exp2_dense_flash - INFO - Training for 1 epochs...
+2025-12-15 06:39:09 - exp2_dense_flash - INFO - 
+--- Epoch 1/1 ---
+2025-12-15 07:52:45 - exp2_dense_flash - INFO -   Evaluating on training subset...
+2025-12-15 07:53:20 - exp2_dense_flash - INFO -   Evaluating on validation set...
+2025-12-15 07:55:55 - exp2_dense_flash - INFO - Computing embedding quality...
+2025-12-15 07:55:58 - exp2_dense_flash - INFO -     Embedding std: 0.7900
+2025-12-15 07:55:58 - exp2_dense_flash - INFO -     NN overlap: 0.138
+2025-12-15 07:55:59 - exp2_dense_flash - INFO - 
+--- Epoch 1 Summary ---
+2025-12-15 07:55:59 - exp2_dense_flash - INFO -   Train loss: 0.0104 → 0.0044
+2025-12-15 07:55:59 - exp2_dense_flash - INFO -   Val loss: 0.0041, Top-10: 0.958
+2025-12-15 07:55:59 - exp2_dense_flash - INFO - 
+Training completed in 4610.8s
+2025-12-15 08:00:16 - exp2_dense_flash - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp2_dense_flash_bs32_ep1_d256_20251215_080016
+2025-12-15 08:00:16 - exp2_dense_flash - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 0.85 GB
+2025-12-15 08:00:16 - exp2_dense_flash - INFO - 
+================================================================================
+2025-12-15 08:00:16 - exp2_dense_flash - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-15 08:00:16 - exp2_dense_flash - INFO - ================================================================================
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - Downstream Test AUC-ROC: 0.7318
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - Downstream Test F1: 0.0929
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp2_dense_flash/final_results.json
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - 
+================================================================================
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - EXPERIMENT COMPLETE: exp2_dense_flash
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - ================================================================================
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - Final Top-10 Acc: 0.958
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - Best Val Loss: 0.0000
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - Training Time: 4610.8s
+2025-12-15 08:07:29 - exp2_dense_flash - INFO - ================================================================================
+

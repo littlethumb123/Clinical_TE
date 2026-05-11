@@ -1,0 +1,50 @@
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+================================================================================
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - EXPERIMENT: exp3e_moe_swiglu_learned_pool_layer2_aux001
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ================================================================================
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   MoE: 8 experts, top-2
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Total parameters: 35,418,777
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    Per-GPU batch size: 32
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    Effective batch size: 128
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    Base learning rate: 0.0001
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    Scaled learning rate: 2.00e-04
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-15 22:33:45 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -    DataParallel output_device: 0
+2025-12-15 22:45:38 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-15 22:45:39 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Using DataLoader with 32 workers.
+2025-12-15 22:45:39 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Training for 1 epochs...
+2025-12-15 22:45:39 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+--- Epoch 1/1 ---
+2025-12-16 00:41:21 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Evaluating on training subset...
+2025-12-16 00:42:11 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Evaluating on validation set...
+2025-12-16 00:46:00 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Computing embedding quality...
+2025-12-16 00:46:01 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -     Embedding std: 1.7923
+2025-12-16 00:46:01 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -     NN overlap: 0.121
+2025-12-16 00:46:14 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+--- Epoch 1 Summary ---
+2025-12-16 00:46:14 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Train loss: 0.0107 → 0.0048
+2025-12-16 00:46:14 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO -   Val loss: 0.0045, Top-10: 0.938
+2025-12-16 00:46:14 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+Training completed in 7234.7s
+2025-12-16 00:51:55 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp3e_moe_swiglu_learned_pool_layer2_aux001_bs32_ep1_d256_20251216_005154
+2025-12-16 00:51:55 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-16 00:51:55 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+================================================================================
+2025-12-16 00:51:55 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-16 00:51:55 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ================================================================================
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Downstream Test AUC-ROC: 0.7238
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Downstream Test F1: 0.0811
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp3e_moe_swiglu_learned_pool_layer2_aux001/final_results.json
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - 
+================================================================================
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - EXPERIMENT COMPLETE: exp3e_moe_swiglu_learned_pool_layer2_aux001
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ================================================================================
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Final Top-10 Acc: 0.938
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Best Val Loss: 0.0000
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - Training Time: 7234.7s
+2025-12-16 00:54:09 - exp3e_moe_swiglu_learned_pool_layer2_aux001 - INFO - ================================================================================
+

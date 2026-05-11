@@ -1,0 +1,48 @@
+2025-12-14 20:02:05 - exp1_dense_baseline - INFO - 
+================================================================================
+2025-12-14 20:02:05 - exp1_dense_baseline - INFO - EXPERIMENT: exp1_dense_baseline
+2025-12-14 20:02:05 - exp1_dense_baseline - INFO - ================================================================================
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO - Model: Baseline Transformer (FP32)
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -   d_model=256, nhid=1024, nhead=16 (hardcoded)
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO - Total parameters: 26,455,961
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -    Per-GPU batch size: 32
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -    Effective batch size: 128
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -    Base learning rate: 0.0001
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -    Scaled learning rate: 2.00e-04
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-14 20:02:06 - exp1_dense_baseline - INFO -    DataParallel output_device: 0
+2025-12-14 20:14:55 - exp1_dense_baseline - INFO - Using standard DataLoader (no bucketing).
+2025-12-14 20:14:55 - exp1_dense_baseline - INFO - Using DataLoader with 32 workers.
+2025-12-14 20:14:55 - exp1_dense_baseline - INFO - Training for 1 epochs...
+2025-12-14 20:14:55 - exp1_dense_baseline - INFO - 
+--- Epoch 1/1 ---
+2025-12-14 21:46:18 - exp1_dense_baseline - INFO -   Evaluating on training subset...
+2025-12-14 21:46:44 - exp1_dense_baseline - INFO -   Evaluating on validation set...
+2025-12-14 21:49:29 - exp1_dense_baseline - INFO - Computing embedding quality...
+2025-12-14 21:49:31 - exp1_dense_baseline - INFO -     Embedding std: 0.5139
+2025-12-14 21:49:31 - exp1_dense_baseline - INFO -     NN overlap: 0.134
+2025-12-14 21:49:32 - exp1_dense_baseline - INFO - 
+--- Epoch 1 Summary ---
+2025-12-14 21:49:32 - exp1_dense_baseline - INFO -   Train loss: 0.0105 → 0.0044
+2025-12-14 21:49:32 - exp1_dense_baseline - INFO -   Val loss: 0.0041, Top-10: 0.956
+2025-12-14 21:49:32 - exp1_dense_baseline - INFO - 
+Training completed in 5677.7s
+2025-12-14 21:53:44 - exp1_dense_baseline - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp1_dense_baseline_bs32_ep1_d256_20251214_215344
+2025-12-14 21:53:45 - exp1_dense_baseline - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 0.89 GB
+2025-12-14 21:53:45 - exp1_dense_baseline - INFO - 
+================================================================================
+2025-12-14 21:53:45 - exp1_dense_baseline - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-14 21:53:45 - exp1_dense_baseline - INFO - ================================================================================
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - Downstream Test AUC-ROC: 0.7801
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - Downstream Test F1: 0.1089
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp1_dense_baseline/final_results.json
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - 
+================================================================================
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - EXPERIMENT COMPLETE: exp1_dense_baseline
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - ================================================================================
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - Final Top-10 Acc: 0.956
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - Best Val Loss: 0.0000
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - Training Time: 5677.7s
+2025-12-14 21:59:42 - exp1_dense_baseline - INFO - ================================================================================
+

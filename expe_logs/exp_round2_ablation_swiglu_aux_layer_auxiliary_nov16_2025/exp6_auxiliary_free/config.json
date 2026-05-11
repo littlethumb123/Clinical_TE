@@ -1,0 +1,14 @@
+{
+  "experiment": "exp6_auxiliary_free",
+  "parameters": 34904978,
+  "epochs": 2,
+  "batch_size": 16,
+  "learning_rate": 0.0001,
+  "use_mixed_precision": true,
+  "use_bucketing": true,
+  "moe": {
+    "num_experts": 8,
+    "top_k": 2,
+    "load_balance": "deepseek"
+  }
+}

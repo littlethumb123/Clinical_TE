@@ -1,0 +1,19 @@
+{
+  "len_dy": 200,
+  "len_cd": 80,
+  "cd_cnt": 75516,
+  "target_cd_cnt": 6297,
+  "embedding_size": 256,
+  "nhid": 1024,
+  "nlayers": 6,
+  "dropout": 0.1,
+  "gender_vocab": 4,
+  "age_vocab": 1440,
+  "lob_vocab": 4,
+  "batch_size": 32,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.01,
+  "gradient_clip": 1.0,
+  "device": "cuda",
+  "criterion": "BCEWithLogitsLoss"
+}

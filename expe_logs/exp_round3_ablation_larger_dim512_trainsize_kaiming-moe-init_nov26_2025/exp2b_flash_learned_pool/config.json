@@ -1,0 +1,13 @@
+{
+  "experiment": "exp2b_flash_learned_pool",
+  "parameters": 64293010,
+  "epochs": 1,
+  "batch_size": 32,
+  "learning_rate": 0.0001,
+  "embedding_size": 512,
+  "nhid": 1408,
+  "nhead": 8,
+  "head_dim": 64,
+  "use_mixed_precision": true,
+  "use_bucketing": true
+}

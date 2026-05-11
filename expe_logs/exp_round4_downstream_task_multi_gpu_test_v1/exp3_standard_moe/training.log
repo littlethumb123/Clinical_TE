@@ -1,0 +1,50 @@
+2025-12-15 15:15:42 - exp3_standard_moe - INFO - 
+================================================================================
+2025-12-15 15:15:42 - exp3_standard_moe - INFO - EXPERIMENT: exp3_standard_moe
+2025-12-15 15:15:42 - exp3_standard_moe - INFO - ================================================================================
+2025-12-15 15:15:43 - exp3_standard_moe - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -   Daily Encoder: Flash Attention + Max-Pool
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -   MoE: 8 experts, top-2
+2025-12-15 15:15:43 - exp3_standard_moe - INFO - Total parameters: 35,589,017
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -    Per-GPU batch size: 32
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -    Effective batch size: 128
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -    Base learning rate: 0.0001
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -    Scaled learning rate: 2.00e-04
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-15 15:15:43 - exp3_standard_moe - INFO -    DataParallel output_device: 0
+2025-12-15 15:27:56 - exp3_standard_moe - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-15 15:27:57 - exp3_standard_moe - INFO - Using DataLoader with 32 workers.
+2025-12-15 15:27:57 - exp3_standard_moe - INFO - Training for 1 epochs...
+2025-12-15 15:27:57 - exp3_standard_moe - INFO - 
+--- Epoch 1/1 ---
+2025-12-15 17:35:26 - exp3_standard_moe - INFO -   Evaluating on training subset...
+2025-12-15 17:36:16 - exp3_standard_moe - INFO -   Evaluating on validation set...
+2025-12-15 17:40:04 - exp3_standard_moe - INFO - Computing embedding quality...
+2025-12-15 17:40:06 - exp3_standard_moe - INFO -     Embedding std: 1.4326
+2025-12-15 17:40:06 - exp3_standard_moe - INFO -     NN overlap: 0.115
+2025-12-15 17:40:08 - exp3_standard_moe - INFO - 
+--- Epoch 1 Summary ---
+2025-12-15 17:40:08 - exp3_standard_moe - INFO -   Train loss: 0.0109 → 0.0043
+2025-12-15 17:40:08 - exp3_standard_moe - INFO -   Val loss: 0.0047, Top-10: 0.917
+2025-12-15 17:40:09 - exp3_standard_moe - INFO - 
+Training completed in 7931.5s
+2025-12-15 17:45:52 - exp3_standard_moe - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp3_standard_moe_bs32_ep1_d256_20251215_174552
+2025-12-15 17:45:53 - exp3_standard_moe - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-15 17:45:53 - exp3_standard_moe - INFO - 
+================================================================================
+2025-12-15 17:45:53 - exp3_standard_moe - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-15 17:45:53 - exp3_standard_moe - INFO - ================================================================================
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - Downstream Test AUC-ROC: 0.6883
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - Downstream Test F1: 0.0639
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp3_standard_moe/final_results.json
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - 
+================================================================================
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - EXPERIMENT COMPLETE: exp3_standard_moe
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - ================================================================================
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - Final Top-10 Acc: 0.917
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - Best Val Loss: 0.0000
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - Training Time: 7931.5s
+2025-12-15 17:53:09 - exp3_standard_moe - INFO - ================================================================================
+

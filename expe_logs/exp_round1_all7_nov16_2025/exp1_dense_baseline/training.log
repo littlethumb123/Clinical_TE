@@ -1,0 +1,103 @@
+2025-11-12 23:37:14 - exp1_dense_baseline - INFO - Starting experiment: exp1_dense_baseline
+2025-11-12 23:37:14 - exp1_dense_baseline - INFO - Model: Baseline Transformer (FP32)
+2025-11-12 23:37:14 - exp1_dense_baseline - INFO - Total parameters: 27,709,586
+2025-11-12 23:39:47 - exp1_dense_baseline - INFO - Using standard DataLoader (no bucketing).
+2025-11-12 23:39:47 - exp1_dense_baseline - INFO - Using high-performance DataLoader with 16 workers.
+2025-11-12 23:39:47 - exp1_dense_baseline - INFO - Training for 3 epochs...
+2025-11-12 23:39:47 - exp1_dense_baseline - INFO - 
+--- Epoch 1/3 ---
+2025-11-13 00:13:58 - exp1_dense_baseline - INFO -   Evaluating on training subset...
+2025-11-13 00:14:20 - exp1_dense_baseline - INFO -   Evaluating on validation set...
+2025-11-13 00:15:05 - exp1_dense_baseline - INFO - Computing embedding quality...
+2025-11-13 00:15:07 - exp1_dense_baseline - INFO -     Embedding std: 0.0079
+2025-11-13 00:15:07 - exp1_dense_baseline - INFO -     NN overlap: 0.130
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - Checkpoint saved (epoch 1, step 4000)
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - 
+--- Epoch 1 Summary ---
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - Training Progress:
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Loss (learning avg): 0.0320
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Loss (first batch):  0.7939
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Loss (last batch):   0.0035
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Improvement:         0.7904
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - 
+Final Model Performance:
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Train loss (final):  0.0039
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Val loss:            0.0038
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Gap (train-val loss):+0.0001
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Train Top-10:        0.823
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   Val Top-10:          0.833
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - 
+Batch Metrics (during learning):
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - Train Recall@10: 0.714
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - Train mAP@20: 0.463
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - Train Brier: 0.0113
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - Embedding std: 0.0079
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - NN overlap: 0.130
+2025-11-13 00:15:17 - exp1_dense_baseline - INFO - 
+--- Epoch 2/3 ---
+2025-11-13 00:49:28 - exp1_dense_baseline - INFO -   Evaluating on training subset...
+2025-11-13 00:49:53 - exp1_dense_baseline - INFO -   Evaluating on validation set...
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - Checkpoint saved (epoch 2, step 8000)
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - 
+--- Epoch 2 Summary ---
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - Training Progress:
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Loss (learning avg): 0.0035
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Loss (first batch):  0.0044
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Loss (last batch):   0.0026
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Improvement:         0.0018
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - 
+Final Model Performance:
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Train loss (final):  0.0032
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Val loss:            0.0031
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Gap (train-val loss):+0.0001
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Train Top-10:        0.923
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   Val Top-10:          0.920
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - 
+Batch Metrics (during learning):
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - Train Recall@10: 0.847
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - Train mAP@20: 0.531
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - Train Brier: 0.0006
+2025-11-13 00:50:46 - exp1_dense_baseline - INFO - 
+--- Epoch 3/3 ---
+2025-11-13 01:24:54 - exp1_dense_baseline - INFO -   Evaluating on training subset...
+2025-11-13 01:25:19 - exp1_dense_baseline - INFO -   Evaluating on validation set...
+2025-11-13 01:26:03 - exp1_dense_baseline - INFO - Computing embedding quality...
+2025-11-13 01:26:05 - exp1_dense_baseline - INFO -     Embedding std: 0.4925
+2025-11-13 01:26:05 - exp1_dense_baseline - INFO -     NN overlap: 0.165
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - Checkpoint saved (epoch 3, step 12000)
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - 
+--- Epoch 3 Summary ---
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - Training Progress:
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Loss (learning avg): 0.0030
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Loss (first batch):  0.0027
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Loss (last batch):   0.0022
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Improvement:         0.0005
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - 
+Final Model Performance:
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Train loss (final):  0.0028
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Val loss:            0.0027
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Gap (train-val loss):+0.0000
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Train Top-10:        0.947
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   Val Top-10:          0.947
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO -   ✅ Good generalization (gap = +0.0000)
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - 
+Batch Metrics (during learning):
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - Train Recall@10: 0.942
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - Train mAP@20: 0.647
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - Train Brier: 0.0006
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - Embedding std: 0.4925
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - NN overlap: 0.165
+2025-11-13 01:26:11 - exp1_dense_baseline - INFO - 
+Training completed in 6384.8s
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - Metrics saved to logs/exp1_dense_baseline/
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - 
+================================================================================
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - EXPERIMENT COMPLETE: exp1_dense_baseline
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - ================================================================================
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - Final Top-10 Acc in val: 0.947
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - Training Time: 6384.8s
+2025-11-13 01:27:43 - exp1_dense_baseline - INFO - ================================================================================
+

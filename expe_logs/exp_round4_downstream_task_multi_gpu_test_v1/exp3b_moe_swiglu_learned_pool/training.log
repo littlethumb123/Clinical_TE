@@ -1,0 +1,50 @@
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO - 
+================================================================================
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO - EXPERIMENT: exp3b_moe_swiglu_learned_pool
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO - ================================================================================
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -   MoE: 8 experts, top-2
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO - Total parameters: 35,418,777
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -    Per-GPU batch size: 32
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -    Effective batch size: 128
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -    Base learning rate: 0.0001
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -    Scaled learning rate: 2.00e-04
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-15 17:53:28 - exp3b_moe_swiglu_learned_pool - INFO -    DataParallel output_device: 0
+2025-12-15 18:05:43 - exp3b_moe_swiglu_learned_pool - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-15 18:05:43 - exp3b_moe_swiglu_learned_pool - INFO - Using DataLoader with 32 workers.
+2025-12-15 18:05:43 - exp3b_moe_swiglu_learned_pool - INFO - Training for 1 epochs...
+2025-12-15 18:05:43 - exp3b_moe_swiglu_learned_pool - INFO - 
+--- Epoch 1/1 ---
+2025-12-15 20:03:12 - exp3b_moe_swiglu_learned_pool - INFO -   Evaluating on training subset...
+2025-12-15 20:04:02 - exp3b_moe_swiglu_learned_pool - INFO -   Evaluating on validation set...
+2025-12-15 20:07:51 - exp3b_moe_swiglu_learned_pool - INFO - Computing embedding quality...
+2025-12-15 20:07:52 - exp3b_moe_swiglu_learned_pool - INFO -     Embedding std: 0.4159
+2025-12-15 20:07:52 - exp3b_moe_swiglu_learned_pool - INFO -     NN overlap: 0.097
+2025-12-15 20:07:54 - exp3b_moe_swiglu_learned_pool - INFO - 
+--- Epoch 1 Summary ---
+2025-12-15 20:07:54 - exp3b_moe_swiglu_learned_pool - INFO -   Train loss: 0.0110 → 0.0054
+2025-12-15 20:07:54 - exp3b_moe_swiglu_learned_pool - INFO -   Val loss: 0.0051, Top-10: 0.860
+2025-12-15 20:07:54 - exp3b_moe_swiglu_learned_pool - INFO - 
+Training completed in 7330.6s
+2025-12-15 20:14:01 - exp3b_moe_swiglu_learned_pool - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp3b_moe_swiglu_learned_pool_bs32_ep1_d256_20251215_201400
+2025-12-15 20:14:01 - exp3b_moe_swiglu_learned_pool - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-15 20:14:01 - exp3b_moe_swiglu_learned_pool - INFO - 
+================================================================================
+2025-12-15 20:14:01 - exp3b_moe_swiglu_learned_pool - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-15 20:14:01 - exp3b_moe_swiglu_learned_pool - INFO - ================================================================================
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - Downstream Test AUC-ROC: 0.6719
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - Downstream Test F1: 0.0630
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp3b_moe_swiglu_learned_pool/final_results.json
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - 
+================================================================================
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - EXPERIMENT COMPLETE: exp3b_moe_swiglu_learned_pool
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - ================================================================================
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - Final Top-10 Acc: 0.860
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - Best Val Loss: 0.0000
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - Training Time: 7330.6s
+2025-12-15 20:16:19 - exp3b_moe_swiglu_learned_pool - INFO - ================================================================================
+

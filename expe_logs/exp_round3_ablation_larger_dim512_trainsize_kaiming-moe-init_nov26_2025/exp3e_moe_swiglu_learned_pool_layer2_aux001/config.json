@@ -1,0 +1,20 @@
+{
+  "experiment": "exp3e_moe_swiglu_learned_pool_layer2_aux001",
+  "parameters": 104650898,
+  "epochs": 1,
+  "batch_size": 32,
+  "learning_rate": 0.0001,
+  "embedding_size": 512,
+  "nhid": 1408,
+  "nhead": 8,
+  "head_dim": 64,
+  "use_mixed_precision": true,
+  "use_bucketing": true,
+  "moe": {
+    "num_experts": 8,
+    "top_k": 2,
+    "load_balance": "switch",
+    "d_model": 512,
+    "d_ff": 1408
+  }
+}

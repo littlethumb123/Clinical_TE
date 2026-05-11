@@ -1,0 +1,11 @@
+{
+  "experiment": "exp2_dense_flash",
+  "embedding_size": 256,
+  "nhid": 704,
+  "nhead": 8,
+  "batch_size": 32,
+  "use_mixed_precision": true,
+  "use_bucketing": true,
+  "use_learnt_att_pool": false,
+  "moe_config": null
+}

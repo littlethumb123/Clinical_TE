@@ -1,0 +1,81 @@
+2025-12-03 04:31:55 - exp6_auxiliary_free - INFO - Starting experiment: exp6_auxiliary_free
+2025-12-03 04:31:56 - exp6_auxiliary_free - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-03 04:31:56 - exp6_auxiliary_free - INFO -   d_model=256, nhid=704, nhead=8 (head_dim=32)
+2025-12-03 04:31:56 - exp6_auxiliary_free - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-03 04:31:56 - exp6_auxiliary_free - INFO -   MoE: 8 experts, top-2
+2025-12-03 04:31:56 - exp6_auxiliary_free - INFO - Total parameters: 38,247,314
+2025-12-03 04:44:55 - exp6_auxiliary_free - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-03 04:44:56 - exp6_auxiliary_free - INFO - Using high-performance DataLoader with 48 workers.
+2025-12-03 04:44:56 - exp6_auxiliary_free - INFO - Training for 2 epochs...
+2025-12-03 04:44:56 - exp6_auxiliary_free - INFO - 
+--- Epoch 1/2 ---
+2025-12-03 05:58:03 - exp6_auxiliary_free - INFO -   Evaluating on training subset...
+2025-12-03 05:59:47 - exp6_auxiliary_free - INFO -   Evaluating on validation set...
+2025-12-03 06:07:20 - exp6_auxiliary_free - INFO - Computing embedding quality...
+2025-12-03 06:07:21 - exp6_auxiliary_free - INFO -     Embedding std: 0.7084
+2025-12-03 06:07:21 - exp6_auxiliary_free - INFO -     NN overlap: 0.163
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - Checkpoint saved (epoch 1, step 9998)
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - 
+--- Epoch 1 Summary ---
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - Training Progress:
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Loss (learning avg): 0.0149
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Loss (first batch):  0.7946
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Loss (last batch):   0.0034
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Improvement:         0.7912
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - 
+Final Model Performance:
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Train loss (final):  0.0030
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Val loss:            0.0027
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Gap (train-val loss):+0.0003
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Train Top-10:        0.953
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   Val Top-10:          0.954
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO -   ✅ Good generalization (gap = +0.0003)
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - 
+Batch Metrics (during learning):
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - Train Recall@10: 0.833
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - Train mAP@20: 0.566
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - Train Brier: 0.0049
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - Embedding std: 0.7084
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - NN overlap: 0.163
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - MoE Load CV: 1.020
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - MoE Collapsed: 2.83
+2025-12-03 06:07:23 - exp6_auxiliary_free - INFO - 
+--- Epoch 2/2 ---
+2025-12-03 07:26:20 - exp6_auxiliary_free - INFO -   Evaluating on training subset...
+2025-12-03 07:28:23 - exp6_auxiliary_free - INFO -   Evaluating on validation set...
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - Checkpoint saved (epoch 2, step 19996)
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - 
+--- Epoch 2 Summary ---
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - Training Progress:
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Loss (learning avg): 0.0028
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Loss (first batch):  0.0034
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Loss (last batch):   0.0030
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Improvement:         0.0003
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - 
+Final Model Performance:
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Train loss (final):  0.0027
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Val loss:            0.0023
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Gap (train-val loss):+0.0004
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Train Top-10:        0.964
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   Val Top-10:          0.966
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO -   ✅ Good generalization (gap = +0.0004)
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - 
+Batch Metrics (during learning):
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - Train Recall@10: 0.949
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - Train mAP@20: 0.683
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - Train Brier: 0.0006
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - MoE Load CV: 0.842
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - MoE Collapsed: 2.04
+2025-12-03 07:36:23 - exp6_auxiliary_free - INFO - 
+Training completed in 10286.7s
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - Complete results saved to logs/exp_round2-1_ablation_swiglu_aux_layer_dec1_2025/exp6_auxiliary_free/final_results.json
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - Metrics saved to logs/exp6_auxiliary_free/
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - 
+================================================================================
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - EXPERIMENT COMPLETE: exp6_auxiliary_free
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - ================================================================================
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - Final Top-10 Acc in val: 0.966
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - Training Time: 10286.7s
+2025-12-03 07:54:36 - exp6_auxiliary_free - INFO - ================================================================================
+

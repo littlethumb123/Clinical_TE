@@ -1,0 +1,77 @@
+2025-11-17 06:01:23 - exp6_auxiliary_free - INFO - Starting experiment: exp6_auxiliary_free
+2025-11-17 06:01:23 - exp6_auxiliary_free - INFO - Model: Flash + MoE Transformer (FP16, 8 experts)
+2025-11-17 06:01:23 - exp6_auxiliary_free - INFO - Total parameters: 34,904,978
+2025-11-17 06:03:55 - exp6_auxiliary_free - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-17 06:03:55 - exp6_auxiliary_free - INFO - Using high-performance DataLoader with 16 workers.
+2025-11-17 06:03:55 - exp6_auxiliary_free - INFO - Training for 2 epochs...
+2025-11-17 06:03:55 - exp6_auxiliary_free - INFO - 
+--- Epoch 1/2 ---
+2025-11-17 06:15:42 - exp6_auxiliary_free - INFO -   Evaluating on training subset...
+2025-11-17 06:15:56 - exp6_auxiliary_free - INFO -   Evaluating on validation set...
+2025-11-17 06:16:18 - exp6_auxiliary_free - INFO - Computing embedding quality...
+2025-11-17 06:16:19 - exp6_auxiliary_free - INFO -     Embedding std: 0.0000
+2025-11-17 06:16:19 - exp6_auxiliary_free - INFO -     NN overlap: 0.000
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - Checkpoint saved (epoch 1, step 3998)
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - 
+--- Epoch 1 Summary ---
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - Training Progress:
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Loss (learning avg): 0.0320
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Loss (first batch):  0.8014
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Loss (last batch):   0.0043
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Improvement:         0.7971
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - 
+Final Model Performance:
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Train loss (final):  0.0040
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Val loss:            0.0039
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Gap (train-val loss):+0.0001
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Train Top-10:        0.820
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   Val Top-10:          0.831
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - 
+Batch Metrics (during learning):
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - Train Recall@10: 0.731
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - Train mAP@20: 0.516
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - Train Brier: 0.0114
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - Embedding std: 0.0000
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - NN overlap: 0.000
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - MoE Load CV: 0.723
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - MoE Collapsed: 1.975
+2025-11-17 06:16:21 - exp6_auxiliary_free - INFO - 
+--- Epoch 2/2 ---
+2025-11-17 06:28:17 - exp6_auxiliary_free - INFO -   Evaluating on training subset...
+2025-11-17 06:28:30 - exp6_auxiliary_free - INFO -   Evaluating on validation set...
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - Checkpoint saved (epoch 2, step 7996)
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - 
+--- Epoch 2 Summary ---
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - Training Progress:
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Loss (learning avg): 0.0038
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Loss (first batch):  0.0041
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Loss (last batch):   0.0035
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Improvement:         0.0006
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - 
+Final Model Performance:
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Train loss (final):  0.0035
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Val loss:            0.0033
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Gap (train-val loss):+0.0002
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Train Top-10:        0.868
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   Val Top-10:          0.875
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO -   ✅ Good generalization (gap = +0.0002)
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - 
+Batch Metrics (during learning):
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - Train Recall@10: 0.845
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - Train mAP@20: 0.526
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - Train Brier: 0.0007
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - MoE Load CV: 0.722
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - MoE Collapsed: 1.975
+2025-11-17 06:29:02 - exp6_auxiliary_free - INFO - 
+Training completed in 1507.0s
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - Metrics saved to logs/exp6_auxiliary_free/
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - 
+================================================================================
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - EXPERIMENT COMPLETE: exp6_auxiliary_free
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - ================================================================================
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - Final Top-10 Acc in val: 0.875
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - Training Time: 1507.0s
+2025-11-17 06:30:17 - exp6_auxiliary_free - INFO - ================================================================================
+

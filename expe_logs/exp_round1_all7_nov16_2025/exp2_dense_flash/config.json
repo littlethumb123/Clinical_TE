@@ -1,0 +1,9 @@
+{
+  "experiment": "exp2_dense_flash",
+  "parameters": 27696274,
+  "epochs": 3,
+  "batch_size": 16,
+  "learning_rate": 0.0001,
+  "use_mixed_precision": true,
+  "use_bucketing": true
+}

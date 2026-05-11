@@ -1,0 +1,50 @@
+2025-12-16 03:15:15 - exp5_fine_grained - INFO - 
+================================================================================
+2025-12-16 03:15:15 - exp5_fine_grained - INFO - EXPERIMENT: exp5_fine_grained
+2025-12-16 03:15:15 - exp5_fine_grained - INFO - ================================================================================
+2025-12-16 03:15:16 - exp5_fine_grained - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -   MoE: 16 experts, top-5
+2025-12-16 03:15:16 - exp5_fine_grained - INFO - Total parameters: 46,952,089
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -    Per-GPU batch size: 32
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -    Effective batch size: 128
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -    Base learning rate: 0.0001
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -    Scaled learning rate: 2.00e-04
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-16 03:15:16 - exp5_fine_grained - INFO -    DataParallel output_device: 0
+2025-12-16 03:27:08 - exp5_fine_grained - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-16 03:27:08 - exp5_fine_grained - INFO - Using DataLoader with 32 workers.
+2025-12-16 03:27:08 - exp5_fine_grained - INFO - Training for 1 epochs...
+2025-12-16 03:27:08 - exp5_fine_grained - INFO - 
+--- Epoch 1/1 ---
+2025-12-16 05:53:39 - exp5_fine_grained - INFO -   Evaluating on training subset...
+2025-12-16 05:54:40 - exp5_fine_grained - INFO -   Evaluating on validation set...
+2025-12-16 05:59:45 - exp5_fine_grained - INFO - Computing embedding quality...
+2025-12-16 05:59:46 - exp5_fine_grained - INFO -     Embedding std: 1.5062
+2025-12-16 05:59:46 - exp5_fine_grained - INFO -     NN overlap: 0.132
+2025-12-16 05:59:49 - exp5_fine_grained - INFO - 
+--- Epoch 1 Summary ---
+2025-12-16 05:59:49 - exp5_fine_grained - INFO -   Train loss: 0.0105 → 0.0048
+2025-12-16 05:59:49 - exp5_fine_grained - INFO -   Val loss: 0.0042, Top-10: 0.948
+2025-12-16 05:59:49 - exp5_fine_grained - INFO - 
+Training completed in 9161.0s
+2025-12-16 06:06:46 - exp5_fine_grained - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp5_fine_grained_bs32_ep1_d256_20251216_060645
+2025-12-16 06:06:46 - exp5_fine_grained - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.58 GB
+2025-12-16 06:06:46 - exp5_fine_grained - INFO - 
+================================================================================
+2025-12-16 06:06:46 - exp5_fine_grained - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-16 06:06:46 - exp5_fine_grained - INFO - ================================================================================
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - Downstream Test AUC-ROC: 0.7319
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - Downstream Test F1: 0.0836
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp5_fine_grained/final_results.json
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - 
+================================================================================
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - EXPERIMENT COMPLETE: exp5_fine_grained
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - ================================================================================
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - Final Top-10 Acc: 0.948
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - Best Val Loss: 0.0000
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - Training Time: 9161.0s
+2025-12-16 06:09:26 - exp5_fine_grained - INFO - ================================================================================
+

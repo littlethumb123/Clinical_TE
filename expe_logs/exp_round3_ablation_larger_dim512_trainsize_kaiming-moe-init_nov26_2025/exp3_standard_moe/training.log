@@ -1,0 +1,13 @@
+2025-11-30 16:11:13 - exp3_standard_moe - INFO - Starting experiment: exp3_standard_moe
+2025-11-30 16:11:13 - exp3_standard_moe - INFO - ⚡ OVERRIDE: embedding_size=512
+2025-11-30 16:11:13 - exp3_standard_moe - INFO -    Auto-calculated: nhead=8 (head_dim=64), nhid=1408
+2025-11-30 16:11:14 - exp3_standard_moe - INFO - Model: Flash + MoE Transformer (FP16)
+2025-11-30 16:11:14 - exp3_standard_moe - INFO -   d_model=512, nhid=1408, nhead=8 (head_dim=64)
+2025-11-30 16:11:14 - exp3_standard_moe - INFO -   Daily Encoder: Flash Attention + Max-Pool
+2025-11-30 16:11:14 - exp3_standard_moe - INFO -   MoE: 8 experts, top-2
+2025-11-30 16:11:14 - exp3_standard_moe - INFO - Total parameters: 105,269,906
+2025-11-30 16:23:57 - exp3_standard_moe - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-30 16:23:58 - exp3_standard_moe - INFO - Using high-performance DataLoader with 48 workers.
+2025-11-30 16:23:58 - exp3_standard_moe - INFO - Training for 1 epochs...
+2025-11-30 16:23:58 - exp3_standard_moe - INFO - 
+--- Epoch 1/1 ---

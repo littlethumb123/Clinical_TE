@@ -1,0 +1,77 @@
+2025-11-16 23:48:15 - exp3b_moe_swiglu_learned_pool - INFO - Starting experiment: exp3b_moe_swiglu_learned_pool
+2025-11-16 23:48:15 - exp3b_moe_swiglu_learned_pool - INFO - Model: Flash + MoE Transformer (FP16, 8 experts)
+2025-11-16 23:48:15 - exp3b_moe_swiglu_learned_pool - INFO - Total parameters: 34,906,002
+2025-11-16 23:50:50 - exp3b_moe_swiglu_learned_pool - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-16 23:50:50 - exp3b_moe_swiglu_learned_pool - INFO - Using high-performance DataLoader with 16 workers.
+2025-11-16 23:50:50 - exp3b_moe_swiglu_learned_pool - INFO - Training for 2 epochs...
+2025-11-16 23:50:50 - exp3b_moe_swiglu_learned_pool - INFO - 
+--- Epoch 1/2 ---
+2025-11-17 00:05:39 - exp3b_moe_swiglu_learned_pool - INFO -   Evaluating on training subset...
+2025-11-17 00:05:53 - exp3b_moe_swiglu_learned_pool - INFO -   Evaluating on validation set...
+2025-11-17 00:06:20 - exp3b_moe_swiglu_learned_pool - INFO - Computing embedding quality...
+2025-11-17 00:06:21 - exp3b_moe_swiglu_learned_pool - INFO -     Embedding std: 0.0000
+2025-11-17 00:06:21 - exp3b_moe_swiglu_learned_pool - INFO -     NN overlap: 0.000
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - Checkpoint saved (epoch 1, step 3998)
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - 
+--- Epoch 1 Summary ---
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - Training Progress:
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Loss (learning avg): 0.0320
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Loss (first batch):  0.8041
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Loss (last batch):   0.0042
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Improvement:         0.7998
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - 
+Final Model Performance:
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Train loss (final):  0.0039
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Val loss:            0.0039
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Gap (train-val loss):+0.0001
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Train Top-10:        0.809
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   Val Top-10:          0.808
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - 
+Batch Metrics (during learning):
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - Train Recall@10: 0.739
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - Train mAP@20: 0.524
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - Train Brier: 0.0114
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - Embedding std: 0.0000
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - NN overlap: 0.000
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - MoE Load CV: 0.271
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - MoE Collapsed: 0.1
+2025-11-17 00:06:33 - exp3b_moe_swiglu_learned_pool - INFO - 
+--- Epoch 2/2 ---
+2025-11-17 00:21:23 - exp3b_moe_swiglu_learned_pool - INFO -   Evaluating on training subset...
+2025-11-17 00:21:38 - exp3b_moe_swiglu_learned_pool - INFO -   Evaluating on validation set...
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - Checkpoint saved (epoch 2, step 7996)
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - 
+--- Epoch 2 Summary ---
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - Training Progress:
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Loss (learning avg): 0.0038
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Loss (first batch):  0.0040
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Loss (last batch):   0.0035
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Improvement:         0.0005
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - 
+Final Model Performance:
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Train loss (final):  0.0036
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Val loss:            0.0035
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Gap (train-val loss):+0.0001
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Train Top-10:        0.840
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   Val Top-10:          0.824
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - 
+Batch Metrics (during learning):
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - Train Recall@10: 0.831
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - Train mAP@20: 0.519
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - Train Brier: 0.0007
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - MoE Load CV: 0.287
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - MoE Collapsed: 0.075
+2025-11-17 00:22:18 - exp3b_moe_swiglu_learned_pool - INFO - 
+Training completed in 1887.8s
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - Metrics saved to logs/exp3b_moe_swiglu_learned_pool/
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - 
+================================================================================
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - EXPERIMENT COMPLETE: exp3b_moe_swiglu_learned_pool
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - ================================================================================
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - Final Top-10 Acc in val: 0.824
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - Training Time: 1887.8s
+2025-11-17 00:23:33 - exp3b_moe_swiglu_learned_pool - INFO - ================================================================================
+

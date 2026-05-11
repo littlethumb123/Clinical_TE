@@ -1,0 +1,50 @@
+2025-12-16 00:54:35 - exp4_shared_expert - INFO - 
+================================================================================
+2025-12-16 00:54:35 - exp4_shared_expert - INFO - EXPERIMENT: exp4_shared_expert
+2025-12-16 00:54:35 - exp4_shared_expert - INFO - ================================================================================
+2025-12-16 00:54:35 - exp4_shared_expert - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -   MoE: 8 experts, top-2
+2025-12-16 00:54:35 - exp4_shared_expert - INFO - Total parameters: 35,417,753
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -    Per-GPU batch size: 32
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -    Effective batch size: 128
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -    Base learning rate: 0.0001
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -    Scaled learning rate: 2.00e-04
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-16 00:54:35 - exp4_shared_expert - INFO -    DataParallel output_device: 0
+2025-12-16 01:06:30 - exp4_shared_expert - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-16 01:06:31 - exp4_shared_expert - INFO - Using DataLoader with 32 workers.
+2025-12-16 01:06:31 - exp4_shared_expert - INFO - Training for 1 epochs...
+2025-12-16 01:06:31 - exp4_shared_expert - INFO - 
+--- Epoch 1/1 ---
+2025-12-16 03:01:48 - exp4_shared_expert - INFO -   Evaluating on training subset...
+2025-12-16 03:02:41 - exp4_shared_expert - INFO -   Evaluating on validation set...
+2025-12-16 03:06:49 - exp4_shared_expert - INFO - Computing embedding quality...
+2025-12-16 03:06:50 - exp4_shared_expert - INFO -     Embedding std: 2.3974
+2025-12-16 03:06:50 - exp4_shared_expert - INFO -     NN overlap: 0.117
+2025-12-16 03:06:52 - exp4_shared_expert - INFO - 
+--- Epoch 1 Summary ---
+2025-12-16 03:06:52 - exp4_shared_expert - INFO -   Train loss: 0.0106 → 0.0040
+2025-12-16 03:06:52 - exp4_shared_expert - INFO -   Val loss: 0.0045, Top-10: 0.936
+2025-12-16 03:06:52 - exp4_shared_expert - INFO - 
+Training completed in 7221.6s
+2025-12-16 03:12:39 - exp4_shared_expert - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp4_shared_expert_bs32_ep1_d256_20251216_031238
+2025-12-16 03:12:39 - exp4_shared_expert - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-16 03:12:39 - exp4_shared_expert - INFO - 
+================================================================================
+2025-12-16 03:12:39 - exp4_shared_expert - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-16 03:12:39 - exp4_shared_expert - INFO - ================================================================================
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - Downstream Test AUC-ROC: 0.7607
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - Downstream Test F1: 0.0921
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp4_shared_expert/final_results.json
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - 
+================================================================================
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - EXPERIMENT COMPLETE: exp4_shared_expert
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - ================================================================================
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - Final Top-10 Acc: 0.936
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - Best Val Loss: 0.0000
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - Training Time: 7221.6s
+2025-12-16 03:14:56 - exp4_shared_expert - INFO - ================================================================================
+

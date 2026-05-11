@@ -1,0 +1,76 @@
+2025-12-02 06:06:04 - exp2b_flash_learned_pool - INFO - Starting experiment: exp2b_flash_learned_pool
+2025-12-02 06:06:06 - exp2b_flash_learned_pool - INFO - Model: Flash Attention Transformer (FP16)
+2025-12-02 06:06:06 - exp2b_flash_learned_pool - INFO -   d_model=256, nhid=704, nhead=8 (head_dim=32)
+2025-12-02 06:06:06 - exp2b_flash_learned_pool - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-02 06:06:06 - exp2b_flash_learned_pool - INFO - Total parameters: 28,154,770
+2025-12-02 06:18:53 - exp2b_flash_learned_pool - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-02 06:18:53 - exp2b_flash_learned_pool - INFO - Using high-performance DataLoader with 48 workers.
+2025-12-02 06:18:53 - exp2b_flash_learned_pool - INFO - Training for 2 epochs...
+2025-12-02 06:18:53 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 1/2 ---
+2025-12-02 07:20:17 - exp2b_flash_learned_pool - INFO -   Evaluating on training subset...
+2025-12-02 07:20:56 - exp2b_flash_learned_pool - INFO -   Evaluating on validation set...
+2025-12-02 07:23:44 - exp2b_flash_learned_pool - INFO - Computing embedding quality...
+2025-12-02 07:23:45 - exp2b_flash_learned_pool - INFO -     Embedding std: 0.5778
+2025-12-02 07:23:45 - exp2b_flash_learned_pool - INFO -     NN overlap: 0.161
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO - Checkpoint saved (epoch 1, step 9998)
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 1 Summary ---
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO - Training Progress:
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO -   Loss (learning avg): 0.0151
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO -   Loss (first batch):  0.8057
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO -   Loss (last batch):   0.0032
+2025-12-02 07:23:46 - exp2b_flash_learned_pool - INFO -   Improvement:         0.8025
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - 
+Final Model Performance:
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO -   Train loss (final):  0.0030
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO -   Val loss:            0.0027
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO -   Gap (train-val loss):+0.0003
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO -   Train Top-10:        0.944
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO -   Val Top-10:          0.946
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO -   ✅ Good generalization (gap = +0.0003)
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - 
+Batch Metrics (during learning):
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - Train Recall@10: 0.815
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - Train mAP@20: 0.546
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - Train Brier: 0.0050
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - Embedding std: 0.5778
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - NN overlap: 0.161
+2025-12-02 07:23:47 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 2/2 ---
+2025-12-02 08:24:48 - exp2b_flash_learned_pool - INFO -   Evaluating on training subset...
+2025-12-02 08:26:12 - exp2b_flash_learned_pool - INFO -   Evaluating on validation set...
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - Checkpoint saved (epoch 2, step 19996)
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - 
+--- Epoch 2 Summary ---
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - Training Progress:
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Loss (learning avg): 0.0029
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Loss (first batch):  0.0032
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Loss (last batch):   0.0030
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Improvement:         0.0002
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - 
+Final Model Performance:
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Train loss (final):  0.0027
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Val loss:            0.0023
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Gap (train-val loss):+0.0004
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Train Top-10:        0.964
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   Val Top-10:          0.965
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO -   ✅ Good generalization (gap = +0.0004)
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - 
+Batch Metrics (during learning):
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - Train Recall@10: 0.948
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - Train mAP@20: 0.675
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - Train Brier: 0.0006
+2025-12-02 08:32:05 - exp2b_flash_learned_pool - INFO - 
+Training completed in 7991.4s
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - Complete results saved to logs/exp_round2-1_ablation_swiglu_aux_layer_dec1_2025/exp2b_flash_learned_pool/final_results.json
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - Metrics saved to logs/exp2b_flash_learned_pool/
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - 
+================================================================================
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - EXPERIMENT COMPLETE: exp2b_flash_learned_pool
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - ================================================================================
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - Final Top-10 Acc in val: 0.965
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - Training Time: 7991.4s
+2025-12-02 08:43:32 - exp2b_flash_learned_pool - INFO - ================================================================================
+

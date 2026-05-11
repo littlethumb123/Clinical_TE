@@ -1,0 +1,25 @@
+{
+  "experiment": "exp4_shared_expert",
+  "embedding_size": 256,
+  "nhid": 704,
+  "nhead": 8,
+  "batch_size": 32,
+  "use_mixed_precision": true,
+  "use_bucketing": true,
+  "use_learnt_att_pool": true,
+  "moe_config": {
+    "d_model": 256,
+    "d_ff": 512,
+    "num_experts": 8,
+    "num_shared_experts": 1,
+    "top_k": 2,
+    "expert_dropout": 0.05,
+    "load_balance_strategy": "switch",
+    "aux_loss_weight": 0.001,
+    "bias_lr": 1e-05,
+    "bias_momentum": 0.9,
+    "z_loss_weight": 0.0,
+    "use_moe_from_layer": 2,
+    "use_swiglu_experts": true
+  }
+}

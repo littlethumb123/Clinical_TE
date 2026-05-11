@@ -1,0 +1,77 @@
+2025-11-16 22:31:00 - exp3a_moe_swiglu - INFO - Starting experiment: exp3a_moe_swiglu
+2025-11-16 22:31:00 - exp3a_moe_swiglu - INFO - Model: Flash + MoE Transformer (FP16, 8 experts)
+2025-11-16 22:31:00 - exp3a_moe_swiglu - INFO - Total parameters: 35,037,330
+2025-11-16 22:33:35 - exp3a_moe_swiglu - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-16 22:33:35 - exp3a_moe_swiglu - INFO - Using high-performance DataLoader with 16 workers.
+2025-11-16 22:33:35 - exp3a_moe_swiglu - INFO - Training for 2 epochs...
+2025-11-16 22:33:35 - exp3a_moe_swiglu - INFO - 
+--- Epoch 1/2 ---
+2025-11-16 23:08:48 - exp3a_moe_swiglu - INFO -   Evaluating on training subset...
+2025-11-16 23:09:10 - exp3a_moe_swiglu - INFO -   Evaluating on validation set...
+2025-11-16 23:09:51 - exp3a_moe_swiglu - INFO - Computing embedding quality...
+2025-11-16 23:09:53 - exp3a_moe_swiglu - INFO -     Embedding std: 0.0000
+2025-11-16 23:09:53 - exp3a_moe_swiglu - INFO -     NN overlap: 0.000
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - Checkpoint saved (epoch 1, step 3998)
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - 
+--- Epoch 1 Summary ---
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - Training Progress:
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Loss (learning avg): 0.0323
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Loss (first batch):  0.7994
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Loss (last batch):   0.0037
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Improvement:         0.7958
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - 
+Final Model Performance:
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Train loss (final):  0.0040
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Val loss:            0.0039
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Gap (train-val loss):+0.0001
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Train Top-10:        0.837
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   Val Top-10:          0.827
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - 
+Batch Metrics (during learning):
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - Train Recall@10: 0.745
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - Train mAP@20: 0.523
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - Train Brier: 0.0114
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - Embedding std: 0.0000
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - NN overlap: 0.000
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - MoE Load CV: 0.258
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - MoE Collapsed: 0.1
+2025-11-16 23:10:05 - exp3a_moe_swiglu - INFO - 
+--- Epoch 2/2 ---
+2025-11-16 23:45:27 - exp3a_moe_swiglu - INFO -   Evaluating on training subset...
+2025-11-16 23:45:49 - exp3a_moe_swiglu - INFO -   Evaluating on validation set...
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - Checkpoint saved (epoch 2, step 7996)
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - 
+--- Epoch 2 Summary ---
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - Training Progress:
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Loss (learning avg): 0.0038
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Loss (first batch):  0.0045
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Loss (last batch):   0.0027
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Improvement:         0.0017
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - 
+Final Model Performance:
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Train loss (final):  0.0036
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Val loss:            0.0035
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Gap (train-val loss):+0.0001
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Train Top-10:        0.805
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   Val Top-10:          0.802
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - 
+Batch Metrics (during learning):
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - Train Recall@10: 0.805
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - Train mAP@20: 0.495
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - Train Brier: 0.0007
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - MoE Load CV: 0.265
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - MoE Collapsed: 0.05
+2025-11-16 23:46:43 - exp3a_moe_swiglu - INFO - 
+Training completed in 4387.6s
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - Metrics saved to logs/exp3a_moe_swiglu/
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - 
+================================================================================
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - EXPERIMENT COMPLETE: exp3a_moe_swiglu
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - ================================================================================
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - Final Top-10 Acc in val: 0.802
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - Training Time: 4387.6s
+2025-11-16 23:48:13 - exp3a_moe_swiglu - INFO - ================================================================================
+

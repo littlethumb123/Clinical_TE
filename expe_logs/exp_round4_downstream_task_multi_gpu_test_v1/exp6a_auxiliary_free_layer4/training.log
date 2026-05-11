@@ -1,0 +1,50 @@
+2025-12-16 08:23:00 - exp6a_auxiliary_free_layer4 - INFO - 
+================================================================================
+2025-12-16 08:23:00 - exp6a_auxiliary_free_layer4 - INFO - EXPERIMENT: exp6a_auxiliary_free_layer4
+2025-12-16 08:23:00 - exp6a_auxiliary_free_layer4 - INFO - ================================================================================
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -   MoE: 8 experts, top-2
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO - Total parameters: 30,371,481
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -    Per-GPU batch size: 32
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -    Effective batch size: 128
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -    Base learning rate: 0.0001
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -    Scaled learning rate: 2.00e-04
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-16 08:23:01 - exp6a_auxiliary_free_layer4 - INFO -    DataParallel output_device: 0
+2025-12-16 08:34:49 - exp6a_auxiliary_free_layer4 - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-16 08:34:50 - exp6a_auxiliary_free_layer4 - INFO - Using DataLoader with 32 workers.
+2025-12-16 08:34:50 - exp6a_auxiliary_free_layer4 - INFO - Training for 1 epochs...
+2025-12-16 08:34:50 - exp6a_auxiliary_free_layer4 - INFO - 
+--- Epoch 1/1 ---
+2025-12-16 10:13:19 - exp6a_auxiliary_free_layer4 - INFO -   Evaluating on training subset...
+2025-12-16 10:14:10 - exp6a_auxiliary_free_layer4 - INFO -   Evaluating on validation set...
+2025-12-16 10:17:34 - exp6a_auxiliary_free_layer4 - INFO - Computing embedding quality...
+2025-12-16 10:17:35 - exp6a_auxiliary_free_layer4 - INFO -     Embedding std: 1.3277
+2025-12-16 10:17:35 - exp6a_auxiliary_free_layer4 - INFO -     NN overlap: 0.133
+2025-12-16 10:17:36 - exp6a_auxiliary_free_layer4 - INFO - 
+--- Epoch 1 Summary ---
+2025-12-16 10:17:36 - exp6a_auxiliary_free_layer4 - INFO -   Train loss: 0.0104 → 0.0045
+2025-12-16 10:17:36 - exp6a_auxiliary_free_layer4 - INFO -   Val loss: 0.0041, Top-10: 0.957
+2025-12-16 10:17:36 - exp6a_auxiliary_free_layer4 - INFO - 
+Training completed in 6166.3s
+2025-12-16 10:22:17 - exp6a_auxiliary_free_layer4 - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp6a_auxiliary_free_layer4_bs32_ep1_d256_20251216_102216
+2025-12-16 10:22:17 - exp6a_auxiliary_free_layer4 - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.02 GB
+2025-12-16 10:22:17 - exp6a_auxiliary_free_layer4 - INFO - 
+================================================================================
+2025-12-16 10:22:17 - exp6a_auxiliary_free_layer4 - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-16 10:22:17 - exp6a_auxiliary_free_layer4 - INFO - ================================================================================
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - Downstream Test AUC-ROC: 0.7232
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - Downstream Test F1: 0.0822
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp6a_auxiliary_free_layer4/final_results.json
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - 
+================================================================================
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - EXPERIMENT COMPLETE: exp6a_auxiliary_free_layer4
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - ================================================================================
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - Final Top-10 Acc: 0.957
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - Best Val Loss: 0.0000
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - Training Time: 6166.3s
+2025-12-16 10:24:43 - exp6a_auxiliary_free_layer4 - INFO - ================================================================================
+

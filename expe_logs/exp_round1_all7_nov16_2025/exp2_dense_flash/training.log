@@ -1,0 +1,103 @@
+2025-11-13 01:27:45 - exp2_dense_flash - INFO - Starting experiment: exp2_dense_flash
+2025-11-13 01:27:45 - exp2_dense_flash - INFO - Model: Flash Attention Transformer (FP16, pooling=False)
+2025-11-13 01:27:45 - exp2_dense_flash - INFO - Total parameters: 27,696,274
+2025-11-13 01:30:20 - exp2_dense_flash - INFO - Bucketing is ENABLED via BatchSampler.
+2025-11-13 01:30:20 - exp2_dense_flash - INFO - Using high-performance DataLoader with 16 workers.
+2025-11-13 01:30:20 - exp2_dense_flash - INFO - Training for 3 epochs...
+2025-11-13 01:30:20 - exp2_dense_flash - INFO - 
+--- Epoch 1/3 ---
+2025-11-13 02:00:23 - exp2_dense_flash - INFO -   Evaluating on training subset...
+2025-11-13 02:00:45 - exp2_dense_flash - INFO -   Evaluating on validation set...
+2025-11-13 02:01:24 - exp2_dense_flash - INFO - Computing embedding quality...
+2025-11-13 02:01:26 - exp2_dense_flash - INFO -     Embedding std: 0.0000
+2025-11-13 02:01:26 - exp2_dense_flash - INFO -     NN overlap: 0.000
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - Checkpoint saved (epoch 1, step 3999)
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - 
+--- Epoch 1 Summary ---
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - Training Progress:
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Loss (learning avg): 0.0321
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Loss (first batch):  0.7931
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Loss (last batch):   0.0039
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Improvement:         0.7891
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - 
+Final Model Performance:
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Train loss (final):  0.0039
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Val loss:            0.0038
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Gap (train-val loss):+0.0001
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Train Top-10:        0.845
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   Val Top-10:          0.844
+2025-11-13 02:01:35 - exp2_dense_flash - INFO -   ✅ Good generalization (gap = +0.0001)
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - 
+Batch Metrics (during learning):
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - Train Recall@10: 0.715
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - Train mAP@20: 0.514
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - Train Brier: 0.0113
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - Embedding std: 0.0000
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - NN overlap: 0.000
+2025-11-13 02:01:35 - exp2_dense_flash - INFO - 
+--- Epoch 2/3 ---
+2025-11-13 02:31:28 - exp2_dense_flash - INFO -   Evaluating on training subset...
+2025-11-13 02:31:50 - exp2_dense_flash - INFO -   Evaluating on validation set...
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - Checkpoint saved (epoch 2, step 7998)
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - 
+--- Epoch 2 Summary ---
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - Training Progress:
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Loss (learning avg): 0.0037
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Loss (first batch):  0.0040
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Loss (last batch):   0.0036
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Improvement:         0.0004
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - 
+Final Model Performance:
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Train loss (final):  0.0033
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Val loss:            0.0031
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Gap (train-val loss):+0.0002
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Train Top-10:        0.910
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   Val Top-10:          0.917
+2025-11-13 02:32:38 - exp2_dense_flash - INFO -   ✅ Good generalization (gap = +0.0002)
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - 
+Batch Metrics (during learning):
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - Train Recall@10: 0.880
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - Train mAP@20: 0.554
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - Train Brier: 0.0006
+2025-11-13 02:32:38 - exp2_dense_flash - INFO - 
+--- Epoch 3/3 ---
+2025-11-13 03:02:22 - exp2_dense_flash - INFO -   Evaluating on training subset...
+2025-11-13 03:02:44 - exp2_dense_flash - INFO -   Evaluating on validation set...
+2025-11-13 03:03:21 - exp2_dense_flash - INFO - Computing embedding quality...
+2025-11-13 03:03:23 - exp2_dense_flash - INFO -     Embedding std: 0.0000
+2025-11-13 03:03:23 - exp2_dense_flash - INFO -     NN overlap: 0.000
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - Checkpoint saved (epoch 3, step 11997)
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - 
+--- Epoch 3 Summary ---
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - Training Progress:
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Loss (learning avg): 0.0032
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Loss (first batch):  0.0038
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Loss (last batch):   0.0029
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Improvement:         0.0009
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - 
+Final Model Performance:
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Train loss (final):  0.0030
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Val loss:            0.0028
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Gap (train-val loss):+0.0002
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Train Top-10:        0.944
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   Val Top-10:          0.943
+2025-11-13 03:03:30 - exp2_dense_flash - INFO -   ✅ Good generalization (gap = +0.0002)
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - 
+Batch Metrics (during learning):
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - Train Recall@10: 0.922
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - Train mAP@20: 0.611
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - Train Brier: 0.0007
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - Embedding std: 0.0000
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - NN overlap: 0.000
+2025-11-13 03:03:30 - exp2_dense_flash - INFO - 
+Training completed in 5590.4s
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - Metrics saved to logs/exp2_dense_flash/
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - 
+================================================================================
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - EXPERIMENT COMPLETE: exp2_dense_flash
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - ================================================================================
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - Final Top-10 Acc in val: 0.943
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - Best Val Loss: 0.0000 (epoch 1)
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - Training Time: 5590.4s
+2025-11-13 03:05:01 - exp2_dense_flash - INFO - ================================================================================
+

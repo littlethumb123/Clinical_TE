@@ -1,0 +1,50 @@
+2025-12-16 06:09:45 - exp6b_auxiliary_free_no-share-exp - INFO - 
+================================================================================
+2025-12-16 06:09:45 - exp6b_auxiliary_free_no-share-exp - INFO - EXPERIMENT: exp6b_auxiliary_free_no-share-exp
+2025-12-16 06:09:45 - exp6b_auxiliary_free_no-share-exp - INFO - ================================================================================
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO - Model: Flash + MoE Transformer (FP16)
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -   d_model=256, nhid=704, nhead=8
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -   Daily Encoder: Learned Attention Pooling
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -   MoE: 8 experts, top-2
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO - Total parameters: 35,418,777
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -  Enabling DataParallel with 4 GPUs
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -    Per-GPU batch size: 32
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -    Effective batch size: 128
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -    Base learning rate: 0.0001
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -    Scaled learning rate: 2.00e-04
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -    DataParallel device_ids: [0, 1, 2, 3]
+2025-12-16 06:09:46 - exp6b_auxiliary_free_no-share-exp - INFO -    DataParallel output_device: 0
+2025-12-16 06:21:36 - exp6b_auxiliary_free_no-share-exp - INFO - Bucketing is ENABLED via BatchSampler.
+2025-12-16 06:21:37 - exp6b_auxiliary_free_no-share-exp - INFO - Using DataLoader with 32 workers.
+2025-12-16 06:21:37 - exp6b_auxiliary_free_no-share-exp - INFO - Training for 1 epochs...
+2025-12-16 06:21:37 - exp6b_auxiliary_free_no-share-exp - INFO - 
+--- Epoch 1/1 ---
+2025-12-16 08:10:02 - exp6b_auxiliary_free_no-share-exp - INFO -   Evaluating on training subset...
+2025-12-16 08:11:00 - exp6b_auxiliary_free_no-share-exp - INFO -   Evaluating on validation set...
+2025-12-16 08:14:48 - exp6b_auxiliary_free_no-share-exp - INFO - Computing embedding quality...
+2025-12-16 08:14:49 - exp6b_auxiliary_free_no-share-exp - INFO -     Embedding std: 1.4509
+2025-12-16 08:14:49 - exp6b_auxiliary_free_no-share-exp - INFO -     NN overlap: 0.133
+2025-12-16 08:14:51 - exp6b_auxiliary_free_no-share-exp - INFO - 
+--- Epoch 1 Summary ---
+2025-12-16 08:14:51 - exp6b_auxiliary_free_no-share-exp - INFO -   Train loss: 0.0103 → 0.0047
+2025-12-16 08:14:51 - exp6b_auxiliary_free_no-share-exp - INFO -   Val loss: 0.0041, Top-10: 0.955
+2025-12-16 08:14:51 - exp6b_auxiliary_free_no-share-exp - INFO - 
+Training completed in 6793.5s
+2025-12-16 08:20:36 - exp6b_auxiliary_free_no-share-exp - INFO - Model saved as: exp_round4_downstream_task_multi_gpu_test_v1_exp6b_auxiliary_free_no-share-exp_bs32_ep1_d256_20251216_082035
+2025-12-16 08:20:36 - exp6b_auxiliary_free_no-share-exp - INFO - 🗑️ Cleaned up 3 checkpoint files, freed 1.19 GB
+2025-12-16 08:20:36 - exp6b_auxiliary_free_no-share-exp - INFO - 
+================================================================================
+2025-12-16 08:20:36 - exp6b_auxiliary_free_no-share-exp - INFO - RUNNING DOWNSTREAM EVALUATION
+2025-12-16 08:20:36 - exp6b_auxiliary_free_no-share-exp - INFO - ================================================================================
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - Downstream Test AUC-ROC: 0.7441
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - Downstream Test F1: 0.0839
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - Complete results saved to logs/exp_round4_downstream_task_multi_gpu_test_v1/exp6b_auxiliary_free_no-share-exp/final_results.json
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - 
+================================================================================
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - EXPERIMENT COMPLETE: exp6b_auxiliary_free_no-share-exp
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - ================================================================================
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - Final Top-10 Acc: 0.955
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - Best Val Loss: 0.0000
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - Training Time: 6793.5s
+2025-12-16 08:22:41 - exp6b_auxiliary_free_no-share-exp - INFO - ================================================================================
+
