@@ -138,7 +138,7 @@ This document provides a detailed analysis of the experimentation design evoluti
 - The gap between aux-loss MoE (exp3e, 0.892) and aux-free MoE (exp6, 0.963) remains enormous — confirming that the auxiliary loss in the gradient is the primary pathology.
 - Moving MoE to layer 4 (exp6a) gives a trivial improvement over layer 2 (exp6): 0.757 vs 0.755 recall@1.
 - Removing shared expert (exp6b) slightly hurts: 0.959 vs 0.963 recall@10.
-- **Critical observation**: Even at parity, MoE (exp6a) uses 30.4M params vs dense (exp2b) at 25.3M — 20% more parameters for identical quality.
+- **Critical observation**: The logged Round 3 parity run is a larger-dim setup: MoE (exp6a) uses 84.47M params vs dense (exp2b) at 64.29M — 31% more parameters for essentially identical quality.
 
 ---
 
@@ -186,7 +186,7 @@ This document provides a detailed analysis of the experimentation design evoluti
 **Interpretation**:
 - exp1 catastrophically underperformed — likely not adapted to the 3-LOB evaluation framework correctly.
 - **exp2b and exp6 are virtually identical**: recall@10 0.828 vs 0.827, ndcg@10 0.398 vs 0.399. MoE adds nothing at this scale.
-- **This is the definitive MoE vs dense comparison at scale**: same data (1.5M, 3 LOBs), same infrastructure (4×T4 DDP), same training config. MoE reaches parity, not superiority. Given its 40% parameter overhead and 23% throughput penalty, MoE is strictly worse than dense.
+- **This is the definitive MoE vs dense comparison at scale**: same data (1.5M, 3 LOBs), same infrastructure (4×T4 DDP), same training config. MoE reaches parity, not superiority. Using the logged exp2b vs exp6 V3 results, MoE pays a 39.8% parameter penalty, 20.2% more peak memory, and 13.7% lower throughput for essentially tied ranking metrics.
 
 ---
 
@@ -572,69 +572,89 @@ Based on the critical review, the 3-slide structure should incorporate these cor
 
 **Hypothesis**: Clinical populations are heterogeneous. MoE lets experts specialize per patient archetype. Top-2 routing, same FLOPs as dense.
 
-**Evidence — two clean snapshots, not a progression table**:
+**Evidence — sourced round-by-round table, with routing diagnostics added**:
 
-**Snapshot 1 — Round 1** (same data, same epochs, same everything except MoE):
+Root cause analysis after Round 1 identified three interacting failures: aux loss dominating gradients, cold router behavior, and the SwiGLU→GELU mismatch at the MoE boundary. The table below keeps the original performance evidence, but adds exact parameter counts plus routing-health diagnostics from the logged `epoch_metrics.json` files.
 
-| Architecture | recall@10 | recall@1 |
-|-------------|-----------|----------|
-| Dense (exp2b) | **0.947** | **0.698** |
-| MoE 8 experts (exp3) | 0.777 | 0.305 |
-| MoE + shared expert (exp4) | 0.775 | 0.305 |
-| MoE 16 fine-grained (exp5) | 0.775 | 0.305 |
+| Round | Variant | Why tested | recall@10 | recall@1 | Params | Worst logged epoch-avg collapse / CV |
+|------|---------|------------|-----------|----------|--------|--------------------------------------|
+| R1 | Dense (exp2b) | Best dense control | **0.947** | **0.698** | 27.56M | — |
+| R1 | Standard MoE (exp3) | 8 experts, top-2 baseline | 0.777 | 0.305 | 35.07M | 0.60 collapsed; CV 0.43 |
+| R1 | MoE + LAP (exp3b) | Better daily pooling | 0.775 | 0.305 | 34.94M | 0.53 collapsed; CV 0.42 |
+| R1 | MoE + shared expert (exp4) | Keep one always-on general expert | 0.775 | 0.305 | 34.94M | 0.48 collapsed; CV 0.42 |
+| R1 | MoE 16 fine-grained (exp5) | More smaller experts | 0.775 | 0.305 | 34.36M | 3.83 collapsed; CV 0.37 |
+| R2 | Baseline rerun (exp3) | Control for fix ablations | 0.830 | 0.330 | 35.07M | 0.08 collapsed; CV 0.28 |
+| R2 | SwiGLU experts (exp3a) | Fix the SwiGLU→GELU mismatch | 0.802 | 0.320 | 35.04M | 0.10 collapsed; CV 0.26 |
+| R2 | SwiGLU + LAP (exp3b) | Add LAP on top of the SwiGLU fix | 0.824 | 0.313 | 34.91M | 0.10 collapsed; CV 0.29 |
+| R2 | Layer 4 insertion (exp3c) | Delay routing until later layers | 0.798 | 0.311 | 34.91M | 0.15 collapsed; CV 0.28 |
+| R2 | Aux loss 0.001 (exp3d) | Reduce balance-loss gradient conflict | 0.835 | 0.341 | 34.91M | 0.13 collapsed; CV 0.32 |
+| R2 | Auxiliary-free bias correction (exp6) | Remove aux loss from backprop | **0.875** | **0.530** | 34.90M | 1.98 collapsed; CV 0.72 |
+| R3 | **Best MoE: aux-free + layer 4 (exp6a)** | Best-performing parity run | **0.962** | **0.757** | **84.47M** | **3.57 collapsed; CV 1.22** |
 
-All MoE variants plateau at exactly recall@1=0.305. 56% below dense. With 27-40% more parameters.
+Notes:
+- `Worst logged epoch-avg collapse / CV` is the worst logged epoch-level `train_num_collapsed_experts` and `train_expert_load_cv` for that run.
+- Dense has no router, so the collapse column is not applicable.
+- Absolute recall values should only be compared within a round. This table is chronological evidence of what was tried, not a single cross-round leaderboard.
 
-**What we tried to make MoE work** (Rounds 2-3 — the efforts table):
+The table makes the core pattern visible: the interventions that helped accuracy did not actually eliminate routing pathology. Auxiliary-free bias correction was the only change that materially moved recall, but its routing metrics were worse than the low-aux variants, and the best-performing MoE row still logged 3.57 collapsed experts.
 
-Root cause analysis after Round 1 identified three interacting failures: aux loss dominating gradients (13x larger than task loss), cold router initialization, and SwiGLU→GELU activation mismatch. We systematically addressed each, one at a time:
+**Best-case parity — Round 3 same-run head-to-head**:
 
-| What we tried | Rationale | Result | Worth the cost? |
-|--------------|-----------|--------|----------------|
-| SwiGLU in expert FFNs (R2) | Fix activation mismatch at MoE boundary (layers 0-1 use SwiGLU, MoE experts used GELU) | recall@10: 0.802 (worse than R2 baseline 0.830) | No — not the primary bottleneck |
-| MoE from layer 4 instead of 2 (R2) | Let 4 dense layers build representations before routing | recall@10: 0.799 (no improvement) | No — premature insertion was secondary |
-| Reduce aux loss 10x: 0.01→0.001 (R2) | Reduce gradient conflict between balancing and prediction | recall@10: 0.835 (+0.5pp) | Marginal — conflict reduced but not eliminated |
-| **DeepSeek bias correction (R2)** | **Remove aux loss from gradient entirely; load-balance via bias vector updated outside backprop** | **recall@10: 0.875 (+4.5pp)** | **Yes — single biggest improvement** |
-| Shared expert (1 shared + 7 routed) (R1,R3) | Dedicated expert for general patterns; routed experts specialize | CV improved (0.484→0.310), but no quality gain | No — 1 shared helps stability, not accuracy |
-| Fine-grained: 16 experts, top-5 (R1) | More smaller experts for finer specialization | 6-7 of 16 collapsed; router gradient exploded (196x norm) | No — worse than 8 experts |
-| Kaiming router init (R3) | Better initialization to avoid random early routing | Slight improvement in load balance | Marginal |
-| 512d + MoE (R3) | More capacity for expert specialization | Same ceiling, 2.3x parameters | No |
+| Architecture | recall@10 | recall@1 | Params |
+|-------------|-----------|----------|--------|
+| Dense (exp2b) | **0.961** | 0.747 | 64.29M |
+| Best MoE (exp6a) | **0.962** | **0.757** | 84.47M |
 
-Net result of all fixes combined — **parity, not superiority**:
+That is parity, not superiority, and it required 31% more parameters in the logged Round 3 setup.
 
-**Snapshot 2 — Round 3** (same data, same epochs — clean head-to-head after all fixes):
+**Production-scale verdict — Round 5 exp2b vs exp6 V3** (same 1.5M-member, 3-LOB training setup):
 
-| Architecture | recall@10 | Params |
-|-------------|-----------|--------|
-| Dense (exp2b) | **0.961** | 25.3M |
-| Best MoE (exp6a, aux-free, all fixes) | **0.962** | 30.4M |
+| Dimension | Dense (exp2b) | MoE (exp6 V3) | MoE tax |
+|-----------|---------------|---------------|---------|
+| recall@10 | **0.8285** | 0.8273 | Essentially tied |
+| ndcg@10 | 0.3983 | **0.3987** | Essentially tied |
+| Parameters | 25.33M | 35.42M | +39.8% |
+| Peak memory | 11.14 GB | 13.39 GB | +20.2% |
+| Throughput | **1,037.5 samp/s** | 895.8 samp/s | -13.7% throughput |
+| Training cost | **$5.73** | $6.64 | +15.8% |
+| Engineering complexity | Simple | Router/bias tuning, collapse monitoring | Significantly higher |
 
-Parity — with 20% more parameters, 23% slower throughput, 18% more memory, and significantly more engineering complexity.
-
-**Confirmed at scale — Round 5** (1.5M members, 3 LOBs, same config):
-
-| Architecture | recall@10 |
-|-------------|-----------|
-| Dense (exp2b) | **0.828** |
-| Best MoE (exp6 V3) | **0.827** |
-
-**The cost-benefit verdict**:
-
-| Dimension | Dense (exp2b) | Best MoE (exp6a) | Tax paid for MoE |
-|-----------|--------------|------------------|------------------|
-| recall@10 | 0.961 | 0.962 | +0.1% (noise) |
-| Parameters | 25.3M | 30.4M | +20% more params |
-| Peak memory | 11.1 GB | 13.5 GB | +18% more memory |
-| Throughput | 1,037 samp/s | 845 samp/s | -23% slower |
-| Training cost | $5.73 | $7.04 | +23% more expensive |
-| Engineering complexity | Simple | Router tuning, bias_lr, collapse monitoring | Significantly higher |
+The defensible conclusion from the logged experiments is stronger than the current draft: best-case MoE only reached parity in a much larger Round 3 run, and in the production 256d scale comparison it was still effectively tied on ranking metrics while paying a clear parameter, memory, throughput, cost, and complexity tax.
 
 **Why — three structural reasons**:
 1. **Scale mismatch**: MoE benefits emerge at >1B params (Mixtral, DeepSeek). At 25M, we are 40x below the threshold where routing overhead pays for itself.
 2. **Aux loss gradient hijacking**: The primary failure mode. Load-balancing loss was 13x larger than task loss. Removing it entirely was the only effective fix — but even then, it only closed the gap to parity.
-3. **Domain homogeneity**: MoE excels in multi-domain settings (translation/summarization/code). Clinical claims is one domain — patient heterogeneity manifests as different code combinations, not fundamentally different computational patterns. The co-occurrence analysis (Section 1.2 of the data saturation study) confirms this: 86% of all code-pair diversity involves at least one common code. There aren't distinct "patient archetypes" that need separate expert processing — there's a continuous spectrum dominated by common chronic conditions.
+3. **Domain homogeneity**: MoE excels when the router can separate genuinely different computational modes, like translation vs code vs summarization. Clinical claims looks much more like one constrained clinical dialect: members differ in code mix and severity, but not in fundamentally different syntax or tasks. The saturation study supports that framing. Of the 898,332 unique same-day code pairs, 855,373 include at least one common code (95.2%). The top 10% of same-day pairs account for 91.7% of all pair occurrences, code-frequency entropy stays essentially flat from 1% to 100% sample (7.833-7.835 bits), and marginal-member JS divergence is tiny (0.00003-0.00035 bits). New members mostly add more of the same structure, not new expert-worthy regimes.
 
-**Slide 2 land-the-punch**: We invested 12 experiments across 3 rounds trying to make MoE work. We fixed every identified root cause. The best MoE matches dense — never beats it. The taxes (20% params, 23% slower, higher complexity) far exceed the benefit (0.1% recall, within noise). At this scale and domain, simpler is better.
+#### Slide 2 speaker transcript (roughly 90-120 seconds)
+
+> "MoE has become a standard scaling pattern in frontier language models because it lets you increase total capacity without sending every token through one huge feedforward block. In plain language, instead of one FFN doing all the work, the router chooses a small number of specialized mini-networks, or experts, for each token. That is what the diagram on the right is showing: we replace the standard FFN with a router and a bank of experts. In the shared-expert version, one expert stays available as a generalist safety net while the router chooses the specialists."
+>
+> "Our original hypothesis was that claims data might benefit from the same idea. Clinical populations are heterogeneous: some members are dominated by chronic cardiometabolic care, some by acute events, some by oncology or high-complexity utilization. If those were truly different computational regimes, MoE should let experts specialize by patient archetype and beat the dense TE model without increasing per-token FLOPs."
+>
+> "So I started with the naive MoE setups in the table. The 8-expert model is the standard top-2 baseline. The 7-plus-1 shared-expert version keeps one always-on generalist so the model has a safe fallback instead of forcing every token through narrow specialists. The 16-expert version is more fine-grained: each expert is smaller, and the router can make a more granular assignment. All of those variants were materially worse than the dense TE baseline."
+>
+> "The main warning signal was expert collapse. In plain language, collapse means the router keeps sending most tokens to a small subset of experts while the others sit mostly idle. In our logs, an expert counts as collapsed when its load share falls below 5%, averaged over the batches in an epoch. So a value like 1.98 does not mean exactly two experts died permanently. It means that, on average across that epoch, about two experts were effectively underused. The companion CV metric tells us how uneven the overall traffic is: lower is healthier, higher means the router is concentrating load into a few experts."
+>
+> "That led to the next round of fixes. I first corrected the MoE boundary and moved routing later in the stack, but those changes did not solve the problem. Then I added an auxiliary load-balancing loss. The easiest way to think about that is regularization: just like L2 regularization says don't put all the weight in one place, this term says don't put all the traffic on one expert. It helped a bit, but it still stayed below the dense baseline. After that I switched to DeepSeek-style auxiliary-free bias correction. The difference is important: instead of adding another loss term to backpropagate, it nudges routing with a running bias update outside the main task gradient. That removed the worst gradient conflict and performance improved sharply. But it also exposed the dilemma: as task performance improved, routing balance often got worse. In other words, the model seemed to predict best when it kept reusing the same few experts."
+>
+> "At that point the conclusion changed. The story was no longer that we just needed a smarter balancing penalty. The deeper issue is that the router is not discovering clean specialist subproblems. And that is where domain homogeneity matters. In natural language, MoE can separate very different kinds of computation, like code completion, translation, summarization, or math reasoning. Claims data is different. It is more like one constrained clinical dialect: members vary in combinations and severity, but they are not speaking different computational languages. The saturation analysis makes that concrete. By day 10 only 24% of codes are still novel within a member timeline, and by day 100 that falls to 7%. 95.2% of unique same-day code pairs already involve at least one common code. The top 1% of pairs explain 66.1% of all pair occurrences. And when we scale from 1% of members to 100%, entropy barely moves and JS divergence is near zero. New members mostly add more of the same structure, not new regimes for separate experts."
+>
+> "So the takeaway is: MoE was the right architecture to test, and it is a proven industry pattern, but in this setting it was the wrong scale and probably the wrong data regime. After 12 experiments across three rounds, the best MoE only reached parity in a larger run, and the production 256d comparison stayed effectively tied while paying 39.8% more parameters, 20.2% more memory, 13.7% lower throughput, and more engineering complexity. For Clinical TE, the dense architecture is the better operating point."
+
+#### Support for the domain-homogeneity claim
+
+| Evidence slice | Raw result | Why it supports a homogeneous-claims-language story |
+|---------------|------------|-----------------------------------------------------|
+| Within-member novelty decay | 24.1% novel by day 10; 11.2% by day 50; 7.3% by day 100 | Member timelines quickly recycle the same motifs instead of opening new sublanguages |
+| Pair diversity anchor | 855,373 / 898,332 unique same-day pairs include at least one common code = **95.2%** | Relational structure is anchored by the common clinical core, not by isolated specialist subdomains |
+| Pair concentration | Top 10% of same-day pairs explain **91.7%** of pair occurrences; top 1% explain **66.1%** | A small set of recurring relationships dominates the traffic seen by the router |
+| Cross-scale stability | Code entropy stays in a very narrow band: **7.833-7.835 bits** from 1% to 100% sample | Scaling the dataset mostly repeats the same frequency structure instead of revealing new modes |
+| Marginal-member divergence | JS divergence between adjacent sample expansions is only **0.00003-0.00035 bits** | Newly added members are distributionally very similar to the existing population |
+| Core vs marginal similarity | Mann-Whitney p-values are 0.42-0.64 across encounter count, unique codes, pair count, and density | There is no clean "special population" split for different experts to own |
+| Mean pairwise dependence | Overall mean mutual information is **0.0053 bits** | Average code-pair dependence is weak, which limits the amount of separable local structure a router can exploit |
+
+**Slide 2 land-the-punch**: We invested 12 experiments across 3 rounds trying to make MoE work. We fixed every identified root cause. The best-case MoE only reaches parity in a much larger Round 3 run, and in the production 256d comparison it is still effectively tied while paying 39.8% more parameters, 20.2% more memory, 13.7% lower throughput, higher cost, and significantly more engineering complexity. At this scale and in this domain, simpler is better.
 
 ---
 
@@ -702,7 +722,7 @@ One might hope that attention could learn tail code meaning from context (co-occ
 
 | Co-occurrence metric | Value | Implication |
 |---------------------|-------|-------------|
-| Pair diversity involving ≥1 common code | **86%** | Common codes dominate relational structure |
+| Pair diversity involving ≥1 common code | **95.2%** | Common codes dominate relational structure |
 | Tail-tail unique co-occurrence pairs | **21** (out of thousands possible) | Almost no relational signal between rare codes |
 | Mean mutual information between code pairs | **0.005 bits** | Codes are near-conditionally-independent given the patient |
 | Within-member code novelty at day 50 | **11%** (89% repeats) | Temporal context is mostly redundant |
@@ -733,7 +753,7 @@ Each direction is now evaluated against the full diagnostic evidence:
 
 | Approach | Mechanism | Evidence | Strength of case |
 |----------|----------|---------|-----------------|
-| **Pre-trained code embeddings (PPMI+SVD)** | Break input-level homogenization with co-occurrence structure | **Tested (R9)**: tail embedding std 0.03→0.077, first positive tail margin. Downstream hybrid Lift@1%=20.50 vs production 19.38 | **Strong** — directly addresses encoder bottleneck. But limited by co-occurrence structure poverty (86% common-dominated pairs, MI≈0.005). Captures distributional semantics, not deep clinical relationships |
+| **Pre-trained code embeddings (PPMI+SVD)** | Break input-level homogenization with co-occurrence structure | **Tested (R9)**: tail embedding std 0.03→0.077, first positive tail margin. Downstream hybrid Lift@1%=20.50 vs production 19.38 | **Strong** — directly addresses encoder bottleneck. But limited by co-occurrence structure poverty (95.2% of unique same-day pairs include a common code, MI≈0.005). Captures distributional semantics, not deep clinical relationships |
 
 **Tier 2: Untested but strongly motivated by diagnostics**
 
@@ -792,5 +812,5 @@ No single intervention addresses all three layers. The most promising path combi
 - *"Why not a different loss function?"* → R5.1: ASL improved calibration but did NOT change gradient distribution. Independent mechanisms.
 - *"Is the MoE comparison fair?"* → R3 head-to-head: same data, same epochs, same config. R5 confirmed at scale. Same answer both times.
 - *"Are the downstream numbers trustworthy?"* → Flag the OOT-strict vs non-strict distinction. Use consistent evaluation set when presenting.
-- *"If codes are near-independent (MI≈0.005), how can attention help at all?"* → Attention helps for *common* codes where co-occurrence pairs are abundant (86% of pair diversity). It's specifically for *tail* codes that the relational structure is too sparse. This is why the problem is tier-specific, not model-wide.
+- *"If codes are near-independent (MI≈0.005), how can attention help at all?"* → Attention helps for *common* codes where co-occurrence pairs are abundant and 95.2% of unique same-day pairs already include at least one common code. It's specifically for *tail* codes that the relational structure is too sparse. This is why the problem is tier-specific, not model-wide.
 - *"Why do you think masking will work if codes are independent?"* → MLM masking doesn't require codes to predict each other — it forces the *encoder* to build richer representations so the decoder can reconstruct. The gradient benefit (decoupling from frequency) is independent of inter-code MI.

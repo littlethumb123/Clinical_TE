@@ -1,241 +1,226 @@
-# Slide 1 Architecture Walk-Through: Full Transcript & Presentation Guide
+# Slides 1-2 Walk-Through: Full Transcript & Presentation Guide
 
 ## How to Use This Document
 
-This is a **speaker transcript** for the architecture slide. It walks through the diagram bottom-up, explains what happens inside each component, what was replaced from the old model, and where to insert Round 1 evidence. Presentation suggestions (callout boxes, annotations, side panels) are marked with `[SLIDE SUGGESTION]`.
+This is a **speaker transcript** for the first two slides. Slide 1 walks through the architecture bottom-up, explains what happens inside each component, what was replaced from the old model, and where to insert Round 1 evidence. Slide 2 covers the MoE lesson, including the experiment logic, routing diagnostics, and the domain-homogeneity conclusion. Presentation suggestions (callout boxes, annotations, side panels) are marked with `[SLIDE SUGGESTION]`.
 
 ---
 
-## Opening (5 seconds)
+## Opening (10 seconds)
 
-> "This diagram shows the full end-to-end architecture. I'm going to walk you through it bottom-up — the same direction the data flows — so you can see exactly how a member's raw claims become a 256-dimensional embedding."
-
----
-
-## Section 1: Code Embedding Layer (Bottom of Diagram)
-
-**[Point to: `code_emb [batch_size, 80, 256]` at the bottom]**
-
-> "We start at the very bottom. Each member's clinical history is organized by day. On any given day, a member can have up to 80 medical codes — these are ICD-10 diagnoses, CPT procedures, GPI medications, DRG codes, revenue codes, provider taxonomy, and place of service. That's a total input vocabulary of 75,516 unique codes.
->
-> Each code gets looked up in a learned embedding table and becomes a 256-dimensional vector. So for one day, we have a matrix of shape [80, 256] — 80 code vectors, each 256-d."
-
-**What changed from the old model**: Nothing at this layer — both exp1 and exp2b use the same embedding lookup. The differences start in how we aggregate these 80 vectors into one.
-
-`[SLIDE SUGGESTION]`: At the bottom of the diagram, add a small annotation: `75,516 input codes → 256-d embedding lookup`. This grounds the audience on vocabulary scale.
+> "This slide shows the training pipeline. The model uses a member's history to predict which clinical codes will appear on the next day. The 256-dimensional embedding is the internal summary learned for that task."
 
 ---
 
-## Section 2: Learned Attention Pooling (Below the Residual Sum)
+## Slide 1: Narrative with Technical Layer Detail (8-9 minutes)
 
-**[Point to: `learned_attention_pooling` box — "learned q → k, v proj → softmax"]**
+### 1. Start with the big picture
 
-> "Now we need to collapse those 80 code vectors into a single vector that represents the entire day. This is the Daily Encoder.
+> "The easiest way to understand this architecture is as a hierarchical encoder: first one day of claims, then up to 200 days for one member. That matches the data structure: codes within a day are an unordered set, while days across time form a sequence."
+
+### 2. Bottom layer: turn raw codes into one day vector
+
+**[Point to: `code_emb [batch_size, 80, 256]` and `learned_attention_pooling`]**
+
+> "At the bottom, each day can contain up to 80 codes drawn from a vocabulary of 75,516. Each code is mapped into a 256-dimensional embedding vector.
 >
-> We use **Learned Attention Pooling**. There's a single learned query vector — think of it as the model asking 'what happened today that matters?' This query attends to all 80 code embeddings through key and value projections, computes attention weights via softmax, and produces a weighted sum. The result is one 256-d vector per day.
+> Then we collapse those 80 code vectors into one vector that represents that day. We use Learned Attention Pooling. In simple terms, the model learns how much weight to give each code and then takes a weighted combination. So one vector now represents one member's day.
 >
-> A critical design decision here: **there is no positional encoding** at this level. Why? Because codes within a single claim day are an unordered set. If a member has diabetes (E11.9), hypertension (I10), and an insulin prescription (Z79.4) on the same day, there's no meaningful sequence — they're co-occurring events. The model treats them as a bag, which is exactly right for this data."
+> This replaced the old MaxPool-style collapse. MaxPool is a hard winner-take-all rule. Learned attention is a softer summary, so it keeps more information and was faster in practice."
 
-**[Point to: `mlp + norm` box below the residual sum]**
+### 3. Add demographic context
 
-> "After pooling, there's a small post-pooling MLP — a two-layer feedforward with GELU activation and LayerNorm — that adds a bit of nonlinear capacity to the daily representation before it enters the temporal encoder."
+**[Point to: `Residual sum: code_emb + code_pooled + age_emb + gender_emb + LOB`]**
 
-### What changed from the old model (OLD → NEW)
-
-> "In the previous architecture, this step was completely different. The old model used a **1-layer PyTorch transformer with 4 attention heads** to process the 80 codes, followed by **MaxPool** — which just takes the element-wise maximum across all 80 positions. MaxPool is a hard selection: only the single strongest activation per dimension survives. Everything else is discarded.
+> "Next we add demographic context: age, gender, and line of business. These learned embeddings are added to the day representation.
 >
-> Learned Attention Pooling replaces both the daily transformer and the MaxPool with a single soft attention operation. It's a weighted sum, not a hard max — the model learns what to attend to."
+> After this step, the member is represented as a sequence of up to 200 day vectors, each 256-dimensional."
 
-### Round 1 Evidence
+### 4. Middle stack: encode the 200-day history
 
-> "This is the one clean single-variable ablation from Round 1. exp2 used MaxPool, exp2b used Learned Attention Pooling — everything else identical, same data, same training."
+**[Point to: the stacked `Layer_0` through `Layer_5` block]**
 
-| Metric | MaxPool (exp2) | LAP (exp2b) |
-|--------|---------------|-------------|
-| recall@10 | 0.9430 | **0.9472** |
-| val_loss | 0.00275 | **0.00273** |
-| Training cost | $1.87 | **$1.52** |
-| Daily encoding speed | 1x | **3-5x faster** |
+> "The middle of the architecture is a 6-layer temporal encoder, and each layer follows the same sequence of operations.
+>
+> The input to one layer is a sequence of day vectors. Each vector already summarizes one day of clinical activity plus demographic context. The first step is **pre-norm**. We apply LayerNorm before the main computation so every day vector is on a stable scale. That matters because clinical histories can contain very uneven signal strength: a routine refill day and a hospitalization day should both be trainable without the larger-magnitude pattern destabilizing optimization. Pre-norm keeps the residual pathway clean and makes deep transformer training much more stable.
+>
+> From that normalized input, we form queries, keys, and values. Then we apply **RoPE** to the queries and keys. RoPE injects relative position directly into the attention geometry, so the model can treat the same code pattern differently depending on whether it happened yesterday, 30 days ago, or 6 months ago. For clinical data, that matters because timing changes meaning: a recent ER visit, a long-standing chronic diagnosis, and a medication started months earlier should not be interpreted the same way.
+>
+> Next comes **Flash Attention** with the **causal mask**. Conceptually this is still self-attention: each day looks back over earlier days and decides which past events matter for understanding the current state. The causal mask enforces the training logic by blocking any view of the future, so day t can only use days 1 through t. Flash Attention does not change that modeling idea; it changes how the computation is executed. Instead of materializing the full attention matrix in memory, it uses a fused, memory-efficient kernel, which lets us train faster and cheaper at this sequence length.
+>
+> The attention output is added back through a residual connection, and then the layer does a second **pre-norm** before the feed-forward block. That block is **SwiGLU**, which replaces a standard FFN. In a plain FFN, every position goes through the same nonlinear expansion and projection. In SwiGLU, one path proposes candidate features and another path gates them, so the model can selectively amplify useful signal and suppress weaker or noisier combinations. For clinical sequences, that is helpful because one day vector may mix chronic disease burden, acute utilization, medications, and administrative noise all at once. The gate gives the model finer control over what should survive.
+>
+> Finally, that SwiGLU output is added back through another residual connection. That final sum becomes the input to the next layer. So one layer does not just pass day t upward. It produces a more context-aware version of day t, informed by the clinically relevant parts of the member's prior timeline."
 
-> "LAP matches or slightly beats MaxPool on quality, while being 3-5x faster on the daily encoding step and 19% cheaper overall. The speed gain comes from eliminating the sequential max operation — a single attention pass is more parallelizable."
+### 5. What happens to one day vector across layers
 
-`[SLIDE SUGGESTION]`: Place a small **comparison callout box** next to the `learned_attention_pooling` component on the diagram. Two columns: "Old: MaxPool" vs "New: Learned Attention Pooling". Below that, a single row: "recall@10: 0.943 → 0.947, 3-5x faster". Keep it tight — the audience sees the evidence right where the component lives on the architecture. This is the strongest visual proof point because it's a clean single-variable change.
+**[Point to: the left-hand annotations such as `Day3_lay1 = f(...)`]**
+
+> "The left side of the diagram shows what happens to one specific day vector as it moves upward through the stack. Take day 4 entering layer 0. At that moment, the vector is still just a compressed summary of that day's codes and demographic context. It knows what was present on day 4, but it does not yet know what day 4 means relative to the earlier history.
+>
+> Inside layer 0, attention compares day 4 with days 1 through 4 and asks which earlier days are most useful for interpreting the current day. So if day 4 contains an acute event, the model can look back to recent diagnoses, prior utilization, or medication patterns and decide what context matters. The output is not a copy of one earlier day. It is an updated version of day 4 that blends its own content with the most relevant parts of the allowed past. SwiGLU then reshapes that blended signal, strengthening clinically meaningful combinations and damping weaker or noisier ones.
+>
+> So after layer 0, the vector still sits at the day 4 position, but its meaning has changed. It no longer means only 'what happened on day 4.' It now means 'what day 4 represents in the context of days 1 through 4.'
+>
+> In layer 1, the same process happens again, but now the inputs are no longer raw day summaries. They are already contextualized representations from the previous layer. That means day 4 is now attending not just to earlier events, but to earlier interpreted states. This is where the abstraction deepens. A refill after several stable outpatient days may start to look like routine maintenance. The same refill after repeated acute encounters may instead look like escalation or instability.
+>
+> By the higher layers, each position becomes a compact clinical state summarizing the most relevant history up to that day. The position itself does not move, and the vector stays 256-dimensional, but the information inside it becomes more contextual, more selective, and more predictive. That is what the f means. It is the whole learned layer transformation applied to that day position. So when the next layer starts, it is not receiving raw day 4 anymore. It is receiving a richer state for day 4, already informed by the member's prior trajectory, while still respecting the causal rule that nothing from the future can enter." 
+
+### 6. Output target and member embedding
+
+**[Point to: `Member embedding vector (last day embedding)` and `Predicted codes for each member next day [batch_size, 200, 6297]`]**
+
+> "At the top, the model makes the training prediction. For every day position, it predicts which grouped clinical codes will appear on the next day. There are 6,297 target codes, and this is multi-label because several codes can appear together.
+>
+> The member embedding is produced in the middle of this process. After the 6 temporal layers, we take the representation at the last valid day. That 256-dimensional vector is the member embedding.
+>
+> So the full flow is: encode each day, add demographic context, model the 200-day history, predict next-day grouped codes, and use the final history representation as the embedding."
 
 ---
 
-## Section 3: Demographic Injection (Residual Sum)
+## Slide 1: Optional Visual Cues
 
-**[Point to: `Residual sum: code_emb + code_pooled + age_emb + gender_emb + LOB` box]**
+`[SLIDE SUGGESTION]`: Add a small annotation at the bottom: `75,516 input codes -> embedding lookup -> one day vector`.
 
-> "Before entering the temporal encoder, we inject demographic context. Age in months, gender, and line of business each get their own learned embedding. These are added to the pooled day vector via a residual sum — meaning the demographics modulate the representation but don't overwrite it.
->
-> The output of this step is a tensor of shape [batch_size, 200, 256] — up to 200 days of history, each represented as a 256-d vector that combines clinical codes and demographics."
+`[SLIDE SUGGESTION]`: Add a short label on the arrow into the temporal stack: `up to 200 days x 256-d vectors`.
 
-**What changed**: The demographic injection mechanism is the same in both models. This was a good design from the start — residual addition is the standard way to inject conditioning information without creating bottlenecks.
+`[SLIDE SUGGESTION]`: Add a small tooltip near the left-hand formula: `f = updated representation after one transformer layer`.
 
-`[SLIDE SUGGESTION]`: The `LOB_emb`, `age_emb`, `gender_emb` boxes at the bottom of the diagram are already clear. Consider adding the tensor shape `[batch, 200, 256]` as an annotation on the arrow going into the temporal encoder stack. This tells the audience "from here, we're processing a sequence of 200 day-vectors."
+`[SLIDE SUGGESTION]`: Add a short label at the output: `predict 6,297 grouped next-day codes | embedding = last valid day representation`.
 
 ---
 
-## Section 4: The Temporal Encoder (Inter-day Encoder, 6 Layers)
+## Slide 1: Delivery Map
 
-**[Point to: the stacked `Layer_0` through `Layer_5` block labeled "Inter-day Encoder"]**
-
-> "Now comes the core of the model — the temporal encoder. This is a 6-layer transformer that processes the 200-day sequence. Each day position enters as a 256-d vector, and each layer progressively enriches that representation by attending to the clinical history.
->
-> Let me walk through what happens inside a single layer, then explain why stacking 6 of these creates something powerful."
-
-### 4.1 Inside a Single Layer
-
-**[Point to: the "Look closer" / "Next layer" detail panel on the right side of the diagram]**
-
-> "Each layer has two blocks, and both follow the same pattern: **pre-norm → operation → residual add**."
-
-#### Block 1: Attention
-
-> "**First, pre-norm.** The input is normalized via LayerNorm across the 256 embedding dimensions. This stabilizes gradients and is critical for training stability — it's the 'pre-norm' pattern used by GPT and LLaMA, as opposed to the 'post-norm' pattern from the original transformer paper.
->
-> **Then, Flash Attention.** The normalized input gets projected into queries, keys, and values through three separate linear layers — each 256→256, no bias. These are reshaped into 8 attention heads, each with a 32-dimensional head space.
->
-> Before computing attention, we apply **Rotary Position Embedding (RoPE)** — a rotation in the complex plane applied to queries and keys. RoPE encodes relative position: how far apart two days are in the sequence. Unlike fixed sinusoidal embeddings, RoPE naturally captures that 'yesterday' matters more than '90 days ago' without hard-coding a decay function.
->
-> Then comes the actual attention computation — and this is where the **causal mask** is critical."
-
-#### The Causal Mask (Key Concept)
-
-> "The causal mask is a lower-triangular matrix applied at every layer. It says: when computing the representation for day *t*, you can only attend to days 1 through *t*. Day *t* cannot see day *t+1* or any future day. This is a hard constraint — future attention weights are set to negative infinity before softmax, so they become exactly zero.
->
-> Why is this essential? Two reasons:
->
-> **First, it defines the pre-training objective.** We're predicting next-day codes. If day *t* could see day *t+1*, it would just copy the answer. The causal mask forces the model to predict the future from the past only.
->
-> **Second, it prevents temporal leakage during embedding extraction.** When we extract a member's embedding at their last valid day, we need to guarantee that embedding contains only information from the member's observed history — not from future events that haven't happened yet. The causal mask guarantees this structurally, not just by convention."
-
-`[SLIDE SUGGESTION]`: Add a small **causal mask visual** as a side annotation near the Layer stack. A 5×5 lower-triangular matrix with checkmarks (✓) and crosses (✗) is enough — don't need all 200×200. Label it: "Day *t* sees only days 1...*t*". This is the single most important concept for the audience to understand about temporal integrity.
-
-#### What the causal mask achieves across layers
-
-> "Here's the subtle point: the same mask shape is applied at every layer, but what's being masked is fundamentally different.
->
-> After Layer 0, day 4's representation is a function of the raw inputs from days 1 through 4: `f(E₁, E₂, E₃, E₄)`.
->
-> After Layer 1, day 4 attends to those blended representations. So it sees day 3's *interpretation* of days 1-3, not just raw day 3. This creates second-order temporal reasoning — patterns of patterns.
->
-> By Layer 5, each day position encodes deep, multi-hop abstractions of the entire preceding history. Layer 0 might learn 'yesterday's ER visit is relevant.' Layer 3 might learn 'the medication started 30 days ago, the lab changed 20 days ago, and today's adverse event connects them.' Layer 5 might learn 'this member's overall trajectory resembles the pattern before hospitalization.'
->
-> The causal mask at every layer maintains a strict invariant: **day *d*'s representation at any layer can only be a function of the original inputs E₁ through E_d.** This must hold recursively through all 6 layers for temporal integrity."
-
-`[SLIDE SUGGESTION]`: The left side of the architecture diagram already shows the annotation `Day3_lay1 = f(Day1_lay0, Day2_lay0, Day3_lay0)` etc. When narrating, point directly to this. If space allows, consider a small 3-row progression annotation:
-```
-After L0: Day4 = f(E₄ only)
-After L1: Day4 = f(E₁, E₂, E₃, E₄) — first-order
-After L5: Day4 = deep abstraction of days 1-4
-```
-This makes the "representations get richer across layers" point visceral.
-
-#### Block 2: SwiGLU FFN
-
-**[Point to: the `W_gate → SiLU`, `W_up`, `W_down` detail in the "Next layer" panel]**
-
-> "After attention, the second block processes each day position independently through a feed-forward network.
->
-> We use **SwiGLU** — a gated activation function from the PaLM and LLaMA family. It works like this: the input is projected through two parallel paths. One path goes through a Swish (SiLU) activation to produce a gate signal. The other path produces a value. These are multiplied element-wise — the gate selectively passes information — then projected back down to 256 dimensions.
->
-> The key dimensions are: input 256 → gate and value each project to 704 (that's the 8/3 × d_model scaling from LLaMA, rounded to a multiple of 64) → element-wise multiply → project back to 256."
-
-> "Again, this block uses **pre-norm** — LayerNorm before the FFN, then residual add with the un-normalized input. And there's a residual connection: the original input to this block is added to the FFN output. This means if the FFN learns nothing useful for a particular day position, the representation passes through unchanged."
-
-### What changed from the old model (6 variables, bundled)
-
-> "The temporal encoder is where most of the architectural modernization happened. The old model used stock PyTorch `TransformerEncoderLayer` with:
->
-> - **Post-norm** (normalize after attention, not before) — less stable gradients
-> - **GELU activation** in a standard 2-layer FFN (256 → 1024 → 256) — no gating
-> - **16 attention heads with 16-d head dimension** — each head has very limited capacity
-> - **No RoPE** — no explicit positional encoding at all in the temporal encoder
-> - **Standard PyTorch attention** in FP32 — slower, more memory
->
-> The new model bundles six changes: (1) Flash Attention kernel, (2) FP32→FP16, (3) 16 heads/16-d → 8 heads/32-d, (4) GELU→SwiGLU, (5) post-norm→pre-norm, (6) no position→RoPE."
-
-### Round 1 Evidence for the Bundle
-
-> "I want to be precise about the evidence here. These six changes were applied together as a bundle — we did NOT ablate each one individually in Round 1. What we confirmed is that the bundle as a whole is **quality-neutral with a 25% cost reduction**."
-
-| Metric | exp1 (old, all 6 old components) | exp2 (new, all 6 new components) |
-|--------|----------------------------------|----------------------------------|
-| recall@10 | 0.9474 | 0.9430 |
-| val_loss | 0.00275 | 0.00275 |
-| Training cost | $2.48 | $1.87 (-25%) |
-| Throughput | 1x | ~1.33x |
-
-> "Same quality, 25% cheaper, 33% faster. The bundled modernization pays for itself in throughput and cost. It doesn't add quality — it preserves quality while making training significantly more efficient. These are well-established best practices from the LLM literature (PaLM, LLaMA, Mixtral), validated here for our clinical domain.
->
-> The honest claim is: 'We bundled modern transformer best practices and confirmed the bundle is quality-neutral.' Not 'we ablated each component individually.'"
-
-`[SLIDE SUGGESTION]`: For the temporal encoder evidence, I recommend a **"What changed" comparison strip** along the right edge of the slide, keyed to the layer detail panel. Format as a compact table:
-
-```
-TEMPORAL ENCODER MODERNIZATION (exp1 → exp2, Round 1)
-──────────────────────────────────────────────────────
-Old                          New
-──────────────────────────────────────────────────────
-PyTorch attention (FP32)  →  Flash Attention (FP16)
-16 heads × 16d            →  8 heads × 32d
-GELU FFN (256→1024→256)   →  SwiGLU (256→704→256)
-Post-norm                 →  Pre-norm
-No position encoding      →  RoPE
-──────────────────────────────────────────────────────
-Quality: identical (R@10: 0.947 → 0.943)
-Speed:   +33%  |  Cost: -25%
-```
-
-Then, next to the `learned_attention_pooling` box, a **separate, highlighted callout** for the single clean ablation:
-
-```
-DAILY POOLING (exp2 → exp2b, single variable)
-──────────────────────────────────────────────
-MaxPool → Learned Attention Pooling
-Quality: 0.943 → 0.947  |  Speed: 3-5x faster
-```
-
-Visually distinguish these two evidence blocks: one is a confirmed bundle, the other is a clean ablation. The audience should see that the LAP result is the one you can point to with full ablation confidence.
+| Beat | What to emphasize | Approx time |
+|------|-------------------|-------------|
+| Training objective | Predict next-day grouped codes; embedding is intermediate | 20-30s |
+| Hierarchical structure | One-day encoder, then 200-day history encoder | 25-35s |
+| Daily collapse + demographic context | One day becomes one vector, then add member context | 45-60s |
+| Temporal encoder | Pre-norm, RoPE, Flash Attention, causal mask, SwiGLU, residual flow | 210-240s |
+| Across-layer intuition | What `f` means and how one day vector evolves | 90-120s |
+| Output + embedding | 6,297 targets; last valid day becomes embedding | 30-40s |
 
 ---
 
-## Section 5: Member Embedding Extraction
+## Slide 1: Key Narrative Beats
 
-**[Point to: `Member embedding vector (last day embedding)` arrow leaving the Layer_5 box]**
+1. Start with the training objective so the audience knows the embedding is an intermediate output, not the only output.
 
-> "After all 6 layers, each of the 200 day positions has a rich representation. We extract the member's embedding from the **last valid day position** — the most recent day in their history. This single 256-d vector encodes the member's entire longitudinal clinical trajectory, as seen through the causal lens of 6 transformer layers."
+2. Explain the hierarchy early: one day is a set, 200 days is a sequence.
 
----
+3. Keep the bottom-up story simple: daily collapse, demographic context, temporal encoder, prediction head.
 
-## Section 6: Prediction Head
+4. When you explain the 6-layer stack, focus on what changes for the audience: Flash Attention makes the same attention idea more efficient, and SwiGLU is a gated upgrade over a plain FFN.
 
-**[Point to: `norm + dropout(0.1)` → `Predicted codes for each member next day [batch_size, 200, 6297]`]**
+5. Use the left-hand `f(...)` annotation to explain representation learning in plain language: each layer produces a more informed version of the same day.
 
-> "For pre-training, every day position produces a prediction. The representation goes through a final LayerNorm and dropout(0.1), then a linear projection from 256 to 6,297 — the output vocabulary of grouped clinical codes.
->
-> This is a **multi-label** prediction. On any given day, a member could have zero codes or many codes. So we use BCEWithLogitsLoss, not softmax cross-entropy. Each of the 6,297 output dimensions is an independent binary prediction: will this code appear tomorrow?
->
-> The **dual vocabulary** design is intentional — 75,516 input codes for full granularity, but only 6,297 output targets. Not all input codes are worth predicting. The output vocabulary is filtered to clinically meaningful, recurring codes — noise like billing artifacts and one-time codes is excluded."
-
-`[SLIDE SUGGESTION]`: At the top of the diagram, annotate the output box with: `6,297 target codes (filtered from 75,516 input) | BCEWithLogitsLoss | multi-label`. This is a common audience question ("why different input/output sizes?") — preempting it on the slide saves time.
+6. End by reconnecting the two outputs: the supervised task is next-day code prediction, and the embedding is the final hidden state used for downstream work.
 
 ---
 
-## Section 7: End-to-End Data Flow Summary (Closing)
+# Slide 2 MoE Lesson: Full Transcript & Presentation Guide
 
-> "So let me trace the full path one more time, quickly:
+## How to Use This Section
+
+This section gives you two speaker-note versions for Slide 2:
+
+- **Version A** keeps the original shorter talk track.
+- **Version B** is a punchier **2-3 minute version** that is easier to deliver live while still covering the full logic.
+
+Use Version A if you want a tighter handoff from Slide 1. Use Version B if Slide 2 is carrying more of the experimental story.
+
+---
+
+## Slide 2 Framing
+
+**Slide title**: `Mixture of Expert (MoE): right Idea, wrong scale`
+
+**Core job of this slide**:
+1. Explain MoE in plain language using the top-right FFN-to-router diagram.
+2. Walk the audience through what you tried without drowning them in implementation detail.
+3. Explain the collapse metric and the aux-loss vs auxiliary-free logic.
+4. Land the real conclusion: the model was not finding clean specialist regimes because the claims domain is much more homogeneous than the original hypothesis assumed.
+
+---
+
+## Version A: Original Short Transcript (~90-120 seconds)
+
+> "MoE has become a standard scaling pattern in frontier language models because it lets you increase total capacity without sending every token through one huge feedforward block. In plain language, instead of one FFN doing all the work, the router chooses a small number of specialized mini-networks, or experts, for each token. That is what the diagram on the right is showing: we replace the standard FFN with a router and a bank of experts. In the shared-expert version, one expert stays available as a generalist safety net while the router chooses the specialists."
 >
-> 1. **Raw codes** (up to 80 per day) → embedding lookup → [80, 256]
-> 2. **Learned Attention Pooling** → one 256-d vector per day — codes are an unordered set
-> 3. **Demographic injection** (age, gender, LOB) via residual sum
-> 4. **6-layer temporal encoder** — Flash Attention with causal mask (each day sees only past), RoPE for relative position, SwiGLU FFN for nonlinear processing, pre-norm for gradient stability
-> 5. **Member embedding** extracted at last valid day — 256 dimensions capturing the full clinical trajectory
-> 6. **Prediction head** projects to 6,297 target codes — next-day multi-label prediction
+> "Our original hypothesis was that claims data might benefit from the same idea. Clinical populations are heterogeneous: some members are dominated by chronic cardiometabolic care, some by acute events, some by oncology or high-complexity utilization. If those were truly different computational regimes, MoE should let experts specialize by patient archetype and beat the dense TE model without increasing per-token FLOPs."
 >
-> The entire model is 25.3M parameters. It trains on 11M members in 32 hours for $44.53. Every design choice — from the unordered daily encoder to the causal temporal mask to the dual vocabulary — is motivated by how the clinical data is naturally structured."
+> "So I started with the naive MoE setups in the table. The 8-expert model is the standard top-2 baseline. The 7-plus-1 shared-expert version keeps one always-on generalist so the model has a safe fallback instead of forcing every token through narrow specialists. The 16-expert version is more fine-grained: each expert is smaller, and the router can make a more granular assignment. All of those variants were materially worse than the dense TE baseline."
+>
+> "The main warning signal was expert collapse. In plain language, collapse means the router keeps sending most tokens to a small subset of experts while the others sit mostly idle. In our logs, an expert counts as collapsed when its load share falls below 5%, averaged over the batches in an epoch. So a value like 1.98 does not mean exactly two experts died permanently. It means that, on average across that epoch, about two experts were effectively underused. The companion CV metric tells us how uneven the overall traffic is: lower is healthier, higher means the router is concentrating load into a few experts."
+>
+> "That led to the next round of fixes. I first corrected the MoE boundary and moved routing later in the stack, but those changes did not solve the problem. Then I added an auxiliary load-balancing loss. The easiest way to think about that is regularization: just like L2 regularization says don't put all the weight in one place, this term says don't put all the traffic on one expert. It helped a bit, but it still stayed below the dense baseline. After that I switched to DeepSeek-style auxiliary-free bias correction. The difference is important: instead of adding another loss term to backpropagate, it nudges routing with a running bias update outside the main task gradient. That removed the worst gradient conflict and performance improved sharply. But it also exposed the dilemma: as task performance improved, routing balance often got worse. In other words, the model seemed to predict best when it kept reusing the same few experts."
+>
+> "At that point the conclusion changed. The story was no longer that we just needed a smarter balancing penalty. The deeper issue is that the router is not discovering clean specialist subproblems. And that is where domain homogeneity matters. In natural language, MoE can separate very different kinds of computation, like code completion, translation, summarization, or math reasoning. Claims data is different. It is more like one constrained clinical dialect: members vary in combinations and severity, but they are not speaking different computational languages. The saturation analysis makes that concrete. By day 10 only 24% of codes are still novel within a member timeline, and by day 100 that falls to 7%. 95.2% of unique same-day code pairs already involve at least one common code. The top 1% of pairs explain 66.1% of all pair occurrences. And when we scale from 1% of members to 100%, entropy barely moves and JS divergence is near zero. New members mostly add more of the same structure, not new regimes for separate experts."
+>
+> "So the takeaway is: MoE was the right architecture to test, and it is a proven industry pattern, but in this setting it was the wrong scale and probably the wrong data regime. After 12 experiments across three rounds, the best MoE only reached parity in a larger run, and the production 256d comparison stayed effectively tied while paying 39.8% more parameters, 20.2% more memory, 13.7% lower throughput, and more engineering complexity. For Clinical TE, the dense architecture is the better operating point."
+
+---
+
+## Version B: Punchy 2-3 Minute Transcript
+
+### Opening
+
+> "One major lesson we learned was around the use of MoE inside the transformer. I also know some folks here are exploring LLM-style solutions for other problems, so I wanted to share what we learned in case it is helpful."
+
+> "MoE has become a standard scaling idea in large language models. In plain language, instead of one feedforward block doing all the work, you have a router that sends each token to a small number of experts. So you get more model capacity, but you do not pay the full dense compute every time."
+
+### Explain the diagram in plain language
+
+> "That is what the top-right diagram is showing. On the left is the normal feedforward network. On the right, we replace it with a router and a bank of experts. The router decides which experts will process a token. In the shared-expert version, one expert stays as a general fallback, so the model always has one broad expert to lean on."
+
+### Original hypothesis
+
+> "The motivation was straightforward. Clinical populations are heterogeneous. Different members have different disease burden, utilization patterns, and care trajectories. So the hypothesis was: maybe MoE would let experts specialize by clinical taxonomy or member archetype."
+
+### Walk the experiment table simply
+
+> "So I started with the straightforward setups first: 8 experts as the basic baseline, then 7 experts plus 1 shared expert, and then 16 experts as a more fine-grained version. The shared expert was meant to capture the general patterns. The 16-expert version was meant to create more granular specialization. But the first result was very clear: all of these early MoE variants were much worse than the dense TE baseline."
+
+### Explain collapse clearly
+
+> "The main warning sign was expert collapse. That means the router is not discovering meaningful specialization. It keeps sending most of the traffic to a small number of experts, while the others are barely used. In our metric, an expert is considered collapsed if its average load share falls below 5% over the epoch. So when you see 1.98 collapsed experts, that does not mean exactly two experts died forever. It means that on average, about two experts were effectively underused. The CV number is the companion metric. It tells us how uneven the expert load is. Higher CV means worse balance."
+
+### Explain how the logic evolved
+
+> "From there, the work became a step-by-step debugging sequence. I fixed the MoE boundary, changed where routing enters the stack, and then added auxiliary load-balancing loss. The easiest way to think about the auxiliary loss is as regularization for the router. It penalizes the model for overusing the same experts. That helped a little, but it still stayed below the dense baseline."
+
+> "The biggest jump came from DeepSeek-style auxiliary-free bias correction. The difference is important. Auxiliary loss adds another objective into backpropagation. Auxiliary-free bias correction does not. It nudges the router through a bias update outside the main task gradient. Performance improved a lot, but balance got worse. That was the key dilemma. The model was basically telling us: I predict better when I keep reusing the same few experts."
+
+### Domain homogeneity conclusion
+
+> "That is what changed the conclusion. In natural language, MoE often works because there are genuinely different computational modes to separate, like translation, summarization, code, or reasoning. Claims data is not like that. It behaves much more like one constrained clinical language. Members vary by mix and severity, but not by fundamentally different computational patterns. The information analysis supports that. By day 50, only 11% of codes are still novel within a member timeline. 95.2% of unique same-day code pairs already include at least one common code. The top 10% of pairs explain 91.7% of all pair occurrences. And when we add more members, the distribution barely changes. So new members mostly add more of the same structure, not clean new regimes for experts to specialize on."
+
+### Land the punch
+
+> "So the final takeaway is simple: MoE was absolutely the right thing to test, but for this dataset it was the wrong operating point. We ran 12 experiments across three rounds, fixed every obvious pathology, and the best case still only reached parity while paying more in parameters, memory, throughput, and engineering complexity. For Clinical TE, the dense model is the better choice."
+
+---
+
+## Slide 2 Delivery Map
+
+| Beat | What to emphasize | Approx time |
+|------|-------------------|-------------|
+| MoE concept | Industry-standard idea, router chooses experts | 20-30s |
+| Diagram | FFN replaced by router + expert bank, shared expert as fallback | 20-30s |
+| Hypothesis | Patient heterogeneity might create specialist regimes | 15-20s |
+| Experiment table | 8 experts, shared expert, 16 fine-grained experts | 20-30s |
+| Collapse metric | Underused experts + load imbalance | 20-30s |
+| Aux vs aux-free | Regularization vs bias correction outside task gradient | 30-40s |
+| Conclusion | Homogeneous clinical dialect, dense wins | 30-40s |
+
+## Slide 2 Optional Callouts
+
+`[SLIDE SUGGESTION]`: If you present the compact table on the slide, circle only three rows while speaking: the dense baseline, the first MoE baseline, and the best aux-free run. That keeps the audience oriented without making them parse every row.
+
+`[SLIDE SUGGESTION]`: Add a small one-line tooltip near the collapse column: `collapse = experts below 5% load share; CV = load imbalance across experts`.
+
+`[SLIDE SUGGESTION]`: If you have room for one extra annotation, add this sentence under the homogeneity bullet: `Claims varies by mix and severity, not by distinct computational language.` That line is the conceptual bridge from the routing dilemma to the final conclusion.
 
 ---
 

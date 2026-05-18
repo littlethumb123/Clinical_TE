@@ -1,6 +1,6 @@
 I am gonna get started by reviewing what i have done with Elle and Jane in last year thinkubator, and then share a framework that's gonna guide our future work on explanability. next I will walk through a few examples how we worked on this before and what we learned about the emebdding and transformer; after that Pritha is gonna share some of interesting findings she has done
 
-When it comes to explanability, we are talking about three things: 1. what does these embedding really mean; 2. which dimensions matter to me, matter to my prediction tasks; 3. how did the transformer develop the understanding of the clinical concepts andconvert the raw claims to something that is predictive to business metrics we care about;
+When it comes to explanability, we are talking about three things: 1. what does these embedding really mean; 2. which dimensions matter to me, matter to my prediction tasks; 3. how did the transformer develop the understanding of the clinical concepts and convert the raw claims to something that is predictive to business metrics we care about;
 
 we started by asking ourselves these questions and decided to approach this problem using two types of methods; one is task driven, where we care about what the embeddings really mean to our prediction tasks; we use correlation between the embedding dimensions and traditional features to understand what information each dimension is bearing. the 154th dimension may be more aboiut diabetes and 186 dimnension is more about the uitlization patterns. 
 
